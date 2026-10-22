@@ -18,11 +18,11 @@ npm run typecheck && npm run lint && npm test && npm run build && npm run test:e
 | `npm run typecheck` (shared, server, web, bridge) | pass |
 | `npm run lint` (ESLint, whole monorepo) | pass, 0 problems |
 | Shared unit tests | 14 passed |
-| Server integration + unit tests | 83 passed in 14 files |
-| Web unit tests | 3 passed |
+| Server integration + unit tests | 99 passed in 15 files |
+| Web unit tests | 4 passed |
 | Bridge tests | 4 passed |
 | `npm run build` (all packages) | pass |
-| Playwright e2e (Chromium) | 3 passed |
+| Playwright e2e (Chromium) | 4 passed (cash sale, bad login, M-Pesa simulator, payment-gateway simulator incl. QR link) |
 | CLI scripts (seed demo, backup, refused restore, restore with `--drop-existing`) | run manually against a replica set: pass |
 
 Server test files and coverage areas:
@@ -34,6 +34,7 @@ Server test files and coverage areas:
 | inventory | 10 | units and conversions, barcodes per unit, duplicate barcodes, CSV import/export dry run, weighted average cost, supplier balance/payment/return, PO partial receipt, adjustment approval by another user, transfers via in-transit, stocktake variances, FEFO batches skipping expired, serial/IMEI and warranty |
 | checkout | 13 | shift required, VAT-inclusive totals and change, payment mismatch, split payments, idempotent duplicate submissions, **12 concurrent checkouts on 5 units (exactly 5 succeed)**, discount limits and single-use supervisor override, price lists/tiers/customer prices, price override protection, credit limits and payment allocation/statement/ageing, partial returns and restock, voids, quotation conversion once, delivery notes, shift reconciliation |
 | mpesa | 9 | Daraja password/timestamp/callback parsing, validation, pending cannot pay, confirmed pays once, duplicate callbacks, receipt reuse, amount mismatch, cancellation code, wrong secret / other tenant ignored, expiry via job, confirmation via status query + late receipt, C2B once and allocation |
+| gateways | 14 | Paystack/Flutterwave/pawaPay/Airtel/Kopo Kopo/Hubtel/iPay/ZenoPay/Africa's Talking request shapes, signatures (HMAC-SHA512/SHA256, shared secrets) and status mapping against stubbed HTTP; Kopo Kopo host pinning; config validation without secret leakage; simulator flow pending → confirmed → sale once; gateway vs M-Pesa intent separation; amount mismatch; idempotent charge; payment links; late confirmations; forged and wrong-token webhooks ignored; webhook confirmed only after the verify API agrees |
 | notifications | 3 | phone normalisation, templates, no-provider skip, dedupe, delivery via provider, retry after transient failure |
 | backup-sync | 4 | tenant backup → data loss → exact restore, tampered backup refused, sync ingest once as a stock delta, conflicts recorded, sync token required |
 | platform | 5 | tenant list without secrets, platform/tenant token separation, suspend/reactivate, plans, full support-access flow (request, owner approval, read-only, tenant-bound, audited, revocable), health |
@@ -48,6 +49,7 @@ Server test files and coverage areas:
 
 - Safaricom Daraja sandbox/production (STK Push, query, C2B registration): needs a Daraja app, short code, passkey, public HTTPS callbacks and Safaricom go-live approval.
 - Talk Sasa and Africa's Talking SMS, real SMTP servers: need accounts.
+- Payment gateways (Paystack, Flutterwave, pawaPay, Airtel Money, Kopo Kopo, Hubtel, iPay, ZenoPay, Africa's Talking): tested only against stubbed HTTP and the simulator; need merchant/sandbox accounts and public HTTPS webhooks. See [PAYMENTS.md](PAYMENTS.md).
 - Physical receipt/label printers, cash drawers, customer displays, scales, RFID readers.
 - ZKTeco and SecuGen fingerprint readers (SDKs not integrated).
 - Windows PowerShell installer scripts (written for Windows, not executed in this Linux environment).

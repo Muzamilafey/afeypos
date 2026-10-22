@@ -286,10 +286,10 @@ router.get('/reports/shifts', requirePermission('reports.read'), async (req, res
 router.get('/reports/mpesa', requirePermission('payments.reconcile'), async (req, res) => {
   const p = period(req);
   const rows = await PaymentIntent.aggregate([
-    { $match: { createdAt: { $gte: p.start, $lt: p.end } } },
+    { $match: { provider: 'mpesa', createdAt: { $gte: p.start, $lt: p.end } } },
     { $group: { _id: { status: '$status', source: '$source' }, count: { $sum: 1 }, amountCents: { $sum: { $ifNull: ['$paidAmountCents', '$amountCents'] } }, allocatedCents: { $sum: '$allocatedCents' } } },
   ]);
-  const unallocated = await PaymentIntent.find({ createdAt: { $gte: p.start, $lt: p.end }, status: 'succeeded', $expr: { $lt: ['$allocatedCents', '$paidAmountCents'] } }).lean();
+  const unallocated = await PaymentIntent.find({ provider: 'mpesa', createdAt: { $gte: p.start, $lt: p.end }, status: 'succeeded', $expr: { $lt: ['$allocatedCents', '$paidAmountCents'] } }).lean();
   res.json({ data: { summary: rows, unallocated } });
 });
 

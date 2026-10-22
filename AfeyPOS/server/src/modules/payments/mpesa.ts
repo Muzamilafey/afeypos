@@ -24,6 +24,8 @@ import { emitToTenant } from '../../realtime/socket.js';
 import { enqueue, registerJob } from '../../jobs/queue.js';
 import { DarajaClient, MockMpesaGateway, parseDarajaDate, parseStkCallback, stkResultToStatus, type MpesaGateway } from '../../integrations/mpesa/daraja.js';
 import { findActiveConfig, openSecrets } from '../integrations/configs.js';
+import { finalizeIntent, presentIntent } from './intents.js';
+import { verifyGatewayIntent } from './gateways.js';
 
 export function gatewayFor(cfg: InstanceType<typeof IntegrationConfig>): MpesaGateway {
   if (cfg.provider === 'mock') {
@@ -42,36 +44,6 @@ export function callbackUrls(tenantId: Types.ObjectId, token: string) {
     c2bConfirmation: `${base}/api/v1/hooks/pay/${tenantId}/${token}/c2b/confirmation`,
     c2bValidation: `${base}/api/v1/hooks/pay/${tenantId}/${token}/c2b/validation`,
   };
-}
-
-function presentIntent(i: PaymentIntentDoc | Record<string, any>) {
-  return {
-    id: i._id, status: i.status, source: i.source, amountCents: i.amountCents, paidAmountCents: i.paidAmountCents, phone: i.phone, payerName: i.payerName,
-    receiptNumber: i.receiptNumber, resultCode: i.resultCode, resultDesc: i.resultDesc, accountReference: i.accountReference, allocatedTo: i.allocatedTo,
-    allocatedCents: i.allocatedCents, createdAt: i.createdAt, completedAt: i.completedAt, checkoutRequestId: i.checkoutRequestId,
-  };
-}
-
-/** Applies a final result to a pending intent exactly once. */
-async function finalizeIntent(intent: PaymentIntentDoc, update: { status: 'succeeded' | 'failed' | 'cancelled' | 'expired'; resultCode?: number; resultDesc?: string; receiptNumber?: string; paidAmountCents?: number; phone?: string; transactionDate?: Date }) {
-  const set: Record<string, unknown> = { status: update.status, resultCode: update.resultCode, resultDesc: update.resultDesc, completedAt: new Date() };
-  if (update.status === 'succeeded') {
-    set.receiptNumber = update.receiptNumber;
-    set.paidAmountCents = update.paidAmountCents ?? intent.amountCents;
-    set.transactionDate = update.transactionDate;
-  }
-  try {
-    const r = await PaymentIntent.findOneAndUpdate({ _id: intent._id, status: 'pending' }, { $set: set }, { new: true });
-    if (r) emitToTenant(r.tenantId, 'payment.updated', presentIntent(r));
-    return r;
-  } catch (err: any) {
-    if (err?.code === 11000) {
-      // Same M-Pesa receipt already recorded on another intent: never double count.
-      await PaymentIntent.updateOne({ _id: intent._id, status: 'pending' }, { $set: { status: 'failed', resultDesc: `Duplicate receipt ${update.receiptNumber}` } });
-      return null;
-    }
-    throw err;
-  }
 }
 
 const router = Router();
@@ -123,12 +95,17 @@ router.post('/payments/mpesa/stk', requirePermission('sales.create'), async (req
 });
 
 router.get('/payments/intents', requirePermission('sales.create'), async (req, res) => {
-  const q = parse(pagination.extend({ status: z.string().optional(), unallocated: z.enum(['true']).optional(), source: z.enum(['stk', 'c2b']).optional() }), req.query);
+  const q = parse(pagination.extend({ status: z.string().optional(), unallocated: z.enum(['true']).optional(), source: z.enum(['stk', 'c2b', 'push', 'link']).optional(), provider: z.string().max(40).optional() }), req.query);
   const filter: Record<string, unknown> = {};
+  // provider=gateway selects every non-Daraja gateway.
+  if (q.provider) filter.provider = q.provider === 'gateway' ? { $ne: 'mpesa' } : q.provider;
   if (q.status) filter.status = q.status;
   if (q.source) filter.source = q.source;
   if (q.unallocated) filter.$expr = { $lt: ['$allocatedCents', '$paidAmountCents'] };
-  if (q.q) filter.$or = [{ receiptNumber: q.q.toUpperCase() }, { phone: { $regex: q.q.replace(/\D/g, '') } }, { accountReference: q.q }];
+  if (q.q) {
+    const digits = q.q.replace(/\D/g, '');
+    filter.$or = [{ receiptNumber: q.q.toUpperCase() }, { receiptNumber: q.q }, { reference: q.q }, ...(digits ? [{ phone: { $regex: digits } }] : []), { accountReference: q.q }];
+  }
   const [data, total] = await Promise.all([PaymentIntent.find(filter).sort({ createdAt: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), PaymentIntent.countDocuments(filter)]);
   res.json({ data: data.map(presentIntent), total, page: q.page, limit: q.limit });
 });
@@ -143,7 +120,10 @@ router.get('/payments/intents/:id', requirePermission('sales.create'), async (re
 router.post('/payments/intents/:id/query', requirePermission('sales.create'), async (req, res) => {
   const i = await PaymentIntent.findById(idParam(req.params.id));
   if (!i) throw notFound('Payment');
-  if (i.status === 'pending') await queryAndApply(i, false);
+  if (i.status === 'pending') {
+    if ((i.provider ?? 'mpesa') === 'mpesa') await queryAndApply(i, false);
+    else await verifyGatewayIntent(i, false);
+  }
   res.json({ data: presentIntent((await PaymentIntent.findById(i._id).lean())!) });
 });
 
@@ -158,7 +138,7 @@ router.post('/payments/intents/:id/cancel', requirePermission('sales.create'), a
 /** Reconciliation view: succeeded-but-unallocated and late confirmations need attention. */
 router.get('/payments/mpesa/reconciliation', requirePermission('payments.reconcile'), async (req, res) => {
   const q = parse(z.object({ from: z.coerce.date().optional(), to: z.coerce.date().optional() }), req.query);
-  const range = q.from || q.to ? { createdAt: { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) } } : {};
+  const range = { provider: 'mpesa', ...(q.from || q.to ? { createdAt: { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) } } : {}) };
   const [summary, unallocated, late] = await Promise.all([
     PaymentIntent.aggregate([{ $match: range }, { $group: { _id: '$status', count: { $sum: 1 }, amountCents: { $sum: { $ifNull: ['$paidAmountCents', '$amountCents'] } }, allocatedCents: { $sum: '$allocatedCents' } } }]),
     PaymentIntent.find({ ...range, status: 'succeeded', $expr: { $lt: ['$allocatedCents', '$paidAmountCents'] } }).sort({ createdAt: -1 }).limit(200).lean(),
@@ -169,7 +149,7 @@ router.get('/payments/mpesa/reconciliation', requirePermission('payments.reconci
 
 router.get('/payments/mpesa/events', requirePermission('payments.reconcile'), async (req, res) => {
   const q = parse(pagination, req.query);
-  const data = await MpesaEvent.find({}).sort({ at: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean();
+  const data = await MpesaEvent.find({ kind: { $in: ['stk_callback', 'c2b_validation', 'c2b_confirmation', 'stk_query'] } }).sort({ at: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean();
   res.json({ data });
 });
 

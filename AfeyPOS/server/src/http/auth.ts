@@ -117,6 +117,14 @@ export function requireModule(...modules: ModuleKey[]): RequestHandler {
   };
 }
 
+/** Passes when at least one of the modules is enabled. */
+export function requireAnyModule(...modules: ModuleKey[]): RequestHandler {
+  return (req, _res, next) => {
+    if (!modules.some((m) => req.capabilities?.modules.includes(m))) throw new AppError(403, 'MODULE_DISABLED', `Enable one of: ${modules.join(', ')}`);
+    next();
+  };
+}
+
 /** Read-only principals (support, auditors) may never mutate data. */
 export const denySupportWrites: RequestHandler = (req, _res, next) => {
   if (req.auth?.kind === 'support' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) throw forbidden('Support access is read-only');

@@ -17,7 +17,7 @@ import { resolveUnit } from '../catalog/units.js';
 import { consumeOverride } from '../auth/routes.js';
 import { recordOutbox } from '../sync/outbox.js';
 
-export const PAYMENT_METHODS = ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'other'] as const;
+export const PAYMENT_METHODS = ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'gateway', 'other'] as const;
 
 export const checkoutSchema = z.object({
   clientRequestId: z.string().min(8).max(100),
@@ -213,16 +213,21 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
         cashCents += p.amountCents;
         break;
       }
-      case 'mpesa': {
-        if (!caps.modules.includes('mpesa')) throw badRequest('M-Pesa is not enabled');
-        if (!p.paymentIntentId) throw badRequest('M-Pesa payments must reference a confirmed M-Pesa transaction');
+      case 'mpesa':
+      case 'gateway': {
+        // Only provider-confirmed intents can be used, each shilling once (atomic claim).
+        const isMpesa = p.method === 'mpesa';
+        if (!caps.modules.includes(isMpesa ? 'mpesa' : 'payments')) throw badRequest(isMpesa ? 'M-Pesa is not enabled' : 'Payment gateways are not enabled');
+        if (!p.paymentIntentId) throw badRequest('Electronic payments must reference a confirmed payment');
         const intent = await PaymentIntent.findOneAndUpdate(
-          { _id: p.paymentIntentId, status: 'succeeded', $expr: { $gte: [{ $subtract: ['$paidAmountCents', '$allocatedCents'] }, p.amountCents] } },
+          { _id: p.paymentIntentId, provider: isMpesa ? 'mpesa' : { $ne: 'mpesa' }, status: 'succeeded', $expr: { $gte: [{ $subtract: ['$paidAmountCents', '$allocatedCents'] }, p.amountCents] } },
           { $inc: { allocatedCents: p.amountCents }, $set: { allocatedTo: { kind: 'sale', id: saleId, number }, allocatedAt: new Date() } },
           { new: true },
         );
-        if (!intent) throw unprocessable('The M-Pesa payment is not confirmed, has already been used, or is less than the amount', 'MPESA_NOT_AVAILABLE');
-        row.reference = intent.receiptNumber;
+        if (!intent) throw unprocessable('The payment is not confirmed, has already been used, or is less than the amount', isMpesa ? 'MPESA_NOT_AVAILABLE' : 'PAYMENT_NOT_AVAILABLE');
+        row.reference = intent.receiptNumber ?? intent.reference;
+        row.paymentIntentId = intent._id;
+        if (!isMpesa) row.provider = intent.provider;
         break;
       }
       case 'credit': {
@@ -246,9 +251,8 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
         break;
       }
       default:
-        if (p.paymentIntentId) throw badRequest('Only M-Pesa payments can reference a payment intent');
+        if (p.paymentIntentId) throw badRequest('Only M-Pesa and gateway payments can reference a payment intent');
     }
-    if (p.method === 'mpesa') row.paymentIntentId = p.paymentIntentId;
     payments.push(row);
   }
 

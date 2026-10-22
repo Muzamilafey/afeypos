@@ -69,4 +69,16 @@ router.post('/register', authLimiter, async (req, res) => {
   });
 });
 
+/**
+ * Landing page after a hosted checkout (Paystack, Flutterwave...). Purely informational: the till only
+ * completes the sale once the server has verified the payment with the provider.
+ */
+router.get('/payment-return', (_req, res) => {
+  res.type('html').set('Cache-Control', 'no-store').send(
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payment submitted</title>' +
+      '<style>body{font-family:system-ui,sans-serif;background:#f5f5f4;color:#191817;display:grid;place-items:center;min-height:100vh;margin:0}main{background:#fff;padding:32px;border-radius:16px;max-width:360px;text-align:center;box-shadow:0 4px 24px #0001}</style></head>' +
+      '<body><main><h1>Thank you</h1><p>Your payment has been submitted. The cashier will confirm it at the till. You can close this page.</p></main></body></html>',
+  );
+});
+
 export const publicRoutes = router;

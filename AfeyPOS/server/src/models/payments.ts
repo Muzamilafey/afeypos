@@ -1,12 +1,14 @@
 import { Schema } from 'mongoose';
+import { PAYMENT_PROVIDERS } from '@afeypos/shared';
 import { ObjectId, tenantModel } from './common.js';
 
 export const INTENT_STATUSES = ['pending', 'succeeded', 'failed', 'cancelled', 'expired'] as const;
 
 const paymentIntentSchema = new Schema(
   {
-    provider: { type: String, enum: ['mpesa'], default: 'mpesa' },
-    source: { type: String, enum: ['stk', 'c2b'], required: true },
+    provider: { type: String, enum: ['mpesa', ...PAYMENT_PROVIDERS], default: 'mpesa' },
+    /** stk / c2b: Safaricom Daraja. push / link: payment gateways (prompt on phone / hosted checkout). */
+    source: { type: String, enum: ['stk', 'c2b', 'push', 'link'], required: true },
     status: { type: String, enum: INTENT_STATUSES, default: 'pending' },
     clientRequestId: String,
     amountCents: { type: Number, required: true },
@@ -19,6 +21,12 @@ const paymentIntentSchema = new Schema(
     tillId: ObjectId,
     configId: ObjectId,
     checkoutRequestId: String,
+    /** Gateway intents: our reference sent to the provider, the provider's own id, and the hosted checkout URL. */
+    reference: String,
+    providerRef: String,
+    checkoutUrl: String,
+    currency: String,
+    channel: String,
     merchantRequestId: String,
     receiptNumber: String,
     resultCode: Number,
@@ -36,13 +44,17 @@ const paymentIntentSchema = new Schema(
 paymentIntentSchema.index({ tenantId: 1, checkoutRequestId: 1 }, { unique: true, partialFilterExpression: { checkoutRequestId: { $type: 'string' } } });
 paymentIntentSchema.index({ tenantId: 1, receiptNumber: 1 }, { unique: true, partialFilterExpression: { receiptNumber: { $type: 'string' } } });
 paymentIntentSchema.index({ tenantId: 1, clientRequestId: 1 }, { unique: true, partialFilterExpression: { clientRequestId: { $type: 'string' } } });
+paymentIntentSchema.index({ tenantId: 1, reference: 1 }, { unique: true, partialFilterExpression: { reference: { $type: 'string' } } });
+paymentIntentSchema.index({ tenantId: 1, configId: 1, providerRef: 1 }, { partialFilterExpression: { providerRef: { $type: 'string' } } });
 paymentIntentSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
 export const PaymentIntent = tenantModel('PaymentIntent', paymentIntentSchema);
 export type PaymentIntentDoc = InstanceType<typeof PaymentIntent>;
 
 const mpesaEventSchema = new Schema(
   {
-    kind: { type: String, enum: ['stk_callback', 'c2b_validation', 'c2b_confirmation', 'stk_query'], required: true },
+    kind: { type: String, enum: ['stk_callback', 'c2b_validation', 'c2b_confirmation', 'stk_query', 'gateway_webhook', 'gateway_verify'], required: true },
+    provider: String,
+    configId: ObjectId,
     payload: Schema.Types.Mixed,
     ip: String,
     outcome: String,
@@ -57,7 +69,7 @@ export const MpesaEvent = tenantModel('MpesaEvent', mpesaEventSchema);
 
 const integrationConfigSchema = new Schema(
   {
-    kind: { type: String, enum: ['mpesa', 'sms', 'email'], required: true },
+    kind: { type: String, enum: ['mpesa', 'payment', 'sms', 'email'], required: true },
     provider: { type: String, required: true },
     name: { type: String, required: true },
     enabled: { type: Boolean, default: true },

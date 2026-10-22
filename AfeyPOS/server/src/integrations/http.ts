@@ -27,3 +27,27 @@ export async function httpJson<T = any>(url: string, init: RequestInit & { timeo
     clearTimeout(t);
   }
 }
+
+/** Like httpJson but also returns the status and headers (e.g. a Location header for created resources). */
+export async function httpRaw<T = any>(url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<{ status: number; headers: Headers; body: T }> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), init.timeoutMs ?? 15000);
+  try {
+    const res = await fetch(url, { ...init, signal: ctrl.signal });
+    const text = await res.text();
+    let body: any = text;
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      /* non-JSON */
+    }
+    if (!res.ok) throw new IntegrationError(`HTTP ${res.status} from ${new URL(url).host}`, res.status, body, res.status >= 500 || res.status === 429);
+    return { status: res.status, headers: res.headers, body: body as T };
+  } catch (err: any) {
+    if (err instanceof IntegrationError) throw err;
+    if (err?.name === 'AbortError') throw new IntegrationError(`Timeout calling ${new URL(url).host}`);
+    throw new IntegrationError(`Network error calling ${new URL(url).host}: ${err?.message}`);
+  } finally {
+    clearTimeout(t);
+  }
+}

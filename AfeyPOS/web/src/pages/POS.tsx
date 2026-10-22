@@ -5,10 +5,11 @@ import { api, ApiError, newRequestId, openPrintable } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useLocations } from '../lib/hooks';
 import { getWorkstation, setWorkstation } from '../lib/workstation';
-import { money, qty as fmtQty, toCentsInput } from '../lib/format';
+import { money, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
 import { useRealtime } from '../lib/realtime';
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
+import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
@@ -418,7 +419,7 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
 
   useEffect(() => setAmount(remaining), [remaining]);
 
-  // Live M-Pesa status via websocket, with polling as a fallback.
+  // Live M-Pesa / gateway status via websocket, with polling as a fallback.
   useRealtime('payment.updated', (p) => { if (stk && p.id === stk.id) setStk(p); }, [stk?.id]);
   useEffect(() => {
     if (!stk || stk.status !== 'pending') return;
@@ -427,16 +428,20 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
   }, [stk]);
   useEffect(() => {
     if (stk?.status === 'succeeded' && !payments.some((p) => p.paymentIntentId === stk.id)) {
-      setPayments((ps) => [...ps, { method: 'mpesa', amountCents: stk.paidAmountCents ?? stk.amountCents, paymentIntentId: stk.id, label: `M-Pesa ${stk.receiptNumber ?? ''}` }]);
-      toast.success('M-Pesa payment confirmed');
+      const isMpesa = (stk.provider ?? 'mpesa') === 'mpesa';
+      const label = isMpesa ? 'M-Pesa' : paymentLabel('gateway', stk.provider);
+      setPayments((ps) => [...ps, { method: isMpesa ? 'mpesa' : 'gateway', amountCents: stk.paidAmountCents ?? stk.amountCents, paymentIntentId: stk.id, label: `${label} ${stk.receiptNumber ?? ''}` }]);
+      toast.success(`${label} payment confirmed`);
     }
   }, [stk, payments, toast]);
 
-  const c2b = useQuery({ queryKey: ['c2b-open'], queryFn: () => api<{ data: any[] }>('/payments/intents', { query: { status: 'succeeded', unallocated: 'true', limit: 10 } }).then((r) => r.data), enabled: method === 'mpesa' && has('mpesa'), refetchInterval: 5000 });
+  const c2b = useQuery({ queryKey: ['c2b-open'], queryFn: () => api<{ data: any[] }>('/payments/intents', { query: { status: 'succeeded', unallocated: 'true', provider: 'mpesa', limit: 10 } }).then((r) => r.data), enabled: method === 'mpesa' && has('mpesa'), refetchInterval: 5000 });
+  const gateways = useQuery({ queryKey: ['gateways', till._id], queryFn: () => api<{ data: GatewayOption[] }>('/payments/gateways', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('payments'), staleTime: 60_000 });
 
   const methods = [
     { key: 'cash', label: 'Cash' },
     ...(has('mpesa') ? [{ key: 'mpesa', label: 'M-Pesa' }] : []),
+    ...(gateways.data?.length ? [{ key: 'gateway', label: 'Mobile money & cards' }] : []),
     { key: 'card', label: 'Card' },
     { key: 'bank', label: 'Bank' },
     ...(has('customerCredit') && cart.customer && cart.customer.kind !== 'walk_in' ? [{ key: 'credit', label: 'On account' }] : []),
@@ -447,7 +452,7 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
     if (!amount || amount <= 0) return;
     const a = Math.min(amount, remaining);
     if (method === 'cash') setPayments((ps) => [...ps, { method, amountCents: a, tenderedCents: Math.max(tendered ?? a, a), label: 'Cash' }]);
-    else setPayments((ps) => [...ps, { method, amountCents: a, reference: reference || undefined, label: method }]);
+    else setPayments((ps) => [...ps, { method, amountCents: a, reference: reference || undefined, label: paymentLabel(method) }]);
     setTendered(null);
     setReference('');
   };
@@ -513,7 +518,7 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
               )}
               {method === 'mpesa' && (
                 <div className="space-y-3 rounded-lg border border-ink-200 p-3 dark:border-ink-700">
-                  {!stk || stk.status !== 'pending' ? (
+                  {!stk || stk.status !== 'pending' || (stk.provider ?? 'mpesa') !== 'mpesa' ? (
                     <div className="flex gap-2"><Input placeholder="Customer phone e.g. 0712345678" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" /><Button onClick={startStk} disabled={!phone || !amount || amount % 100 !== 0}>Send STK</Button></div>
                   ) : (
                     <div className="flex items-center gap-2 text-sm"><Spinner className="h-4 w-4" />Waiting for the customer to enter their M-Pesa PIN…
@@ -521,7 +526,7 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
                       <Button size="sm" variant="ghost" onClick={async () => { await api(`/payments/intents/${stk.id}/cancel`, { body: {} }); setStk(null); }}>Cancel</Button>
                     </div>
                   )}
-                  {stk && ['failed', 'cancelled', 'expired'].includes(stk.status) && <ErrorBox error={`M-Pesa ${stk.status}: ${stk.resultDesc ?? ''}. Nothing was charged; try again or use another method.`} />}
+                  {stk && (stk.provider ?? 'mpesa') === 'mpesa' && ['failed', 'cancelled', 'expired'].includes(stk.status) && <ErrorBox error={`M-Pesa ${stk.status}: ${stk.resultDesc ?? ''}. Nothing was charged; try again or use another method.`} />}
                   {amount !== null && amount % 100 !== 0 && <p className="text-xs text-amber-600">M-Pesa accepts whole shillings only.</p>}
                   {c2b.data && c2b.data.length > 0 && (
                     <div>
@@ -535,9 +540,10 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
                   )}
                 </div>
               )}
+              {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}
               {['card', 'bank'].includes(method) && <Field label="Reference (approval code)"><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>}
               {method === 'credit' && cart.customer && <p className="text-sm text-ink-600">Balance {money(cart.customer.balanceCents)} · limit {money(cart.customer.creditLimitCents)}{!can('sales.credit') && ' · needs manager approval'}</p>}
-              {method !== 'mpesa' && <Button variant="secondary" onClick={addPayment}>Add {method} payment</Button>}
+              {method !== 'mpesa' && method !== 'gateway' && <Button variant="secondary" onClick={addPayment}>Add {paymentLabel(method).toLowerCase()} payment</Button>}
             </div>
           )}
           <div className="mt-3"><ErrorBox error={error} /></div>

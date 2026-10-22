@@ -31,12 +31,14 @@ const saleLineSchema = new Schema({
 
 const salePaymentSchema = new Schema(
   {
-    method: { type: String, enum: ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'other'], required: true },
+    method: { type: String, enum: ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'gateway', 'other'], required: true },
     amountCents: { type: Number, required: true },
     tenderedCents: Number,
     changeCents: Number,
     reference: String,
     paymentIntentId: ObjectId,
+    /** Gateway that collected a 'gateway' payment (paystack, pawapay...). */
+    provider: String,
   },
   { _id: false },
 );

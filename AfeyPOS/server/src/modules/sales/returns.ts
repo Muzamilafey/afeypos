@@ -147,7 +147,7 @@ export async function voidSale(req: Request, saleId: Types.ObjectId, input: z.in
       await LedgerEntry.updateOne({ partyType: 'customer', 'ref.id': sale._id, kind: 'credit_sale' }, { $set: { openCents: 0 } });
       await LedgerEntry.create([{ partyType: 'customer', partyId: sale.customerId, kind: 'adjustment', amountCents: -sale.creditCents, balanceAfterCents: c!.balanceCents, ref, userId, notes: 'Sale voided' }]);
     }
-    for (const p of sale.payments.filter((x) => x.method === 'mpesa' && x.paymentIntentId)) {
+    for (const p of sale.payments.filter((x) => (x.method === 'mpesa' || x.method === 'gateway') && x.paymentIntentId)) {
       await PaymentIntent.updateOne({ _id: p.paymentIntentId }, { $inc: { allocatedCents: -p.amountCents }, $unset: { allocatedTo: 1, allocatedAt: 1 } });
     }
     const loyaltyPoints = (sale.loyalty?.redeemed ?? 0) - (sale.loyalty?.earned ?? 0);

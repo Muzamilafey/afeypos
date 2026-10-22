@@ -44,6 +44,7 @@ export const MODULES = [
   'expenses',
   'reports',
   'mpesa',
+  'payments',
   'sms',
   'email',
   'biometrics',
@@ -87,6 +88,7 @@ export const MODULE_INFO: Record<ModuleKey, { label: string; description: string
   expenses: { label: 'Expenses', description: 'Business expenses and petty cash' },
   reports: { label: 'Reports', description: 'Sales, stock and financial reports' },
   mpesa: { label: 'M-Pesa', description: 'Safaricom Daraja STK Push and C2B' },
+  payments: { label: 'Payment gateways', description: 'Paystack, Flutterwave, pawaPay, Airtel Money, Kopo Kopo, Hubtel and other mobile-money and card gateways' },
   sms: { label: 'SMS', description: 'SMS receipts and reminders' },
   email: { label: 'Email', description: 'Email receipts, statements and reports' },
   biometrics: { label: 'Biometrics', description: 'Fingerprint verification and attendance' },
@@ -194,7 +196,7 @@ export interface BusinessProfile {
   suggestedCategories: string[];
 }
 
-const CORE: ModuleKey[] = ['pos', 'inventory', 'customers', 'suppliers', 'purchasing', 'reports', 'expenses', 'stocktake', 'mpesa', 'sms', 'email', 'hardware', 'labels'];
+const CORE: ModuleKey[] = ['pos', 'inventory', 'customers', 'suppliers', 'purchasing', 'reports', 'expenses', 'stocktake', 'mpesa', 'payments', 'sms', 'email', 'hardware', 'labels'];
 
 const baseCheckout: CheckoutOptions = {
   touchMode: false,
@@ -427,6 +429,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'reports', label: 'Reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'finance' },
   { key: 'expenses', label: 'Expenses', path: '/expenses', icon: 'wallet', module: 'expenses', permission: 'expenses.manage', group: 'finance' },
   { key: 'mpesa', label: 'M-Pesa', path: '/payments/mpesa', icon: 'phone', module: 'mpesa', permission: 'payments.reconcile', group: 'finance' },
+  { key: 'gatewayPayments', label: 'Online payments', path: '/payments/online', icon: 'card', module: 'payments', permission: 'payments.reconcile', group: 'finance' },
   { key: 'audit', label: 'Audit trail', path: '/audit', icon: 'shield', permission: 'audit.read', group: 'finance' },
   { key: 'settings', label: 'Settings', path: '/settings', icon: 'settings', permission: 'settings.manage', group: 'admin' },
   { key: 'users', label: 'Users', path: '/settings/users', icon: 'user', permission: 'users.manage', group: 'admin' },

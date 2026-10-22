@@ -15,6 +15,7 @@ Base path `/api/v1`. JSON in/out, money in integer cents, quantities in the chos
 | Documents | `GET/POST /documents`, `GET /documents/:id`, `/print`, `POST /documents/:id/status`, `/reserve`, `POST /delivery-notes`, `/delivery-notes/:id/delivered` |
 | Parties | `GET/POST /customers`, `GET/PATCH /customers/:id`, `GET /customers/:id/statement`, `POST .../statement/send`, `/payments`, `/adjustments`; `GET /receivables/ageing`; `GET/POST /suppliers`, `GET/PATCH /suppliers/:id`, `POST /suppliers/:id/payments`; `GET /payables/ageing` |
 | Purchasing | `GET/POST /purchase-orders`, `GET /purchase-orders/:id`, `POST .../send|cancel`, `GET/POST /goods-receipts`, `GET /goods-receipts/:id`, `GET/POST /supplier-returns` |
+| Payment gateways | `GET /payments/gateways`, `POST /payments/gateways/:id/charge`, `GET /payments/online/reconciliation|events`, `POST /payments/gateways/simulate/:id` (non-production); webhooks `/hooks/pay/:tenantId/:token/gw/:configId` (see [PAYMENTS.md](PAYMENTS.md)) |
 | M-Pesa | `POST /payments/mpesa/stk`, `GET /payments/intents[/:id]`, `POST /payments/intents/:id/query|cancel`, `GET /payments/mpesa/reconciliation`, `/events`, `POST /payments/mpesa/simulate/:id` (non-production) |
 | Callbacks (no token) | `POST /hooks/pay/:tenantId/:token/stk`, `/c2b/validation`, `/c2b/confirmation` |
 | Reports | `GET /reports/dashboard|sales|profit|inventory-valuation|stock-movements|losses|low-stock|expiry|exceptions|shifts|mpesa|receivables|payables|purchases|expenses|tax|branches|activity` (`from`, `to`, `branchId`, `groupBy`, `format=csv`) |

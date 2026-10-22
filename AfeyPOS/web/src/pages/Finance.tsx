@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, download } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useList, useLocations } from '../lib/hooks';
-import { dateTime, daysAgoLocal, money, qty, todayLocal } from '../lib/format';
+import { dateTime, daysAgoLocal, money, paymentLabel, qty, todayLocal } from '../lib/format';
 import { DataTable } from '../components/DataTable';
 import { BarChart } from '../components/Chart';
 import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, StatusBadge, Tabs, useToast } from '../components/ui';
@@ -183,7 +183,7 @@ export function RepairsPage() {
 export function MpesaPage() {
   const toast = useToast();
   const [q, setQ] = useState('');
-  const list = useList(['intents'], '/payments/intents', { q: q || undefined, limit: 50 });
+  const list = useList(['intents'], '/payments/intents', { q: q || undefined, provider: 'mpesa', limit: 50 });
   const rec = useQuery({ queryKey: ['mpesa-rec'], queryFn: () => api<{ data: any }>('/payments/mpesa/reconciliation').then((r) => r.data) });
   return (
     <div>
@@ -200,6 +200,44 @@ export function MpesaPage() {
           { key: 'd', header: 'Time', render: (r: any) => dateTime(r.createdAt) }, { key: 's', header: 'Source', render: (r: any) => (r.source === 'stk' ? 'STK push' : 'Paybill/Till') },
           { key: 'p', header: 'Payer', render: (r: any) => `${r.payerName ?? ''} ${r.phone ?? ''}` }, { key: 'r', header: 'Receipt', render: (r: any) => r.receiptNumber ?? '—' },
           { key: 'a', header: 'Amount', className: 'num', render: (r: any) => money(r.paidAmountCents ?? r.amountCents) }, { key: 'st', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
+          { key: 'al', header: 'Applied to', render: (r: any) => r.allocatedTo?.number ?? (r.status === 'succeeded' ? <Badge tone="amber">unallocated</Badge> : '') },
+          { key: 'x', header: '', render: (r: any) => (r.status === 'pending' ? <Button size="sm" variant="secondary" onClick={() => api(`/payments/intents/${r.id}/query`, { body: {} }).then(() => list.refetch()).catch(toast.error)}>Check</Button> : null) },
+        ]} />
+      </div>
+    </div>
+  );
+}
+
+export function OnlinePaymentsPage() {
+  const toast = useToast();
+  const [q, setQ] = useState('');
+  const list = useList(['gateway-intents'], '/payments/intents', { q: q || undefined, provider: 'gateway', limit: 50 });
+  const rec = useQuery({ queryKey: ['gateway-rec'], queryFn: () => api<{ data: any }>('/payments/online/reconciliation').then((r) => r.data) });
+  const byProvider = new Map<string, { count: number; amountCents: number; allocatedCents: number }>();
+  for (const s of rec.data?.summary ?? []) {
+    if (s._id.status !== 'succeeded') continue;
+    const cur = byProvider.get(s._id.provider) ?? { count: 0, amountCents: 0, allocatedCents: 0 };
+    byProvider.set(s._id.provider, { count: cur.count + s.count, amountCents: cur.amountCents + s.amountCents, allocatedCents: cur.allocatedCents + s.allocatedCents });
+  }
+  return (
+    <div>
+      <PageHeader title="Online payments" subtitle="Paystack, Flutterwave, pawaPay, Airtel Money and other gateways. A payment counts only after the provider's API confirms it." />
+      {rec.data && (
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[...byProvider].map(([p, v]) => <Stat key={p} label={paymentLabel('gateway', p)} value={money(v.amountCents)} hint={`${v.count} confirmed · ${money(v.allocatedCents)} used`} />)}
+          <Stat label="Received, not yet applied" value={money(rec.data.unallocated.reduce((a: number, i: any) => a + i.paidAmountCents - i.allocatedCents, 0))} tone={rec.data.unallocated.length ? 'red' : undefined} hint={`${rec.data.unallocated.length} unallocated · ${rec.data.lateConfirmations.length} late`} />
+        </div>
+      )}
+      <div className="card">
+        <div className="border-b border-ink-100 p-3 dark:border-ink-800"><Input className="max-w-xs" placeholder="Receipt, reference or phone" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+        <DataTable rows={list.data?.data} loading={list.isLoading} error={list.error} empty="No gateway payments yet" columns={[
+          { key: 'd', header: 'Time', render: (r: any) => dateTime(r.createdAt) },
+          { key: 'g', header: 'Gateway', render: (r: any) => paymentLabel('gateway', r.provider) },
+          { key: 's', header: 'Type', render: (r: any) => (r.source === 'link' ? 'Payment link' : 'Phone prompt') },
+          { key: 'p', header: 'Payer', render: (r: any) => `${r.payerName ?? ''} ${r.phone ?? ''}` },
+          { key: 'r', header: 'Receipt', render: (r: any) => r.receiptNumber ?? <span className="text-xs text-ink-500">{r.reference}</span> },
+          { key: 'a', header: 'Amount', className: 'num', render: (r: any) => `${r.currency ?? ''} ${money(r.paidAmountCents ?? r.amountCents)}` },
+          { key: 'st', header: 'Status', render: (r: any) => <span title={r.resultDesc ?? ''}><StatusBadge status={r.status} /></span> },
           { key: 'al', header: 'Applied to', render: (r: any) => r.allocatedTo?.number ?? (r.status === 'succeeded' ? <Badge tone="amber">unallocated</Badge> : '') },
           { key: 'x', header: '', render: (r: any) => (r.status === 'pending' ? <Button size="sm" variant="secondary" onClick={() => api(`/payments/intents/${r.id}/query`, { body: {} }).then(() => list.refetch()).catch(toast.error)}>Check</Button> : null) },
         ]} />

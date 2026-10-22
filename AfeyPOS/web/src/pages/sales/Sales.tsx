@@ -28,7 +28,7 @@ export function SalesPage() {
             { key: 'n', header: 'Receipt', render: (r: any) => <span className="font-medium">{r.number}</span> },
             { key: 'd', header: 'Date', render: (r: any) => dateTime(r.completedAt) },
             { key: 'i', header: 'Items', render: (r: any) => r.lines.length },
-            { key: 'p', header: 'Paid by', render: (r: any) => r.payments.map((p: any) => paymentLabel(p.method)).join(', ') || '—' },
+            { key: 'p', header: 'Paid by', render: (r: any) => r.payments.map((p: any) => paymentLabel(p.method, p.provider)).join(', ') || '—' },
             { key: 't', header: 'Total', className: 'num', render: (r: any) => money(r.totalCents) },
             { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
           ]} />
@@ -78,7 +78,7 @@ export function SaleDetailPage() {
             <div className="flex justify-between"><dt>Discounts</dt><dd>{money(s.discountCents)}</dd></div>
             <div className="flex justify-between"><dt>Tax</dt><dd>{money(s.taxCents)}</dd></div>
             <div className="flex justify-between font-semibold"><dt>Total</dt><dd>{money(s.totalCents)}</dd></div>
-            {s.payments.map((p: any, i: number) => <div key={i} className="flex justify-between text-ink-600"><dt>{paymentLabel(p.method)} {p.reference}</dt><dd>{money(p.amountCents)}</dd></div>)}
+            {s.payments.map((p: any, i: number) => <div key={i} className="flex justify-between text-ink-600"><dt>{paymentLabel(p.method, p.provider)} {p.reference}</dt><dd>{money(p.amountCents)}</dd></div>)}
             {s.refundedCents > 0 && <div className="flex justify-between text-red-600"><dt>Refunded</dt><dd>{money(s.refundedCents)}</dd></div>}
             {s.overrides?.length > 0 && <div className="pt-2 text-xs text-amber-700">Supervisor approved: {s.overrides.map((o: any) => o.action).join('; ')}</div>}
           </dl>

@@ -26,9 +26,11 @@ export async function scheduleRecurring(now = new Date()) {
 
 registerJob('mpesa.sweep', async () => {
   // Safety net for intents whose check jobs were lost: re-enqueue a final status check.
-  const stale = await PaymentIntent.find({ status: 'pending', createdAt: { $lt: new Date(Date.now() - 15 * 60_000) } }, { _id: 1, tenantId: 1 }).limit(200).lean();
+  // Link (hosted checkout) intents get longer; their own final check expires them.
+  const stale = await PaymentIntent.find({ status: 'pending', createdAt: { $lt: new Date(Date.now() - 15 * 60_000) }, $or: [{ source: { $ne: 'link' } }, { createdAt: { $lt: new Date(Date.now() - 24 * 3600_000) } }] }, { _id: 1, tenantId: 1, provider: 1 }).limit(200).lean();
   for (const i of stale) {
-    await runInTenant(i.tenantId as Types.ObjectId, () => enqueue('mpesa.checkIntent', { intentId: String(i._id), final: true }, { dedupeKey: `mpesa-check:${i._id}:sweep` }));
+    const job = (i.provider ?? 'mpesa') === 'mpesa' ? 'mpesa.checkIntent' : 'payments.checkIntent';
+    await runInTenant(i.tenantId as Types.ObjectId, () => enqueue(job, { intentId: String(i._id), final: true }, { dedupeKey: `${job}:${i._id}:sweep` }));
   }
 });
 

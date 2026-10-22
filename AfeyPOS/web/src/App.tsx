@@ -13,7 +13,7 @@ import { DocumentsPage } from './pages/sales/Documents';
 import { ProductEditPage, ProductsPage } from './pages/inventory/Products';
 import { AdjustmentsPage, LabelsPage, MovementsPage, StockLevelsPage, StocktakesPage, TransfersPage } from './pages/inventory/Inventory';
 import { PartiesPage, PartyDetailPage } from './pages/parties/Parties';
-import { AuditPage, ExpensesPage, MpesaPage, PromotionsPage, ReportsPage, RepairsPage } from './pages/Finance';
+import { AuditPage, ExpensesPage, MpesaPage, OnlinePaymentsPage, PromotionsPage, ReportsPage, RepairsPage } from './pages/Finance';
 import { AccountPage, BusinessSettingsPage, HardwarePage, IntegrationsPage, LocationsPage, UsersPage } from './pages/settings/Settings';
 import { PlatformAudit, PlatformJobs, PlatformLayout, PlatformOverview, PlatformPlans, PlatformSupport, PlatformTenantDetail, PlatformTenants } from './pages/platform/Platform';
 
@@ -75,6 +75,7 @@ export function App() {
         <Route path="reports" element={<Gate perm="reports.read"><ReportsPage /></Gate>} />
         <Route path="expenses" element={<Gate perm="expenses.manage"><ExpensesPage /></Gate>} />
         <Route path="payments/mpesa" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaPage /></Gate>} />
+        <Route path="payments/online" element={<Gate perm="payments.reconcile" module="payments"><OnlinePaymentsPage /></Gate>} />
         <Route path="audit" element={<Gate perm="audit.read"><AuditPage /></Gate>} />
         <Route path="settings" element={<Gate perm="settings.manage"><BusinessSettingsPage /></Gate>} />
         <Route path="settings/users" element={<Gate perm="users.manage"><UsersPage /></Gate>} />

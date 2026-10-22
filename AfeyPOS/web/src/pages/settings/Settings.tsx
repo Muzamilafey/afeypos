@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { MODULE_INFO, MODULES, ROLE_LABELS, TENANT_ROLES, type ModuleKey } from '@afeypos/shared';
+import { MODULE_INFO, MODULES, PAYMENT_PROVIDER_INFO, PAYMENT_PROVIDERS, ROLE_LABELS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import { api, download } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useLocations } from '../../lib/hooks';
@@ -265,6 +265,27 @@ const PROVIDER_FIELDS: Record<string, { settings: [string, string][]; secrets: [
   console: { settings: [], secrets: [] },
 };
 
+const providerLabel = (kind: string, p: string) =>
+  kind === 'payment' ? PAYMENT_PROVIDER_INFO[p as PaymentProviderKey]?.label ?? p : p === 'mock' ? 'Simulator (testing)' : p === 'console' ? 'Development log (no delivery)' : p === 'daraja' ? 'Safaricom Daraja' : p;
+
+/** Provider chips (M-Pesa + gateways); "soon" providers are shown but cannot be configured yet. */
+function PaymentProviderGrid({ onPick }: { onPick: (kind: 'mpesa' | 'payment', provider: string) => void }) {
+  const chips = [{ key: 'mpesa', label: 'M-Pesa', soon: false }, ...PAYMENT_PROVIDERS.filter((p) => !PAYMENT_PROVIDER_INFO[p].devOnly).map((p) => ({ key: p, label: PAYMENT_PROVIDER_INFO[p].label, soon: PAYMENT_PROVIDER_INFO[p].availability === 'soon' }))];
+  return (
+    <div className="flex flex-wrap gap-2">
+      {chips.map((c) => (
+        <button key={c.key} type="button" disabled={c.soon} title={c.key === 'mpesa' ? 'Safaricom Daraja STK Push and C2B' : PAYMENT_PROVIDER_INFO[c.key as PaymentProviderKey].description}
+          onClick={() => (c.key === 'mpesa' ? onPick('mpesa', 'daraja') : onPick('payment', c.key))}
+          className="inline-flex items-center gap-2 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-sm font-medium shadow-sm transition hover:border-brand-400 hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-ink-200 disabled:hover:bg-white dark:border-ink-700 dark:bg-ink-900 dark:hover:bg-ink-800">
+          <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden style={c.soon ? { background: '#a9a7a2' } : undefined} />
+          {c.label}
+          {c.soon && <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-ink-500 dark:bg-ink-800">SOON</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function IntegrationsPage() {
   const toast = useToast();
   const qc = useQueryClient();
@@ -285,26 +306,49 @@ export function IntegrationsPage() {
   const test = async (id: string) => { try { const r = await api<{ data: any }>(`/settings/integrations/${id}/test`, { body: { to: testTo || undefined } }); if (r.data.ok) toast.success(r.data.message); else toast.error(r.data.message); q.refetch(); } catch (e) { toast.error(e); } };
   return (
     <div className="max-w-5xl">
-      <PageHeader title="Integrations" subtitle="M-Pesa, SMS and email. Credentials stay on the server." actions={<>{(['mpesa', 'sms', 'email'] as const).map((k) => <Button key={k} variant="secondary" onClick={() => setEdit({ kind: k, provider: q.data.providers[k][0], name: '', enabled: true, isDefault: true, environment: 'sandbox', settings: {}, secrets: {} })}>Add {k}</Button>)}</>} />
+      <PageHeader title="Integrations" subtitle="Payments, SMS and email. Credentials stay on the server." actions={<>{(['mpesa', 'sms', 'email'] as const).map((k) => <Button key={k} variant="secondary" onClick={() => setEdit({ kind: k, provider: q.data.providers[k][0], name: '', enabled: true, isDefault: true, environment: 'sandbox', settings: {}, secrets: {} })}>Add {k}</Button>)}</>} />
+      <Card title="Payment methods" className="mb-4">
+        <p className="mb-3 text-sm text-ink-600 dark:text-ink-300">Pick a provider to connect it. Payments are only accepted after the provider confirms them to the server.</p>
+        <PaymentProviderGrid onPick={(kind, provider) => setEdit({ kind, provider, name: kind === 'mpesa' ? 'M-Pesa' : PAYMENT_PROVIDER_INFO[provider as PaymentProviderKey].label, enabled: true, isDefault: true, environment: 'sandbox', settings: {}, secrets: {} })} />
+        <button type="button" className="mt-3 text-xs text-ink-500 underline" onClick={() => setEdit({ kind: 'payment', provider: 'simulator', name: 'Payment simulator', enabled: true, isDefault: false, environment: 'sandbox', settings: {}, secrets: {} })}>Add the payment simulator (training and testing; never moves money)</button>
+      </Card>
       <Card title="M-Pesa callback URLs (register these with Safaricom)" className="mb-4">
         <dl className="space-y-1 text-xs">{Object.entries(q.data.callbackUrls).map(([k, v]) => <div key={k}><dt className="font-medium">{k}</dt><dd className="break-all font-mono text-ink-600">{v}</dd></div>)}</dl>
         <p className="mt-2 text-xs text-ink-500">These URLs contain a secret token. They must be public HTTPS addresses reachable by Safaricom.</p>
       </Card>
       <div className="mb-3 flex items-center gap-2"><Input className="max-w-xs" placeholder="Test recipient (phone or email)" value={testTo} onChange={(e) => setTestTo(e.target.value)} /></div>
       <div className="card"><DataTable rows={q.data.data} empty="No integrations yet" columns={[
-        { key: 'k', header: 'Type', render: (r: any) => r.kind }, { key: 'n', header: 'Name', render: (r: any) => r.name }, { key: 'p', header: 'Provider', render: (r: any) => r.provider },
+        { key: 'k', header: 'Type', render: (r: any) => (r.kind === 'payment' ? 'payment gateway' : r.kind) }, { key: 'n', header: 'Name', render: (r: any) => <span>{r.name}{!r.enabled && <span className="ml-1"><Badge tone="gray">disabled</Badge></span>}</span> }, { key: 'p', header: 'Provider', render: (r: any) => providerLabel(r.kind, r.provider) },
         { key: 'e', header: 'Mode', render: (r: any) => <Badge tone={r.environment === 'production' ? 'green' : 'amber'}>{r.environment}</Badge> },
         { key: 's', header: 'Secrets', render: (r: any) => <span className="text-xs">{r.secretsSet.join(', ') || 'none'}</span> },
         { key: 't', header: 'Last test', render: (r: any) => (r.lastTest ? <Badge tone={r.lastTest.ok ? 'green' : 'red'}>{r.lastTest.ok ? 'ok' : 'failed'}</Badge> : '—') },
         { key: 'a', header: '', render: (r: any) => <div className="flex gap-1"><Button size="sm" variant="secondary" onClick={() => test(r.id)}>Test</Button><Button size="sm" variant="secondary" onClick={() => setEdit({ ...r, secrets: {} })}>Edit</Button>{r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => api(`/settings/integrations/${r.id}/register-c2b`, { body: {} }).then(() => toast.success('C2B URLs registered')).catch(toast.error)}>Register C2B</Button>}</div> },
       ]} /></div>
       {edit && (
-        <Modal open onClose={() => setEdit(null)} title={`${edit.id ? 'Edit' : 'Add'} ${edit.kind} integration`} size="lg" footer={<Button onClick={save}>Save</Button>}>
+        <Modal open onClose={() => setEdit(null)} title={`${edit.id ? 'Edit' : 'Add'} ${edit.kind === 'payment' ? providerLabel('payment', edit.provider) : edit.kind} integration`} size="lg" footer={<Button onClick={save}>Save</Button>}>
+          {edit.kind === 'payment' && (
+            <p className="mb-3 text-sm text-ink-600 dark:text-ink-300">
+              {PAYMENT_PROVIDER_INFO[edit.provider as PaymentProviderKey]?.description}{' '}
+              {PAYMENT_PROVIDER_INFO[edit.provider as PaymentProviderKey]?.docsUrl && <a className="text-brand-700 underline dark:text-brand-200" href={PAYMENT_PROVIDER_INFO[edit.provider as PaymentProviderKey].docsUrl} target="_blank" rel="noreferrer">API docs</a>}
+            </p>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Provider"><Select value={edit.provider} disabled={Boolean(edit.id)} onChange={(e) => setEdit({ ...edit, provider: e.target.value })} options={q.data.providers[edit.kind].map((p) => ({ value: p, label: p === 'mock' ? 'Simulator (testing)' : p === 'console' ? 'Development log (no delivery)' : p }))} /></Field>
+            <Field label="Provider"><Select value={edit.provider} disabled={Boolean(edit.id)} onChange={(e) => setEdit({ ...edit, provider: e.target.value })} options={q.data.providers[edit.kind].map((p) => ({ value: p, label: providerLabel(edit.kind, p) }))} /></Field>
             <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
             <Field label="Environment"><Select value={edit.environment} onChange={(e) => setEdit({ ...edit, environment: e.target.value })} options={[{ value: 'sandbox', label: 'Sandbox / test' }, { value: 'production', label: 'Production (live money)' }]} /></Field>
             <div className="flex items-end gap-4"><Checkbox label="Enabled" checked={edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} /><Checkbox label="Default" checked={edit.isDefault} onChange={(v) => setEdit({ ...edit, isDefault: v })} /></div>
+            {edit.kind === 'payment' && PAYMENT_PROVIDER_INFO[edit.provider as PaymentProviderKey]?.fields.map((f) =>
+              f.secret ? (
+                <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={edit.secretsSet?.includes(f.key) ? 'Saved. Leave blank to keep.' : f.help}><Input type="password" autoComplete="new-password" value={edit.secrets?.[f.key] ?? ''} onChange={(e) => setEdit({ ...edit, secrets: { ...edit.secrets, [f.key]: e.target.value } })} /></Field>
+              ) : f.options ? (
+                <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}><Select value={edit.settings?.[f.key] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [f.key]: e.target.value } })} options={[{ value: '', label: 'Select…' }, ...f.options]} /></Field>
+              ) : (
+                <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}><Input value={edit.settings?.[f.key] ?? ''} placeholder={f.placeholder} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [f.key]: e.target.value } })} /></Field>
+              ),
+            )}
+            {edit.kind === 'payment' && edit.webhookUrl && (
+              <div className="sm:col-span-2"><div className="label">Webhook / callback URL (set this in the provider dashboard if asked)</div><div className="break-all rounded bg-ink-50 p-2 font-mono text-xs dark:bg-ink-800">{edit.webhookUrl}</div><p className="mt-1 text-xs text-ink-500">Contains a secret token. Charges started from the till send it automatically where the provider supports per-request callbacks.</p></div>
+            )}
             {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => <Field key={k} label={l}><Input value={edit.settings?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [k]: k === 'port' ? Number(e.target.value) : e.target.value } })} /></Field>)}
             {(PROVIDER_FIELDS[edit.provider]?.secrets ?? []).map(([k, l]) => <Field key={k} label={l} hint={edit.secretsSet?.includes(k) ? 'Saved. Leave blank to keep.' : undefined}><Input type="password" autoComplete="new-password" value={edit.secrets?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, secrets: { ...edit.secrets, [k]: e.target.value } })} /></Field>)}
             {edit.kind === 'mpesa' && edit.provider === 'daraja' && <Checkbox label="Double-check every callback with an STK status query" checked={Boolean(edit.settings?.verifyCallbacksWithQuery)} onChange={(v) => setEdit({ ...edit, settings: { ...edit.settings, verifyCallbacksWithQuery: v } })} />}

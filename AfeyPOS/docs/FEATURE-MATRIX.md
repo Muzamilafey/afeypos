@@ -56,7 +56,7 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Customer selection, price list selection | Implemented (pricing tested) |
 | Discounts with permission and limits, manager override | Tested |
 | Quotations → sale, sales orders, delivery notes, invoices (A4) | Tested |
-| Cash, M-Pesa, card, bank, credit, loyalty; split and partial (credit) payments | Tested |
+| Cash, M-Pesa, payment gateways, card, bank, credit, loyalty; split and partial (credit) payments | Tested |
 | Receipt printing/reprinting (browser, ESC/POS, network printer) | Implemented / Tested (TCP) |
 | Email/SMS receipts | Tested |
 | Returns, exchanges (return + new sale), refunds, voids | Tested |
@@ -77,6 +77,9 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Daraja STK Push, callbacks, status query, C2B confirmation/validation, C2B URL registration | Tested with simulator; Not verified against Safaricom |
 | Payment states, idempotent callbacks, duplicate receipts, amount verification, expiry, reconciliation | Tested |
 | Per-branch M-Pesa configurations, sandbox/production | Implemented |
+| Payment gateways: Paystack, Flutterwave, pawaPay, Airtel Money, Kopo Kopo, Hubtel, iPay, ZenoPay, Africa's Talking (phone prompt and payment link / QR) | Tested with stubbed provider APIs and the simulator; Not verified against the providers ([PAYMENTS.md](PAYMENTS.md)) |
+| Gateway webhooks: signature / shared-secret / callback-token checks, re-verification via provider API, amount + currency checks, late confirmations | Tested |
+| JulyPay, Chipper | Not implemented (listed as "coming soon": no public merchant API to build against) |
 | SMS: Talk Sasa, Africa's Talking | Not verified (no accounts) |
 | Email: SMTP | Not verified against a real server (nodemailer) |
 | Templates, logs, retries, rate limits, dedupe, quotas, test connection | Tested |

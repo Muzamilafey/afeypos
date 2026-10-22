@@ -1,4 +1,4 @@
-import { formatMoney } from '@afeypos/shared';
+import { formatMoney, paymentProviderLabel } from '@afeypos/shared';
 import { EscPosBuilder } from './escpos.js';
 
 interface ReceiptTenant {
@@ -14,7 +14,7 @@ interface ReceiptSale {
   discountCents?: number | null;
   taxCents?: number | null;
   totalCents: number;
-  payments: { method: string; amountCents: number; reference?: string | null; tenderedCents?: number | null; changeCents?: number | null }[];
+  payments: { method: string; provider?: string | null; amountCents: number; reference?: string | null; tenderedCents?: number | null; changeCents?: number | null }[];
   changeCents?: number | null;
   creditCents?: number | null;
   status?: string;
@@ -48,7 +48,8 @@ export function receiptLines(tenant: ReceiptTenant, sale: ReceiptSale, width = 4
   out.push(pad('TOTAL', money(sale.totalCents, cur), width));
   if (sale.taxCents) out.push(pad('Incl. tax', money(sale.taxCents, cur), width));
   for (const p of sale.payments) {
-    out.push(pad(p.method.toUpperCase() + (p.reference ? ` ${p.reference}` : ''), money(p.tenderedCents ?? p.amountCents, cur), width));
+    const label = p.method === 'gateway' ? paymentProviderLabel(p.provider) : p.method === 'mpesa' ? 'M-Pesa' : p.method;
+    out.push(pad(label.toUpperCase() + (p.reference ? ` ${p.reference}` : ''), money(p.tenderedCents ?? p.amountCents, cur), width));
   }
   if (sale.changeCents) out.push(pad('Change', money(sale.changeCents, cur), width));
   if (sale.creditCents) out.push(pad('On account', money(sale.creditCents, cur), width));

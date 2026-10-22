@@ -47,7 +47,7 @@ Open http://localhost:5173. In local mode you are asked to set up the business o
 - [Database](docs/DATABASE.md): replica set, transactions, indexes, migrations
 - [Windows installation](docs/INSTALL-WINDOWS.md) for shop owners
 - [Cloud deployment, DNS and HTTPS](docs/DEPLOYMENT-CLOUD.md)
-- [M-Pesa (Daraja)](docs/MPESA.md), [SMS and email](docs/NOTIFICATIONS.md)
+- [M-Pesa (Daraja)](docs/MPESA.md), [Payment gateways](docs/PAYMENTS.md) (Paystack, Flutterwave, pawaPay, Airtel Money, Kopo Kopo, Hubtel, iPay, ZenoPay, Africa's Talking), [SMS and email](docs/NOTIFICATIONS.md)
 - [Hardware](docs/HARDWARE.md), [Fingerprint readers](docs/BIOMETRICS.md)
 - [Backups and recovery](docs/BACKUP.md), [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Security](docs/SECURITY.md), [Reports and definitions](docs/REPORTS.md), [Hybrid sync](docs/SYNC.md)

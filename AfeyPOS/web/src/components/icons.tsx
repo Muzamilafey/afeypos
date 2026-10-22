@@ -18,6 +18,7 @@ const paths: Record<string, string> = {
   percent: 'M19 5L5 19M7 9a2 2 0 100-4 2 2 0 000 4zm10 10a2 2 0 100-4 2 2 0 000 4z',
   chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
   wallet: 'M3 7h18v12H3zM3 7l3-4h12l3 4M16 13h2',
+  card: 'M2 6h20v12H2zM2 10h20M6 15h4',
   phone: 'M8 2h8v20H8zM11 18h2',
   shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z',
   settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12l2-1-1-3-2 .5-1.5-1.5L17 5l-3-1-1 2h-2L10 4 7 5l.5 2L6 8.5 4 8l-1 3 2 1v0l-2 1 1 3 2-.5L7.5 17 7 19l3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3z',

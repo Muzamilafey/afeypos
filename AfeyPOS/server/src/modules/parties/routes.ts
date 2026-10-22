@@ -131,7 +131,7 @@ router.post('/customers/:id/statement/send', requirePermission('customers.read')
 const paymentSchema = z.object({
   clientRequestId: z.string().min(8).max(100),
   amountCents: positiveCents.refine((v) => v > 0, 'Amount must be positive'),
-  method: z.enum(['cash', 'mpesa', 'card', 'bank', 'cheque', 'other']),
+  method: z.enum(['cash', 'mpesa', 'gateway', 'card', 'bank', 'cheque', 'other']),
   reference: z.string().trim().max(100).optional(),
   paymentIntentId: objectId.optional(),
   tillId: objectId.optional(),
@@ -153,15 +153,15 @@ router.post('/customers/:id/payments', requirePermission('customers.payments'), 
     const number = await nextNumber('receipt', 'PAY');
     const payId = new Types.ObjectId();
     let reference = body.reference;
-    if (body.method === 'mpesa') {
-      if (!body.paymentIntentId) throw badRequest('Select the confirmed M-Pesa transaction');
+    if (body.method === 'mpesa' || body.method === 'gateway') {
+      if (!body.paymentIntentId) throw badRequest('Select the confirmed payment');
       const intent = await PaymentIntent.findOneAndUpdate(
-        { _id: body.paymentIntentId, status: 'succeeded', $expr: { $gte: [{ $subtract: ['$paidAmountCents', '$allocatedCents'] }, body.amountCents] } },
+        { _id: body.paymentIntentId, provider: body.method === 'mpesa' ? 'mpesa' : { $ne: 'mpesa' }, status: 'succeeded', $expr: { $gte: [{ $subtract: ['$paidAmountCents', '$allocatedCents'] }, body.amountCents] } },
         { $inc: { allocatedCents: body.amountCents }, $set: { allocatedTo: { kind: 'customer_payment', id: payId, number }, allocatedAt: new Date() } },
         { new: true },
       );
-      if (!intent) throw unprocessable('M-Pesa payment not confirmed or already used', 'MPESA_NOT_AVAILABLE');
-      reference = intent.receiptNumber ?? reference;
+      if (!intent) throw unprocessable('Payment not confirmed or already used', body.method === 'mpesa' ? 'MPESA_NOT_AVAILABLE' : 'PAYMENT_NOT_AVAILABLE');
+      reference = intent.receiptNumber ?? intent.reference ?? reference;
     }
     if (body.method === 'cash' && body.tillId) {
       const shift = await Shift.findOne({ tillId: body.tillId, status: 'open' });
@@ -248,7 +248,7 @@ router.patch('/suppliers/:id', requirePermission('suppliers.manage'), requireMod
 /** Pay a supplier; allocated FIFO to the oldest unpaid goods received notes. */
 router.post('/suppliers/:id/payments', requirePermission('suppliers.pay'), requireModule('suppliers'), idempotent('supplier-payment'), async (req, res) => {
   const id = idParam(req.params.id);
-  const body = parse(paymentSchema.omit({ paymentIntentId: true, tillId: true }), req.body);
+  const body = parse(paymentSchema.omit({ paymentIntentId: true, tillId: true }).refine((b) => b.method !== 'gateway', 'Gateway collections cannot be used to pay suppliers'), req.body);
   const r = await withTransaction(async () => {
     const s = await Supplier.findOneAndUpdate({ _id: id }, { $inc: { balanceCents: -body.amountCents } }, { new: true });
     if (!s) throw notFound('Supplier');

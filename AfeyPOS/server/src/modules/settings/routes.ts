@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { MODULES, TENANT_ROLES, type ModuleKey } from '@afeypos/shared';
+import { MODULES, PAYMENT_PROVIDER_INFO, PAYMENT_PROVIDERS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import {
   AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, SupportGrant, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
 } from '../../models/index.js';
@@ -16,6 +16,7 @@ import { revokeAllSessions } from '../auth/service.js';
 import { passwordSchema } from '../tenants/provisioning.js';
 import { capabilitiesFor, getPlan } from '../tenants/plans.js';
 import { openSecrets, presentConfig, sealSecrets } from '../integrations/configs.js';
+import { gatewayCallbackUrl, paymentGatewayFor } from '../payments/gateways.js';
 import { createSmsProvider } from '../../integrations/sms/index.js';
 import { createEmailProvider } from '../../integrations/email/index.js';
 import { callbackUrls, gatewayFor } from '../payments/mpesa.js';
@@ -205,7 +206,7 @@ router.patch('/settings/tills/:id', requirePermission('branches.manage'), async 
 
 // ---------- integrations (secrets never returned) ----------
 const integrationSchema = z.object({
-  kind: z.enum(['mpesa', 'sms', 'email']),
+  kind: z.enum(['mpesa', 'payment', 'sms', 'email']),
   provider: z.string().min(2).max(40),
   name: z.string().trim().min(2).max(80),
   enabled: z.boolean().default(true),
@@ -216,18 +217,37 @@ const integrationSchema = z.object({
   secrets: z.record(z.string(), z.string().max(4000)).optional(),
 });
 
-const PROVIDERS: Record<string, string[]> = { mpesa: ['daraja', 'mock'], sms: ['talksasa', 'africastalking', 'console'], email: ['smtp', 'console'] };
+const PROVIDERS: Record<string, string[]> = {
+  mpesa: ['daraja', 'mock'],
+  payment: PAYMENT_PROVIDERS.filter((p) => PAYMENT_PROVIDER_INFO[p].availability === 'available'),
+  sms: ['talksasa', 'africastalking', 'console'],
+  email: ['smtp', 'console'],
+};
+
+const isSimulator = (c: { provider: string }) => c.provider === 'mock' || c.provider === 'simulator';
+
+/** Checks a payment gateway config has every required field (secrets may already be stored). */
+function assertGatewayFields(provider: string, settings: Record<string, unknown>, secrets: Record<string, unknown>) {
+  const info = PAYMENT_PROVIDER_INFO[provider as PaymentProviderKey];
+  const missing = info.fields.filter((f) => f.required && !(f.secret ? secrets[f.key] : settings[f.key])).map((f) => f.label);
+  if (missing.length) throw badRequest(`${info.label}: missing ${missing.join(', ')}`);
+}
 
 router.get('/settings/integrations', requirePermission('integrations.manage'), async (req, res) => {
   const rows = await IntegrationConfig.find({}).sort({ kind: 1, createdAt: 1 });
   const t = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
-  res.json({ data: rows.map(presentConfig), providers: PROVIDERS, callbackUrls: callbackUrls(t!._id, t!.callbackToken) });
+  res.json({
+    data: rows.map((c) => ({ ...presentConfig(c), ...(c.kind === 'payment' ? { webhookUrl: gatewayCallbackUrl(t!._id, t!.callbackToken, c._id) } : {}) })),
+    providers: PROVIDERS,
+    callbackUrls: callbackUrls(t!._id, t!.callbackToken),
+  });
 });
 
 router.post('/settings/integrations', requirePermission('integrations.manage'), async (req, res) => {
   const body = parse(integrationSchema, req.body);
   if (!PROVIDERS[body.kind].includes(body.provider)) throw badRequest(`Unknown ${body.kind} provider`);
-  if (body.provider === 'mock' && body.environment === 'production') throw badRequest('The simulator cannot be used in production mode');
+  if (isSimulator(body) && body.environment === 'production') throw badRequest('The simulator cannot be used in production mode');
+  if (body.kind === 'payment') assertGatewayFields(body.provider, body.settings, body.secrets ?? {});
   const { secrets, ...rest } = body;
   const cfg = new IntegrationConfig(rest);
   if (secrets) cfg.secretsEnc = sealSecrets(cfg._id, secrets);
@@ -242,8 +262,10 @@ router.patch('/settings/integrations/:id', requirePermission('integrations.manag
   if (!cfg) throw notFound('Integration');
   const { secrets, ...rest } = body;
   Object.assign(cfg, rest);
-  if (cfg.provider === 'mock' && cfg.environment === 'production') throw badRequest('The simulator cannot be used in production mode');
+  if (isSimulator(cfg) && cfg.environment === 'production') throw badRequest('The simulator cannot be used in production mode');
   if (secrets) cfg.secretsEnc = sealSecrets(cfg._id, { ...openSecrets(cfg), ...Object.fromEntries(Object.entries(secrets).filter(([, v]) => v !== '')) });
+  if (cfg.kind === 'payment') assertGatewayFields(cfg.provider, cfg.settings ?? {}, openSecrets(cfg));
+  cfg.markModified('settings');
   await cfg.save();
   await audit(req, { action: 'integration.updated', entity: 'IntegrationConfig', entityId: cfg._id, details: { fields: Object.keys(rest), secretKeys: Object.keys(secrets ?? {}) } });
   res.json({ data: presentConfig(cfg) });
@@ -267,6 +289,8 @@ router.post('/settings/integrations/:id/test', requirePermission('integrations.m
     if (cfg.kind === 'mpesa') {
       await gatewayFor(cfg).testCredentials();
       message = 'Daraja OAuth token obtained';
+    } else if (cfg.kind === 'payment') {
+      message = await paymentGatewayFor(cfg).testCredentials();
     } else if (cfg.kind === 'email') {
       await createEmailProvider(cfg.provider, cfg.settings ?? {}, openSecrets(cfg)).verify();
       message = 'SMTP connection verified';

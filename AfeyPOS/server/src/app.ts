@@ -10,7 +10,7 @@ import './http/types.js';
 import { env } from './config/env.js';
 import { errorHandler } from './http/errorHandler.js';
 import { requireTenant } from './http/tenant.js';
-import { authenticate, denySupportWrites, requireModule } from './http/auth.js';
+import { authenticate, denySupportWrites, requireAnyModule, requireModule } from './http/auth.js';
 import { dbStatus, pingDatabase } from './db/connection.js';
 import { audit } from './lib/audit.js';
 import { runAsPlatform } from './lib/context.js';
@@ -23,6 +23,7 @@ import { inventoryRoutes } from './modules/inventory/routes.js';
 import { partyRoutes } from './modules/parties/routes.js';
 import { purchasingRoutes } from './modules/purchasing/routes.js';
 import { mpesaCallbackRoutes, mpesaRoutes } from './modules/payments/mpesa.js';
+import { gatewayCallbackRoutes, gatewayRoutes } from './modules/payments/gateways.js';
 import { settingsRoutes } from './modules/settings/routes.js';
 import { reportRoutes } from './modules/reports/routes.js';
 import { hardwareRoutes } from './modules/hardware/routes.js';
@@ -88,7 +89,12 @@ export function createApp() {
       },
     }),
   );
-  app.use(express.json({ limit: '6mb' }));
+  // Webhooks keep the exact raw body for provider signature checks (HMAC over the bytes received).
+  const keepRaw = (req: express.Request, _res: express.Response, buf: Buffer) => {
+    if (req.originalUrl.startsWith('/api/v1/hooks/')) (req as any).rawBody = buf;
+  };
+  app.use(express.json({ limit: '6mb', verify: keepRaw }));
+  app.use('/api/v1/hooks', express.urlencoded({ extended: false, limit: '1mb', verify: keepRaw }));
   app.use(cookieParser());
   app.use('/api', rateLimit({ windowMs: 60_000, limit: e.NODE_ENV === 'test' ? 100000 : 1200, standardHeaders: 'draft-7', legacyHeaders: false }));
 
@@ -103,7 +109,7 @@ export function createApp() {
   v1.get('/health', health);
   v1.use('/public', publicRoutes);
   // Neutral path: Safaricom rejects callback URLs containing words such as "mpesa".
-  v1.use('/hooks/pay', mpesaCallbackRoutes);
+  v1.use('/hooks/pay', mpesaCallbackRoutes, gatewayCallbackRoutes);
   v1.use('/platform', (req, _res, next) => runAsPlatform(() => next()), platformRoutes);
 
   const tenant = Router();
@@ -112,7 +118,9 @@ export function createApp() {
   tenant.use(['/sales', '/shifts'], requireModule('pos'));
   tenant.use('/inventory', requireModule('inventory'));
   tenant.use(['/purchase-orders', '/goods-receipts', '/supplier-returns'], requireModule('purchasing'));
-  tenant.use('/payments', requireModule('mpesa'));
+  tenant.use('/payments/mpesa', requireModule('mpesa'));
+  tenant.use(['/payments/gateways', '/payments/online'], requireModule('payments'));
+  tenant.use('/payments/intents', requireAnyModule('mpesa', 'payments'));
   tenant.use('/reports', requireModule('reports'));
   tenant.use(['/biometrics', '/attendance'], requireModule('biometrics'));
   tenant.use('/sync', syncIngestRoutes);
@@ -125,7 +133,7 @@ export function createApp() {
     next();
   });
   tenant.use(denySupportWrites);
-  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, backupRoutes, fileRoutes]) {
+  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, gatewayRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, backupRoutes, fileRoutes]) {
     tenant.use(r);
   }
   v1.use(tenant);

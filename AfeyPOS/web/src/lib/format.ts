@@ -1,4 +1,4 @@
-import { formatMoney } from '@afeypos/shared';
+import { formatMoney, paymentProviderLabel } from '@afeypos/shared';
 
 let currency = 'KES';
 let locale = 'en-KE';
@@ -36,5 +36,6 @@ export function daysAgoLocal(days: number): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() - days * 86400_000));
 }
 
-const PAYMENT_LABELS: Record<string, string> = { cash: 'Cash', mpesa: 'M-Pesa', card: 'Card', bank: 'Bank', credit: 'On account', loyalty: 'Loyalty points', other: 'Other' };
-export const paymentLabel = (method: string) => PAYMENT_LABELS[method] ?? method;
+const PAYMENT_LABELS: Record<string, string> = { cash: 'Cash', mpesa: 'M-Pesa', card: 'Card', bank: 'Bank', credit: 'On account', loyalty: 'Loyalty points', gateway: 'Mobile money / online', other: 'Other' };
+/** Payment method label; gateway payments show their provider (e.g. "Paystack"). */
+export const paymentLabel = (method: string, provider?: string | null) => (method === 'gateway' && provider ? paymentProviderLabel(provider) : (PAYMENT_LABELS[method] ?? method));
