@@ -35,3 +35,6 @@ export function todayLocal(): string {
 export function daysAgoLocal(days: number): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() - days * 86400_000));
 }
+
+const PAYMENT_LABELS: Record<string, string> = { cash: 'Cash', mpesa: 'M-Pesa', card: 'Card', bank: 'Bank', credit: 'On account', loyalty: 'Loyalty points', other: 'Other' };
+export const paymentLabel = (method: string) => PAYMENT_LABELS[method] ?? method;

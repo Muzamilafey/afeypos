@@ -190,8 +190,8 @@ export function MpesaPage() {
       <PageHeader title="M-Pesa" subtitle="Payments are only marked successful after Safaricom confirms them" />
       {rec.data && (
         <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {rec.data.summary.map((s: any) => <Stat key={s._id} label={s._id} value={money(s.amountCents)} hint={`${s.count} payments · ${money(s.allocatedCents)} used`} />)}
-          <Stat label="Received, not yet applied" value={money(rec.data.unallocated.reduce((a: number, i: any) => a + i.paidAmountCents - i.allocatedCents, 0))} tone={rec.data.unallocated.length ? 'red' : undefined} hint={`${rec.data.unallocated.length} payments need allocation`} />
+          {rec.data.summary.map((s: any) => <Stat key={s._id} label={s._id} value={money(s.amountCents)} hint={`${s.count} ${s.count === 1 ? "payment" : "payments"} · ${money(s.allocatedCents)} used`} />)}
+          <Stat label="Received, not yet applied" value={money(rec.data.unallocated.reduce((a: number, i: any) => a + i.paidAmountCents - i.allocatedCents, 0))} tone={rec.data.unallocated.length ? 'red' : undefined} hint={`${rec.data.unallocated.length} ${rec.data.unallocated.length === 1 ? "payment needs" : "payments need"} allocation`} />
         </div>
       )}
       <div className="card">

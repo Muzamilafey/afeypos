@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api, newRequestId, openPrintable } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useList, useLocations } from '../../lib/hooks';
-import { dateTime, money, qty } from '../../lib/format';
+import { dateTime, money, paymentLabel, qty } from '../../lib/format';
 import { getWorkstation } from '../../lib/workstation';
 import { DataTable } from '../../components/DataTable';
 import { Button, Card, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, Checkbox, useConfirm, useToast } from '../../components/ui';
@@ -28,7 +28,7 @@ export function SalesPage() {
             { key: 'n', header: 'Receipt', render: (r: any) => <span className="font-medium">{r.number}</span> },
             { key: 'd', header: 'Date', render: (r: any) => dateTime(r.completedAt) },
             { key: 'i', header: 'Items', render: (r: any) => r.lines.length },
-            { key: 'p', header: 'Paid by', render: (r: any) => r.payments.map((p: any) => p.method).join(', ') || '—' },
+            { key: 'p', header: 'Paid by', render: (r: any) => r.payments.map((p: any) => paymentLabel(p.method)).join(', ') || '—' },
             { key: 't', header: 'Total', className: 'num', render: (r: any) => money(r.totalCents) },
             { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
           ]} />
@@ -78,7 +78,7 @@ export function SaleDetailPage() {
             <div className="flex justify-between"><dt>Discounts</dt><dd>{money(s.discountCents)}</dd></div>
             <div className="flex justify-between"><dt>Tax</dt><dd>{money(s.taxCents)}</dd></div>
             <div className="flex justify-between font-semibold"><dt>Total</dt><dd>{money(s.totalCents)}</dd></div>
-            {s.payments.map((p: any, i: number) => <div key={i} className="flex justify-between text-ink-600"><dt className="capitalize">{p.method} {p.reference}</dt><dd>{money(p.amountCents)}</dd></div>)}
+            {s.payments.map((p: any, i: number) => <div key={i} className="flex justify-between text-ink-600"><dt>{paymentLabel(p.method)} {p.reference}</dt><dd>{money(p.amountCents)}</dd></div>)}
             {s.refundedCents > 0 && <div className="flex justify-between text-red-600"><dt>Refunded</dt><dd>{money(s.refundedCents)}</dd></div>}
             {s.overrides?.length > 0 && <div className="pt-2 text-xs text-amber-700">Supervisor approved: {s.overrides.map((o: any) => o.action).join('; ')}</div>}
           </dl>
@@ -172,7 +172,7 @@ function ShiftModal({ shift, onClose, onChanged }: { shift: any; onClose: () => 
             <div><div className="label">Voids</div>{s.voids.count} · {money(s.voids.totalCents)}</div>
             <div><div className="label">Discounts</div>{money(s.sales.discountCents)}</div>
           </div>
-          <div><div className="label">By payment method</div>{Object.entries(s.paymentsByMethod).map(([k, v]: any) => <div key={k} className="flex justify-between"><span className="capitalize">{k}</span><span>{money(v.totalCents)}</span></div>)}</div>
+          <div><div className="label">By payment method</div>{Object.entries(s.paymentsByMethod).map(([k, v]: any) => <div key={k} className="flex justify-between"><span>{paymentLabel(k)}</span><span>{money(v.totalCents)}</span></div>)}</div>
           <div><div className="label">Cash movements</div>{Object.entries(s.cashMovements).map(([k, v]: any) => <div key={k} className="flex justify-between"><span>{k.replace('_', ' ')}</span><span>{money(v.totalCents)}</span></div>)}</div>
           {shift.status === 'open' && (
             <>
