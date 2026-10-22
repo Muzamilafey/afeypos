@@ -8,9 +8,10 @@ import { bootstrap } from '../src/bootstrap.js';
 import { createApp } from '../src/app.js';
 
 export const BASE = 'afeypos.test';
+export type Api = ReturnType<typeof supertest>;
 
 export interface Ctx {
-  api: supertest.Agent;
+  api: Api;
   app: ReturnType<typeof createApp>;
 }
 
@@ -37,7 +38,7 @@ export async function setupApp(overrides: Record<string, string> = {}): Promise<
   await connectDatabase(e.MONGODB_URI, { requireReplicaSet: true });
   await bootstrap();
   const app = createApp();
-  return { app, api: supertest.agent(app) };
+  return { app, api: supertest(app) };
 }
 
 export async function teardown() {
@@ -51,7 +52,7 @@ export function host(slug: string) {
 
 export class Client {
   token = '';
-  constructor(public api: supertest.Agent, public slug: string) {}
+  constructor(public api: Api, public slug: string) {}
   private h(r: supertest.Test, extra: Record<string, string> = {}) {
     r.set('Host', host(this.slug));
     if (this.token) r.set('Authorization', `Bearer ${this.token}`);
@@ -88,7 +89,7 @@ export class Client {
 
 export const OWNER_PASSWORD = 'OwnerPass123';
 
-export async function registerTenant(api: supertest.Agent, slug: string, businessType = 'minimart', extra: Record<string, unknown> = {}) {
+export async function registerTenant(api: Api, slug: string, businessType = 'minimart', extra: Record<string, unknown> = {}) {
   const r = await api.post('/api/v1/public/register').set('Host', BASE).send({
     businessName: `${slug} shop`, businessType, subdomain: slug, ownerName: 'Owner Person', email: `owner@${slug}.test`, password: OWNER_PASSWORD, phone: '0712345678', ...extra,
   });

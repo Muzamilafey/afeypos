@@ -16,7 +16,7 @@ import {
   revokeAllSessions, revokeSession, rotateRefresh, setRefreshCookie,
 } from './service.js';
 
-export const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts, please try again later' } } });
+export const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: () => (env().NODE_ENV === 'test' ? 100_000 : 30), standardHeaders: 'draft-7', legacyHeaders: false, message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts, please try again later' } } });
 
 const router = Router();
 

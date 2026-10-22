@@ -4,7 +4,10 @@ import fs from 'node:fs';
 // In restricted environments point mongodb-memory-server at a pre-installed mongod (see docs/TESTING.md).
 const systemBinary = process.env.MONGOMS_SYSTEM_BINARY ?? (fs.existsSync('/opt/mongo/mongod-wrapper') ? '/opt/mongo/mongod-wrapper' : undefined);
 
-if (systemBinary) process.env.MONGOMS_SYSTEM_BINARY = systemBinary;
+if (systemBinary) {
+  process.env.MONGOMS_SYSTEM_BINARY = systemBinary;
+  process.env.MONGOMS_VERSION ??= '7.0.34';
+}
 
 export default defineConfig({
   test: {
