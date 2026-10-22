@@ -5,12 +5,14 @@ import { enqueue, registerJob } from './queue.js';
 import { runAsPlatform, runInTenant } from '../lib/context.js';
 import { logger } from '../lib/logger.js';
 import { createBackup, pruneBackups } from '../modules/backups/service.js';
+import './tenantTasks.js';
 
 /** Enqueues recurring maintenance jobs. dedupeKeys make this safe with several server processes. */
 export async function scheduleRecurring(now = new Date()) {
   const e = env();
   const minute = now.toISOString().slice(0, 16);
   await enqueue('mpesa.sweep', {}, { tenantId: null, dedupeKey: `mpesa.sweep:${minute.slice(0, 15)}` });
+  await enqueue('tenants.dailyTasks', {}, { tenantId: null, dedupeKey: `daily-tasks:${minute.slice(0, 13)}` });
   if (e.SYNC_ENABLED && e.DEPLOYMENT_MODE === 'local') {
     const tenant = await Tenant.findOne().sort({ createdAt: 1 }).lean();
     if (tenant) await enqueue('sync.push', {}, { tenantId: tenant._id, dedupeKey: `sync.push:${minute}` });

@@ -61,6 +61,7 @@ export function SaleDetailPage() {
     <div>
       <PageHeader title={`Sale ${s.number}`} subtitle={dateTime(s.completedAt)} actions={<>
         <Button variant="secondary" onClick={() => openPrintable(`/sales/${s._id}/receipt?format=html`).catch(toast.error)}>Reprint</Button>
+        <Button variant="secondary" onClick={() => openPrintable(`/sales/${s._id}/invoice`).catch(toast.error)}>A4 invoice</Button>
         {can('sales.return') && s.status !== 'voided' && s.status !== 'returned' && <Button variant="secondary" onClick={() => setReturning(true)}>Return items</Button>}
         {can('sales.void') && s.status === 'completed' && <Button variant="danger" onClick={voidSale}>Void</Button>}
       </>} />

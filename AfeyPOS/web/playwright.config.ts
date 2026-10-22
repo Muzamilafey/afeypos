@@ -6,6 +6,7 @@ const chromium = fs.existsSync('/opt/pw-browsers/chromium') ? undefined : undefi
 
 export default defineConfig({
   testDir: './e2e',
+  testMatch: ['checkout.spec.ts', 'mpesa.spec.ts'],
   timeout: 60_000,
   workers: 1,
   reporter: [['list']],

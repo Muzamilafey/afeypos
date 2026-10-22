@@ -23,7 +23,7 @@ export function BusinessSettingsPage() {
   const setS = (k: string, v: any) => setF({ ...f, settings: { ...s, [k]: v } });
   const save = async () => {
     try {
-      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, receiptHeader: s.receiptHeader ?? '', receiptFooter: s.receiptFooter ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty } } });
+      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, receiptHeader: s.receiptHeader ?? '', receiptFooter: s.receiptFooter ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders } } });
       await reload();
       toast.success('Settings saved');
     } catch (e) { toast.error(e); }
@@ -69,6 +69,19 @@ export function BusinessSettingsPage() {
                 <Field label="Decimals"><Input type="number" value={s.variableWeight?.valueDecimals} onChange={(e) => setS('variableWeight', { ...s.variableWeight, valueDecimals: Number(e.target.value) })} /></Field>
                 <Field label="Prefixes"><Input value={(s.variableWeight?.prefixes ?? []).join(',')} onChange={(e) => setS('variableWeight', { ...s.variableWeight, prefixes: e.target.value.split(',').map((x: string) => x.trim()).filter(Boolean) })} /></Field>
               </div>
+            </div>
+          )}
+          <Field label="Daily sales summary emails" hint="Comma separated; sent at 21:00 local time" className="sm:col-span-2"><Input value={(s.dailyReportEmails ?? []).join(', ')} onChange={(e) => setS('dailyReportEmails', e.target.value.split(',').map((x: string) => x.trim()).filter(Boolean))} /></Field>
+          {enabled.has('customerCredit') && (
+            <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
+              <Checkbox label="SMS reminders for overdue customer balances (09:00, weekly per customer)" checked={Boolean(s.creditReminders?.enabled)} onChange={(v) => setS('creditReminders', { ...s.creditReminders, enabled: v })} />
+              <Field label="Days overdue"><Input type="number" className="w-24" value={s.creditReminders?.overdueDays ?? 7} onChange={(e) => setS('creditReminders', { ...s.creditReminders, overdueDays: Number(e.target.value) })} /></Field>
+            </div>
+          )}
+          {enabled.has('ageVerification') && (
+            <div className="grid gap-2 sm:col-span-2 sm:grid-cols-2">
+              <Field label="Licensed sale hours: from" hint="Age-restricted products only (leave blank for no limit)"><Input type="time" value={s.restrictedSaleHours?.start ?? ''} onChange={(e) => setS('restrictedSaleHours', { ...s.restrictedSaleHours, start: e.target.value })} /></Field>
+              <Field label="Licensed sale hours: until"><Input type="time" value={s.restrictedSaleHours?.end ?? ''} onChange={(e) => setS('restrictedSaleHours', { ...s.restrictedSaleHours, end: e.target.value })} /></Field>
             </div>
           )}
           {enabled.has('loyalty') && (

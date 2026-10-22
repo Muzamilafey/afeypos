@@ -63,6 +63,14 @@ export const checkoutSchema = z.object({
 
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
 
+/** Rejects age-restricted (liquor) sales outside the licensed hours configured for the business. */
+export function assertRestrictedHours(hours: { start?: string; end?: string } | undefined, timezone: string, name: string, now = new Date()) {
+  if (!hours?.start || !hours?.end) return;
+  const local = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+  const inside = hours.start <= hours.end ? local >= hours.start && local < hours.end : local >= hours.start || local < hours.end;
+  if (!inside) throw unprocessable(`${name} can only be sold between ${hours.start} and ${hours.end}`, 'OUTSIDE_LICENSED_HOURS');
+}
+
 /** Tracks permissions granted either directly or through a single-use supervisor override. */
 class Authorizer {
   overrides: { action: string; supervisorId: Types.ObjectId; at: Date }[] = [];
@@ -141,6 +149,7 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
       throw unprocessable(`${product.name} requires a prescription reference`, 'PRESCRIPTION_REQUIRED');
     }
     if (product.ageRestricted && caps.modules.includes('ageVerification')) {
+      assertRestrictedHours(settings.restrictedSaleHours as { start?: string; end?: string } | undefined, settings.timezone ?? 'Africa/Nairobi', product.name);
       if (!input.ageVerified) throw unprocessable(`${product.name} is age-restricted: confirm the customer is ${product.minAge ?? 18} or older`, 'AGE_VERIFICATION_REQUIRED');
       ageVerifiedBy = userId;
     }

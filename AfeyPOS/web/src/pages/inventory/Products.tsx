@@ -114,7 +114,7 @@ export function ProductEditPage() {
     setError(null);
     try {
       const body: ProductForm = { ...p, categoryId: p.categoryId || null, plu: p.plu || null, prices: Object.fromEntries(Object.entries(p.prices).filter(([, v]) => v !== null && v !== undefined)) };
-      for (const k of ['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants', 'stock', 'brandId', 'parentId', 'images'] as const) delete body[k];
+      for (const k of ['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants', 'stock', 'brandId', 'parentId'] as const) delete body[k];
       if (isNew && opening.qty && Number(opening.qty) > 0) {
         const wh = locs.data?.warehouses.find((w) => w.isDefault) ?? locs.data?.warehouses[0];
         body.openingStock = [{ warehouseId: wh?._id, qty: Number(opening.qty), unitCostCents: opening.costCents ?? p.costCents, batchNo: opening.batchNo || undefined, expiryDate: opening.expiryDate || undefined, serials: opening.serials ? opening.serials.split(/[,\s]+/).filter(Boolean) : undefined }];
@@ -220,6 +220,7 @@ export function ProductEditPage() {
             </div>
           </Card>
         )}
+        {editable && <ImagesCard images={p.images ?? []} onChange={(images) => set('images', images)} />}
         {!isNew && existing.data?.levels && (
           <Card title="Stock by location" className="lg:col-span-3">
             <ul className="text-sm">{existing.data.levels.map((l: any) => <li key={l._id} className="flex justify-between py-1"><span>{locs.data?.warehouses.find((w) => w._id === l.warehouseId)?.name}</span><span className="tabular-nums">{qty(l.qty)} {p.baseUnit} · reserved {qty(l.reserved)} · in transit {qty(l.inTransit)} · avg cost {money(l.avgCostCents)}</span></li>)}</ul>
@@ -227,5 +228,50 @@ export function ProductEditPage() {
         )}
       </div>
     </div>
+  );
+}
+
+/** Product images are uploaded to tenant-scoped storage and fetched with the user's session. */
+function ImagesCard({ images, onChange }: { images: string[]; onChange: (v: string[]) => void }) {
+  const toast = useToast();
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const next: Record<string, string> = {};
+      for (const src of images) {
+        try {
+          const res = await api<Response>(src.replace(/^\/api\/v1/, ''), { raw: true });
+          if (res.ok) next[src] = URL.createObjectURL(await res.blob());
+        } catch { /* missing file */ }
+      }
+      if (alive) setUrls(next);
+    })();
+    return () => { alive = false; };
+  }, [images]);
+  const upload = async (file: File) => {
+    if (file.size > 3 * 1024 * 1024) return toast.error('Images must be smaller than 3 MB');
+    const base64 = await new Promise<string>((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1]); r.readAsDataURL(file); });
+    try {
+      const r = await api<{ data: { url: string } }>('/files', { body: { base64 } });
+      onChange([...images, r.data.url]);
+    } catch (e) { toast.error(e); }
+  };
+  return (
+    <Card title="Images" className="lg:col-span-3">
+      <div className="flex flex-wrap gap-3">
+        {images.map((src) => (
+          <div key={src} className="relative h-24 w-24 overflow-hidden rounded-lg border border-ink-200 dark:border-ink-700">
+            {urls[src] ? <img src={urls[src]} alt="" className="h-full w-full object-cover" /> : <div className="p-2 text-xs text-ink-400">loading</div>}
+            <button type="button" aria-label="Remove image" className="absolute right-1 top-1 rounded bg-white/80 p-0.5" onClick={() => onChange(images.filter((x) => x !== src))}><Icon name="x" className="h-3.5 w-3.5" /></button>
+          </div>
+        ))}
+        <label className="flex h-24 w-24 cursor-pointer items-center justify-center rounded-lg border border-dashed border-ink-300 text-xs text-ink-500 hover:bg-ink-50 dark:border-ink-700">
+          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+          Add image
+        </label>
+      </div>
+      <p className="mt-2 text-xs text-ink-500">Save the product to keep image changes.</p>
+    </Card>
   );
 }

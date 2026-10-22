@@ -29,6 +29,10 @@ const tenantSettingsSchema = new Schema(
       pointValueCents: { type: Number, default: 100 },
     },
     stkPendingTimeoutSeconds: { type: Number, default: 180 },
+    /** Liquor licensing: age-restricted products can only be sold inside these local hours (HH:mm). */
+    restrictedSaleHours: { start: { type: String }, end: { type: String } },
+    dailyReportEmails: { type: [String], default: [] },
+    creditReminders: { enabled: { type: Boolean, default: false }, overdueDays: { type: Number, default: 7 } },
   },
   { _id: false },
 );

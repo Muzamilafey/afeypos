@@ -26,6 +26,16 @@ export async function findTenantForRequest(req: Parameters<RequestHandler>[0]) {
   return null;
 }
 
+const lastTouch = new Map<string, number>();
+/** Usage tracking: records tenant activity at most every 5 minutes per process. */
+function touchActivity(id: import('mongoose').Types.ObjectId) {
+  const k = String(id);
+  const now = Date.now();
+  if ((lastTouch.get(k) ?? 0) > now - 300_000) return;
+  lastTouch.set(k, now);
+  Tenant.updateOne({ _id: id }, { $set: { 'usage.lastActivityAt': new Date(now) } }).catch(() => undefined);
+}
+
 /** Resolves the tenant, rejects unknown/suspended tenants and enters tenant context for the rest of the request. */
 export const requireTenant: RequestHandler = async (req, _res, next) => {
   const tenant = await findTenantForRequest(req);
@@ -35,5 +45,6 @@ export const requireTenant: RequestHandler = async (req, _res, next) => {
   }
   req.tenant = tenant;
   req.capabilities = await capabilitiesFor(tenant);
+  touchActivity(tenant._id);
   runWithContext({ tenantId: tenant._id, requestId: req.id }, () => next());
 };

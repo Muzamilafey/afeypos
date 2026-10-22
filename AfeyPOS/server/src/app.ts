@@ -30,6 +30,7 @@ import { biometricBridgeRoutes, biometricRoutes } from './modules/biometrics/rou
 import { backupRoutes } from './modules/backups/routes.js';
 import { platformRoutes } from './modules/platform/routes.js';
 import { syncIngestRoutes, syncSettingsRoutes } from './modules/sync/routes.js';
+import { fileRoutes } from './modules/files/routes.js';
 import './modules/notifications/service.js';
 import './jobs/scheduler.js';
 
@@ -113,7 +114,7 @@ export function createApp() {
     next();
   });
   tenant.use(denySupportWrites);
-  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, backupRoutes]) {
+  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, backupRoutes, fileRoutes]) {
     tenant.use(r);
   }
   v1.use(tenant);
