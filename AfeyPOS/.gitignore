@@ -11,3 +11,5 @@ data/
 test-results/
 playwright-report/
 .mongo-test/
+.e2e-backups/
+web/test-results/

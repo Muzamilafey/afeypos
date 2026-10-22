@@ -1,0 +1,68 @@
+import { expect, test } from '@playwright/test';
+
+test.describe.configure({ mode: 'serial' });
+
+test('set up a minimart, add a product and complete a cash sale', async ({ page }) => {
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/setup$/);
+  await page.getByRole('button', { name: /Minimart/ }).click();
+  await page.getByLabel('Business name').fill('Mandera Minimart');
+  await page.getByLabel('Your name').fill('Amina Hassan');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password').fill('Mandera2026');
+  await page.getByRole('button', { name: 'Finish setup' }).click();
+  await expect(page.getByText('Your business is ready')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+  // Minimart navigation: checkout yes, quotations no.
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Quotations' })).toHaveCount(0);
+  await page.screenshot({ path: 'test-results/dashboard.png', fullPage: true });
+
+  await page.getByRole('link', { name: 'Products', exact: true }).click();
+  await page.getByRole('button', { name: 'New product' }).click();
+  await page.getByLabel('Name', { exact: true }).fill('Fresh milk 500ml');
+  await page.getByLabel('SKU / code').fill('MILK500');
+  await page.getByLabel('retail price').fill('65');
+  await page.getByLabel('Cost (per base unit)').fill('48');
+  await page.getByLabel(/Quantity \(pc\)/).fill('24');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Product saved')).toBeVisible();
+  await page.screenshot({ path: 'test-results/product.png', fullPage: true });
+
+  await page.getByRole('link', { name: 'Checkout', exact: true }).click();
+  await page.getByLabel('Opening float').fill('1000');
+  await page.getByRole('button', { name: 'Open shift' }).click();
+  const scan = page.getByLabel('Scan or search products');
+  await scan.fill('MILK500');
+  await scan.press('Enter');
+  await scan.fill('MILK500');
+  await scan.press('Enter');
+  await expect(page.getByTestId('cart-total')).toHaveText(/130\.00/);
+  await page.screenshot({ path: 'test-results/pos.png', fullPage: true });
+  await page.getByRole('button', { name: /^Pay / }).click();
+  await page.getByLabel('Cash received').fill('200');
+  await expect(page.getByTestId('change-due')).toHaveText(/70\.00/);
+  await page.getByRole('button', { name: 'Complete sale' }).click();
+  await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
+  await expect(page.getByText(/Change: .*70\.00/)).toBeVisible();
+  await page.screenshot({ path: 'test-results/sale-complete.png' });
+  await page.getByRole('button', { name: 'New sale' }).click();
+
+  await page.getByRole('link', { name: 'Sales history', exact: true }).click();
+  await expect(page.getByText(/RCP-000001/)).toBeVisible();
+  await page.getByRole('link', { name: 'Stock levels', exact: true }).click();
+  await expect(page.getByText('22 pc')).toBeVisible();
+});
+
+test('rejects bad credentials with a clear message', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('wrong-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('alert')).toContainText('Invalid email or password');
+});

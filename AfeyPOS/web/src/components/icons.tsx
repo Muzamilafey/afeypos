@@ -1,0 +1,52 @@
+const paths: Record<string, string> = {
+  home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',
+  cart: 'M3 3h2l2.5 12h11L21 7H6M9 20a1 1 0 100-2 1 1 0 000 2zm9 0a1 1 0 100-2 1 1 0 000 2z',
+  receipt: 'M6 2h12v20l-3-2-3 2-3-2-3 2zM9 7h6M9 11h6M9 15h4',
+  doc: 'M7 3h7l5 5v13H7zM14 3v5h5',
+  truck: 'M3 6h11v10H3zM14 9h4l3 3v4h-7M7 19a2 2 0 100-4 2 2 0 000 4zm10 0a2 2 0 100-4 2 2 0 000 4z',
+  clock: 'M12 7v5l3 3M12 21a9 9 0 100-18 9 9 0 000 18z',
+  wrench: 'M14 6a4 4 0 00-5 5L3 17l4 4 6-6a4 4 0 005-5l-3 3-3-1-1-3z',
+  box: 'M21 8l-9-5-9 5 9 5zM3 8v8l9 5 9-5V8M12 13v8',
+  layers: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5',
+  activity: 'M3 12h4l3-8 4 16 3-8h4',
+  sliders: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M16 4v4M10 10v4M18 16v4',
+  shuffle: 'M4 7h3l10 10h3M4 17h3l3-3M14 10l3-3h3M18 4l2 3-2 3M18 14l2 3-2 3',
+  clipboard: 'M9 4h6v3H9zM7 5H5v16h14V5h-2M9 12h6M9 16h4',
+  tag: 'M3 12V3h9l9 9-9 9zM8 8h0',
+  users: 'M16 20v-2a4 4 0 00-8 0v2M12 12a3 3 0 100-6 3 3 0 000 6zM20 20v-2a3 3 0 00-3-3M17 6a3 3 0 010 6',
+  factory: 'M3 21V9l6 4V9l6 4V5h6v16zM7 17h2M12 17h2M17 17h2',
+  percent: 'M19 5L5 19M7 9a2 2 0 100-4 2 2 0 000 4zm10 10a2 2 0 100-4 2 2 0 000 4z',
+  chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  wallet: 'M3 7h18v12H3zM3 7l3-4h12l3 4M16 13h2',
+  phone: 'M8 2h8v20H8zM11 18h2',
+  shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z',
+  settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12l2-1-1-3-2 .5-1.5-1.5L17 5l-3-1-1 2h-2L10 4 7 5l.5 2L6 8.5 4 8l-1 3 2 1v0l-2 1 1 3 2-.5L7.5 17 7 19l3 1 1-2h2l1 2 3-1-.5-2 1.5-1.5 2 .5 1-3z',
+  user: 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0',
+  map: 'M9 4L3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14',
+  plug: 'M9 2v6M15 2v6M6 8h12v4a6 6 0 01-12 0zM12 18v4',
+  printer: 'M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z',
+  search: 'M11 18a7 7 0 100-14 7 7 0 000 14zM21 21l-5-5',
+  plus: 'M12 5v14M5 12h14',
+  minus: 'M5 12h14',
+  x: 'M6 6l12 12M18 6L6 18',
+  check: 'M5 13l4 4L19 7',
+  logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
+  menu: 'M4 6h16M4 12h16M4 18h16',
+  sun: 'M12 17a5 5 0 100-10 5 5 0 000 10zM12 1v2M12 21v2M4 4l1.5 1.5M18.5 18.5L20 20M1 12h2M21 12h2M4 20l1.5-1.5M18.5 5.5L20 4',
+  moon: 'M21 13A9 9 0 1111 3a7 7 0 0010 10z',
+  pause: 'M8 5v14M16 5v14',
+  trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',
+  barcode: 'M4 5v14M7 5v14M10 5v14M14 5v14M17 5v14M20 5v14',
+  download: 'M12 3v12M7 10l5 5 5-5M4 21h16',
+  upload: 'M12 21V9M7 14l5-5 5 5M4 3h16',
+  refresh: 'M4 4v6h6M20 20v-6h-6M5 15a7 7 0 0012 3M19 9A7 7 0 007 6',
+  alert: 'M12 3l10 18H2zM12 10v5M12 18h0',
+};
+
+export function Icon({ name, className = 'h-5 w-5' }: { name: string; className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={paths[name] ?? paths.box} />
+    </svg>
+  );
+}
