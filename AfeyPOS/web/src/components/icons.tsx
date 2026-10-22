@@ -41,6 +41,12 @@ const paths: Record<string, string> = {
   upload: 'M12 21V9M7 14l5-5 5 5M4 3h16',
   refresh: 'M4 4v6h6M20 20v-6h-6M5 15a7 7 0 0012 3M19 9A7 7 0 007 6',
   alert: 'M12 3l10 18H2zM12 10v5M12 18h0',
+  mail: 'M3 6h18v12H3zM3 7l9 6 9-6',
+  lock: 'M6 11h12v10H6zM8 11V7a4 4 0 018 0v4M12 15v2',
+  keypad: 'M6 4h2v2H6zM11 4h2v2h-2zM16 4h2v2h-2zM6 9h2v2H6zM11 9h2v2h-2zM16 9h2v2h-2zM6 14h2v2H6zM11 14h2v2h-2zM16 14h2v2h-2zM11 19h2v2h-2z',
+  eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 100-6 3 3 0 000 6z',
+  eyeOff: 'M3 3l18 18M10.6 6.1A10 10 0 0112 6c6 0 10 6 10 6a17 17 0 01-3.2 3.8M6.5 7.6A17 17 0 002 12s4 7 10 7a9.7 9.7 0 004.5-1.1M9.9 9.9a3 3 0 004.2 4.2',
+  store: 'M4 9l1-5h14l1 5M4 9v11h16V9M4 9h16M9 20v-6h6v6',
 };
 
 export function Icon({ name, className = 'h-5 w-5' }: { name: string; className?: string }) {

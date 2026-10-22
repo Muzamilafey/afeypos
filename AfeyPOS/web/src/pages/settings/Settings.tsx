@@ -23,7 +23,7 @@ export function BusinessSettingsPage() {
   const setS = (k: string, v: any) => setF({ ...f, settings: { ...s, [k]: v } });
   const save = async () => {
     try {
-      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, receiptHeader: s.receiptHeader ?? '', receiptFooter: s.receiptFooter ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders } } });
+      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, receiptHeader: s.receiptHeader ?? '', receiptFooter: s.receiptFooter ?? '', logoFileId: s.logoFileId ?? '', tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders } } });
       await reload();
       toast.success('Settings saved');
     } catch (e) { toast.error(e); }
@@ -51,6 +51,8 @@ export function BusinessSettingsPage() {
           <Field label="Timezone" hint="Used for reports and receipts"><Input value={s.timezone} onChange={(e) => setS('timezone', e.target.value)} /></Field>
           <Field label="Receipt header"><Input value={s.receiptHeader ?? ''} onChange={(e) => setS('receiptHeader', e.target.value)} /></Field>
           <Field label="Receipt footer"><Input value={s.receiptFooter ?? ''} onChange={(e) => setS('receiptFooter', e.target.value)} /></Field>
+          <Field label="Tagline" hint="Shown under your name on the sign-in page"><Input maxLength={120} value={s.tagline ?? ''} onChange={(e) => setS('tagline', e.target.value)} placeholder="e.g. Quality building materials since 2005" /></Field>
+          <div className="sm:col-span-2"><BusinessLogoField fileId={s.logoFileId} onChange={(id) => setS('logoFileId', id)} /></div>
         </div></Card>
       )}
       {tab === 'sales' && (
@@ -385,3 +387,42 @@ export function AccountPage() {
 }
 
 export { money };
+
+/** Upload the business logo (PNG, JPEG or WEBP) shown on the sign-in and sign-up pages. Saved with the form. */
+function BusinessLogoField({ fileId, onChange }: { fileId?: string; onChange: (id: string) => void }) {
+  const toast = useToast();
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    let url: string | null = null;
+    setPreview(null);
+    if (!fileId) return;
+    api<Response>(`/files/${fileId}`, { raw: true })
+      .then(async (r) => { if (r.ok) { url = URL.createObjectURL(await r.blob()); setPreview(url); } })
+      .catch(() => undefined);
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [fileId]);
+  const upload = async (file: File) => {
+    if (file.size > 3 * 1024 * 1024) return toast.error('The logo must be smaller than 3 MB');
+    const base64 = await new Promise<string>((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1]); r.readAsDataURL(file); });
+    try {
+      const r = await api<{ data: { id: string } }>('/files', { body: { base64, purpose: 'attachment' } });
+      onChange(r.data.id);
+      toast.info('Logo uploaded. Press Save to apply it.');
+    } catch (e) { toast.error(e); }
+  };
+  return (
+    <div>
+      <div className="label">Business logo</div>
+      <div className="flex items-center gap-4">
+        <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-white ring-1 ring-ink-200 dark:ring-ink-700">
+          {preview ? <img src={preview} alt="Business logo" className="h-full w-full object-contain p-2" /> : <Icon name="store" className="h-8 w-8 text-ink-300" />}
+        </div>
+        <label className="cursor-pointer"><span className="inline-flex rounded-lg border border-ink-300 px-3 py-2 text-sm hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">Upload logo</span>
+          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+        </label>
+        {fileId && <Button variant="ghost" size="sm" onClick={() => onChange('')}>Remove</Button>}
+      </div>
+      <p className="mt-1 text-xs text-ink-500">Shown on the sign-in and sign-up pages. A square image of at least 256 × 256 pixels looks best.</p>
+    </div>
+  );
+}

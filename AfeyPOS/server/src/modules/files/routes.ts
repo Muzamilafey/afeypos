@@ -24,6 +24,17 @@ const MAX_BYTES = 3 * 1024 * 1024;
 
 const tenantDir = (tenantId: string) => path.resolve(env().UPLOAD_DIR, tenantId);
 
+export const FILE_ID_RE = /^[a-f0-9]{32}\.(png|jpg|webp|pdf)$/;
+
+/** Absolute path of a tenant file, or null when the id is invalid or the file is missing. */
+export function tenantFilePath(tenantId: string, id: string): string | null {
+  if (!FILE_ID_RE.test(id)) return null;
+  const file = path.join(tenantDir(tenantId), id);
+  return fs.existsSync(file) ? file : null;
+}
+
+export const mimeFor = (id: string) => TYPES.find((t) => id.endsWith(t.ext))?.mime ?? 'application/octet-stream';
+
 const router = Router();
 
 router.post('/files', requirePermission('products.manage'), async (req, res) => {

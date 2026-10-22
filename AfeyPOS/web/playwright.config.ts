@@ -1,8 +1,6 @@
 import { defineConfig } from '@playwright/test';
-import fs from 'node:fs';
 
 const port = Number(process.env.E2E_PORT ?? 4100);
-const chromium = fs.existsSync('/opt/pw-browsers/chromium') ? undefined : undefined;
 
 export default defineConfig({
   testDir: './e2e',
@@ -10,11 +8,18 @@ export default defineConfig({
   timeout: 60_000,
   workers: 1,
   reporter: [['list']],
-  use: { baseURL: `http://127.0.0.1:${port}`, screenshot: 'only-on-failure', trace: 'retain-on-failure', launchOptions: chromium },
+  // Browse via a non-loopback hostname, like a till on the shop LAN: browsers treat 127.0.0.1 specially
+  // (e.g. they never upgrade it to HTTPS), which would hide plain-HTTP deployment bugs.
+  use: {
+    baseURL: `http://pos-server.lan.test:${port}`,
+    screenshot: 'only-on-failure',
+    trace: 'retain-on-failure',
+    launchOptions: { args: ['--no-proxy-server', '--host-resolver-rules=MAP pos-server.lan.test 127.0.0.1'] },
+  },
   webServer: {
     command: `node ../scripts/e2e-server.mjs ${port}`,
     url: `http://127.0.0.1:${port}/health`,
-    reuseExistingServer: true,
+    reuseExistingServer: Boolean(process.env.E2E_REUSE),
     timeout: 120_000,
   },
 });

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, openPrintable } from '../../lib/api';
+import { api, newRequestId, openPrintable } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useList, useLocations } from '../../lib/hooks';
 import { date, money } from '../../lib/format';
@@ -37,7 +37,7 @@ export function DocumentsPage() {
     const key = `afey.carts.${tillId}`;
     try {
       const carts = JSON.parse(localStorage.getItem(key) ?? '[]');
-      carts.push({ id: crypto.randomUUID(), label: doc.number, lines: doc.lines.map((l: any) => ({ key: crypto.randomUUID(), product: { _id: l.productId, name: l.name, sku: l.sku, baseUnit: l.unitCode, units: [{ code: l.unitCode, name: l.unitCode, factor: l.unitFactor ?? 1 }], prices: {}, taxRateBp: l.taxRateBp, trackSerials: false, trackBatches: false, allowFractional: true, requiresPrescription: false, ageRestricted: false }, unitCode: l.unitCode, qty: l.qty, unitPriceCents: l.unitPriceCents, quotedCents: l.unitPriceCents, discountCents: l.discountCents ?? 0, serials: [] })), customer: doc.customerId ? { _id: doc.customerId, name: doc.customerName } : null, priceList: doc.priceList, cartDiscountCents: 0, couponCode: '', ageVerified: false, salesDocumentId: doc._id });
+      carts.push({ id: newRequestId(), label: doc.number, lines: doc.lines.map((l: any) => ({ key: newRequestId(), product: { _id: l.productId, name: l.name, sku: l.sku, baseUnit: l.unitCode, units: [{ code: l.unitCode, name: l.unitCode, factor: l.unitFactor ?? 1 }], prices: {}, taxRateBp: l.taxRateBp, trackSerials: false, trackBatches: false, allowFractional: true, requiresPrescription: false, ageRestricted: false }, unitCode: l.unitCode, qty: l.qty, unitPriceCents: l.unitPriceCents, quotedCents: l.unitPriceCents, discountCents: l.discountCents ?? 0, serials: [] })), customer: doc.customerId ? { _id: doc.customerId, name: doc.customerName } : null, priceList: doc.priceList, cartDiscountCents: 0, couponCode: '', ageVerified: false, salesDocumentId: doc._id });
       localStorage.setItem(key, JSON.stringify(carts));
       nav('/pos');
     } catch (e) { toast.error(e); }

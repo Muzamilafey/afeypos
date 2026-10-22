@@ -78,3 +78,22 @@ describe('scheduled notifications', () => {
     expect(ConsoleSmsProvider.outbox.filter((m) => m.to === '254711000999')).toHaveLength(1);
   });
 });
+
+describe('business logo on the sign-in page', () => {
+  it('serves the uploaded logo publicly for its own business only', async () => {
+    const a = await registerTenant(ctx.api, 'logoa');
+    await registerTenant(ctx.api, 'logob');
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]).toString('base64');
+    const up = await a.client.post('/files', { base64: png });
+    expect((await a.client.patch('/settings/business', { settings: { logoFileId: up.body.data.id, tagline: 'Quality building materials' } })).status).toBe(200);
+    expect((await a.client.patch('/settings/business', { settings: { logoFileId: '../../etc/passwd' } })).status).toBe(400);
+    const cfg = await ctx.api.get('/api/v1/public/config').set('Host', 'logoa.afeypos.test');
+    expect(cfg.body.tenant.logoUrl).toMatch(/^\/api\/v1\/public\/logo\?v=/);
+    expect(cfg.body.tenant.tagline).toBe('Quality building materials');
+    const logo = await ctx.api.get('/api/v1/public/logo').set('Host', 'logoa.afeypos.test');
+    expect(logo.status).toBe(200);
+    expect(logo.headers['content-type']).toContain('image/png');
+    expect((await ctx.api.get('/api/v1/public/logo').set('Host', 'logob.afeypos.test')).status).toBe(404);
+    expect((await ctx.api.get('/api/v1/public/config').set('Host', 'logob.afeypos.test')).body.tenant.logoUrl).toBeNull();
+  });
+});

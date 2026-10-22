@@ -57,9 +57,19 @@ export function createApp() {
     helmet({
       contentSecurityPolicy: {
         useDefaults: true,
-        directives: { 'img-src': ["'self'", 'data:', 'blob:'], 'connect-src': ["'self'", 'ws:', 'wss:'], 'script-src': ["'self'"], 'style-src': ["'self'", "'unsafe-inline'"] },
+        directives: {
+          'img-src': ["'self'", 'data:', 'blob:'],
+          'connect-src': ["'self'", 'ws:', 'wss:'],
+          'script-src': ["'self'"],
+          'style-src': ["'self'", "'unsafe-inline'"],
+          // Only force HTTPS sub-resources when the site is served over HTTPS; local shop installations use plain HTTP on the LAN.
+          'upgrade-insecure-requests': e.COOKIE_SECURE ? [] : null,
+        },
       },
       crossOriginEmbedderPolicy: false,
+      // HSTS and COOP only make sense over HTTPS.
+      strictTransportSecurity: e.COOKIE_SECURE,
+      crossOriginOpenerPolicy: e.COOKIE_SECURE,
     }),
   );
   const origins = e.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);

@@ -29,6 +29,9 @@ const tenantSettingsSchema = new Schema(
       pointValueCents: { type: Number, default: 100 },
     },
     stkPendingTimeoutSeconds: { type: Number, default: 180 },
+    /** Uploaded file id (see modules/files) shown on the sign-in page and documents. */
+    logoFileId: { type: String },
+    tagline: { type: String },
     /** Liquor licensing: age-restricted products can only be sold inside these local hours (HH:mm). */
     restrictedSaleHours: { start: { type: String }, end: { type: String } },
     dailyReportEmails: { type: [String], default: [] },

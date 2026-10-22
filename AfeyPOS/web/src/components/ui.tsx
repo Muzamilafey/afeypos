@@ -7,7 +7,7 @@ export { cx };
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
 export function Button({ variant = 'primary', size = 'md', loading, className, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'sm' | 'md' | 'lg' | 'xl'; loading?: boolean }) {
   const v = {
-    primary: 'bg-brand-600 text-white hover:bg-brand-700 disabled:bg-brand-300',
+    primary: 'bg-brand-600 text-white hover:bg-brand-700 disabled:bg-brand-300 dark:bg-brand-100 dark:text-brand-900 dark:hover:bg-white dark:disabled:bg-brand-500',
     secondary: 'border border-ink-300 bg-white text-ink-800 hover:bg-ink-50 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800',
     danger: 'bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300',
     ghost: 'text-ink-700 hover:bg-ink-100 dark:text-ink-200 dark:hover:bg-ink-800',
@@ -229,7 +229,7 @@ export function Tabs({ tabs, value, onChange }: { tabs: { key: string; label: st
   return (
     <div className="mb-4 flex gap-1 overflow-x-auto border-b border-ink-200 dark:border-ink-800" role="tablist">
       {tabs.map((t) => (
-        <button key={t.key} role="tab" aria-selected={value === t.key} onClick={() => onChange(t.key)} className={cx('whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium', value === t.key ? 'border-brand-600 text-brand-700 dark:text-brand-300' : 'border-transparent text-ink-500 hover:text-ink-800')}>
+        <button key={t.key} role="tab" aria-selected={value === t.key} onClick={() => onChange(t.key)} className={cx('whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium', value === t.key ? 'border-brand-600 text-brand-700 dark:border-brand-200 dark:text-brand-100' : 'border-transparent text-ink-500 hover:text-ink-800')}>
           {t.label}
         </button>
       ))}

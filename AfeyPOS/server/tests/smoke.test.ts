@@ -13,6 +13,11 @@ describe('smoke', () => {
     expect(r.status).toBe(200);
     expect(r.body.database.transactions).toBe(true);
   });
+  it('does not force HTTPS on plain-HTTP installations (LAN tills)', async () => {
+    const r = await ctx.api.get('/health');
+    expect(r.headers['content-security-policy']).not.toContain('upgrade-insecure-requests');
+    expect(r.headers['strict-transport-security']).toBeUndefined();
+  });
   it('registers a tenant and loads /me', async () => {
     const { client } = await registerTenant(ctx.api, 'smoke');
     const me = await client.get('/auth/me');

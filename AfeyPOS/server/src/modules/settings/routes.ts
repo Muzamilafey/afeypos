@@ -47,6 +47,8 @@ const settingsSchema = z.object({
       loyalty: z.object({ pointsPerUnitCents: z.number().int().positive(), pointValueCents: z.number().int().positive() }).partial(),
       restrictedSaleHours: z.object({ start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).or(z.literal('')), end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).or(z.literal('')) }).partial(),
       dailyReportEmails: z.array(z.string().email()).max(5),
+      logoFileId: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/).or(z.literal('')),
+      tagline: z.string().max(120),
       creditReminders: z.object({ enabled: z.boolean(), overdueDays: z.number().int().min(1).max(180) }).partial(),
     })
     .partial(),

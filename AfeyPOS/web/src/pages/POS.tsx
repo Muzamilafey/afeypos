@@ -247,8 +247,8 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
         </div>
         {categories.data && categories.data.length > 0 && (
           <div className="flex gap-2 overflow-x-auto border-b border-ink-200 bg-white px-3 py-2 dark:border-ink-800 dark:bg-ink-900">
-            <button onClick={() => setCategory(null)} className={cx('whitespace-nowrap rounded-full px-3 py-1.5 text-sm', !category ? 'bg-brand-600 text-white' : 'bg-ink-100 dark:bg-ink-800')}>All</button>
-            {categories.data.filter((c) => c.active !== false).map((c) => <button key={c._id} onClick={() => setCategory(c._id === category ? null : c._id)} className={cx('whitespace-nowrap rounded-full px-3 py-1.5 text-sm', category === c._id ? 'bg-brand-600 text-white' : 'bg-ink-100 dark:bg-ink-800')}>{c.name}</button>)}
+            <button onClick={() => setCategory(null)} className={cx('whitespace-nowrap rounded-full px-3 py-1.5 text-sm', !category ? 'bg-brand-600 text-white dark:bg-brand-100 dark:text-brand-900' : 'bg-ink-100 dark:bg-ink-800')}>All</button>
+            {categories.data.filter((c) => c.active !== false).map((c) => <button key={c._id} onClick={() => setCategory(c._id === category ? null : c._id)} className={cx('whitespace-nowrap rounded-full px-3 py-1.5 text-sm', category === c._id ? 'bg-brand-600 text-white dark:bg-brand-100 dark:text-brand-900' : 'bg-ink-100 dark:bg-ink-800')}>{c.name}</button>)}
           </div>
         )}
         <div className="flex-1 overflow-y-auto p-3">
@@ -277,7 +277,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
       <div className="flex w-full flex-col bg-white dark:bg-ink-900 lg:w-[440px]">
         <div className="flex items-center gap-1 overflow-x-auto border-b border-ink-200 px-2 py-2 dark:border-ink-800">
           {carts.map((c, i) => (
-            <button key={c.id} onClick={() => setActive(i)} className={cx('flex items-center gap-1 whitespace-nowrap rounded-md px-2.5 py-1 text-xs', i === active ? 'bg-brand-600 text-white' : 'bg-ink-100 dark:bg-ink-800')}>
+            <button key={c.id} onClick={() => setActive(i)} className={cx('flex items-center gap-1 whitespace-nowrap rounded-md px-2.5 py-1 text-xs', i === active ? 'bg-brand-600 text-white dark:bg-brand-100 dark:text-brand-900' : 'bg-ink-100 dark:bg-ink-800')}>
               {c.label}{c.lines.length ? ` (${c.lines.length})` : ''}
             </button>
           ))}

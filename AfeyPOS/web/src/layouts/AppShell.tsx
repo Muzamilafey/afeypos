@@ -50,14 +50,14 @@ export function AppShell() {
               <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-ink-400">{GROUPS[g]}</div>
               {items.map((n) => (
                 <NavLink key={n.key} to={n.path} end={n.path === '/' || n.path === '/inventory' || n.path === '/settings'} onClick={() => setOpen(false)}
-                  className={({ isActive }) => cx('flex items-center gap-3 rounded-lg px-3 py-2 text-sm', isActive ? 'bg-brand-50 font-medium text-brand-800 dark:bg-brand-900/30 dark:text-brand-200' : 'text-ink-600 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-800')}>
+                  className={({ isActive }) => cx('flex items-center gap-3 rounded-lg px-3 py-2 text-sm', isActive ? 'bg-brand-50 font-medium text-brand-800 dark:bg-white/10 dark:text-white' : 'text-ink-600 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-800')}>
                   <Icon name={n.icon} className="h-4 w-4" />
                   {n.label}
                 </NavLink>
               ))}
             </div>
           ))}
-          <NavLink to="/account" className={({ isActive }) => cx('flex items-center gap-3 rounded-lg px-3 py-2 text-sm', isActive ? 'bg-brand-50 text-brand-800' : 'text-ink-600 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-800')}><Icon name="user" className="h-4 w-4" />My account</NavLink>
+          <NavLink to="/account" className={({ isActive }) => cx('flex items-center gap-3 rounded-lg px-3 py-2 text-sm', isActive ? 'bg-brand-50 text-brand-800 dark:bg-white/10 dark:text-white' : 'text-ink-600 hover:bg-ink-100 dark:text-ink-300 dark:hover:bg-ink-800')}><Icon name="user" className="h-4 w-4" />My account</NavLink>
         </nav>
       </aside>
       {open && <div className="fixed inset-0 z-30 bg-ink-950/40 lg:hidden" onClick={() => setOpen(false)} />}

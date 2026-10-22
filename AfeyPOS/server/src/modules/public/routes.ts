@@ -10,6 +10,7 @@ import { authLimiter, tenantAppUrl } from '../auth/routes.js';
 import { isSubdomainAvailable, provisionTenant, registrationSchema } from '../tenants/provisioning.js';
 import { getPlan } from '../tenants/plans.js';
 import { Plan } from '../../models/index.js';
+import { mimeFor, tenantFilePath } from '../files/routes.js';
 
 const router = Router();
 
@@ -20,8 +21,23 @@ router.get('/config', async (req, res) => {
     deploymentMode: e.DEPLOYMENT_MODE,
     baseDomain: e.BASE_DOMAIN,
     setupRequired: e.DEPLOYMENT_MODE === 'local' ? !(await Tenant.exists({})) : false,
-    tenant: tenant ? { name: tenant.name, slug: tenant.slug, businessType: tenant.businessType, status: tenant.status } : null,
+    tenant: tenant
+      ? { name: tenant.name, slug: tenant.slug, businessType: tenant.businessType, status: tenant.status, tagline: tenant.settings?.tagline ?? null, logoUrl: tenant.settings?.logoFileId ? `/api/v1/public/logo?v=${tenant.settings.logoFileId.slice(0, 8)}` : null }
+      : null,
   });
+});
+
+/** The business logo for the sign-in page (public on purpose: it is shown before anyone signs in). */
+router.get('/logo', async (req, res) => {
+  const tenant = await findTenantForRequest(req);
+  const file = tenant?.settings?.logoFileId ? tenantFilePath(String(tenant._id), tenant.settings.logoFileId) : null;
+  if (!file) {
+    res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No logo' } });
+    return;
+  }
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.type(mimeFor(file)).sendFile(file);
 });
 
 router.get('/business-types', (_req, res) => {

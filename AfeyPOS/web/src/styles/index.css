@@ -5,7 +5,7 @@
 @layer base {
   html { -webkit-tap-highlight-color: transparent; }
   body { @apply antialiased; }
-  :focus-visible { @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white dark:ring-offset-ink-900; }
+  :focus-visible { @apply outline-none ring-2 ring-brand-400 ring-offset-2 ring-offset-white dark:ring-offset-ink-900; }
 }
 
 @layer components {
