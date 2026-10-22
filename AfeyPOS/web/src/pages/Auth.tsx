@@ -8,14 +8,17 @@ import { Button, ErrorBox, Field, Input, Card, cx } from '../components/ui';
 
 function Shell({ title, children, wide }: { title: string; children: React.ReactNode; wide?: boolean }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-brand-800 via-brand-700 to-ink-900 p-4">
-      <div className={cx('w-full', wide ? 'max-w-4xl' : 'max-w-md')}>
-        <div className="mb-6 text-center text-white">
-          <Logo className="mx-auto mb-3 h-20 w-auto drop-shadow" />
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink-950 p-4">
+      <div aria-hidden="true" className="auth-wallpaper absolute inset-0" />
+      {/* Darkens the photo just enough for the white heading and the card to stay readable. */}
+      <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-b from-black/45 via-black/20 to-black/55" />
+      <div className={cx('relative w-full', wide ? 'max-w-4xl' : 'max-w-md')}>
+        <div className="mb-6 text-center text-white [text-shadow:0_1px_8px_rgba(0,0,0,.6)]">
+          <Logo className="mx-auto mb-3 h-20 w-auto drop-shadow-lg" />
           <h1 className="text-2xl font-semibold">Afey POS</h1>
-          <p className="text-sm text-white/70">{title}</p>
+          <p className="text-sm text-white/80">{title}</p>
         </div>
-        <div className="card p-6">{children}</div>
+        <div className="card border-white/20 bg-white/95 p-6 shadow-2xl backdrop-blur-sm dark:border-ink-700/60 dark:bg-ink-900/90">{children}</div>
       </div>
     </div>
   );

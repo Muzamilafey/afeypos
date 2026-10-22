@@ -9,6 +9,14 @@
 }
 
 @layer components {
+  /* Earth-from-orbit wallpaper behind the sign-in and onboarding cards (WebP with JPEG fallback). */
+  .auth-wallpaper {
+    background-color: #020617;
+    background-image: url('/images/login-earth.jpg');
+    background-image: image-set(url('/images/login-earth.webp') type('image/webp'), url('/images/login-earth.jpg') type('image/jpeg'));
+    background-size: cover;
+    background-position: center 18%;
+  }
   .card { @apply rounded-xl border border-ink-200 bg-white shadow-sm dark:border-ink-800 dark:bg-ink-900; }
   .input { @apply block w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 placeholder-ink-400 shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:bg-ink-100 dark:border-ink-700 dark:bg-ink-950 dark:text-ink-100; }
   .label { @apply mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500 dark:text-ink-400; }
