@@ -1,3 +1,4 @@
+import { Logo } from '../components/Logo';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -10,7 +11,7 @@ function Shell({ title, children, wide }: { title: string; children: React.React
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-brand-800 via-brand-700 to-ink-900 p-4">
       <div className={cx('w-full', wide ? 'max-w-4xl' : 'max-w-md')}>
         <div className="mb-6 text-center text-white">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-white/15 text-2xl font-bold">A</div>
+          <Logo className="mx-auto mb-3 h-20 w-auto drop-shadow" />
           <h1 className="text-2xl font-semibold">Afey POS</h1>
           <p className="text-sm text-white/70">{title}</p>
         </div>

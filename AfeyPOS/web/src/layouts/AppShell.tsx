@@ -1,3 +1,4 @@
+import { Logo } from '../components/Logo';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { BUSINESS_PROFILES, type BusinessType } from '@afeypos/shared';
@@ -37,7 +38,7 @@ export function AppShell() {
     <div className="flex min-h-screen">
       <aside className={cx('no-print fixed inset-y-0 left-0 z-40 w-64 transform border-r border-ink-200 bg-white transition dark:border-ink-800 dark:bg-ink-900 lg:static lg:translate-x-0', open ? 'translate-x-0' : '-translate-x-full')}>
         <div className="flex h-14 items-center gap-2 border-b border-ink-100 px-4 dark:border-ink-800">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-700 font-bold text-white">A</div>
+          <Logo className="h-9 w-auto shrink-0" />
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold">Afey POS</div>
             <div className="truncate text-xs text-ink-500">{me.tenant.name}</div>

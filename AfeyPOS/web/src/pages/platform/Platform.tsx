@@ -1,3 +1,4 @@
+import { Logo } from '../../components/Logo';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
@@ -18,7 +19,7 @@ export function PlatformLayout() {
   return (
     <div className="min-h-screen">
       <header className="flex items-center gap-4 border-b border-ink-200 bg-ink-900 px-4 py-3 text-white">
-        <span className="font-semibold">Afey POS · Platform</span>
+        <span className="flex items-center gap-2 font-semibold"><Logo className="h-7 w-auto" />Afey POS · Platform</span>
         <nav className="flex gap-1 overflow-x-auto text-sm">{links.map(([to, l]) => <NavLink key={to} to={to} end className={({ isActive }) => cx('rounded px-2 py-1', isActive ? 'bg-white/15' : 'text-white/70 hover:text-white')}>{l}</NavLink>)}</nav>
         <button className="ml-auto text-sm text-white/70" onClick={async () => { await p('/auth/logout', { body: {} }); setAccessToken(null, 'platform'); nav('/platform'); setState('out'); }}>Sign out</button>
       </header>
