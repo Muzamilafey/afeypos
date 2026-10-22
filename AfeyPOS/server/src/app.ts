@@ -92,7 +92,8 @@ export function createApp() {
   const v1 = Router();
   v1.get('/health', health);
   v1.use('/public', publicRoutes);
-  v1.use('/integrations/mpesa', mpesaCallbackRoutes);
+  // Neutral path: Safaricom rejects callback URLs containing words such as "mpesa".
+  v1.use('/hooks/pay', mpesaCallbackRoutes);
   v1.use('/platform', (req, _res, next) => runAsPlatform(() => next()), platformRoutes);
 
   const tenant = Router();

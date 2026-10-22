@@ -136,7 +136,7 @@ export class DarajaClient implements MpesaGateway {
 
 /**
  * Offline simulator used in development and automated tests. It never moves money;
- * callbacks must be simulated explicitly (see /integrations/mpesa/simulate in non-production).
+ * callbacks must be simulated explicitly (see /payments/mpesa/simulate in non-production).
  */
 export class MockMpesaGateway implements MpesaGateway {
   static pushes: (StkPushRequest & { checkoutRequestId: string })[] = [];

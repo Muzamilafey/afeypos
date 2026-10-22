@@ -38,9 +38,9 @@ export function gatewayFor(cfg: InstanceType<typeof IntegrationConfig>): MpesaGa
 export function callbackUrls(tenantId: Types.ObjectId, token: string) {
   const base = env().API_PUBLIC_URL.replace(/\/$/, '');
   return {
-    stk: `${base}/api/v1/integrations/mpesa/${tenantId}/${token}/stk`,
-    c2bConfirmation: `${base}/api/v1/integrations/mpesa/${tenantId}/${token}/c2b/confirmation`,
-    c2bValidation: `${base}/api/v1/integrations/mpesa/${tenantId}/${token}/c2b/validation`,
+    stk: `${base}/api/v1/hooks/pay/${tenantId}/${token}/stk`,
+    c2bConfirmation: `${base}/api/v1/hooks/pay/${tenantId}/${token}/c2b/confirmation`,
+    c2bValidation: `${base}/api/v1/hooks/pay/${tenantId}/${token}/c2b/validation`,
   };
 }
 

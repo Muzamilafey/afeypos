@@ -25,7 +25,7 @@ beforeAll(async () => {
   expect(cfg.body.data.secretsSet).toEqual(['consumerKey', 'consumerSecret', 'passkey']);
   expect(JSON.stringify(cfg.body)).not.toContain('"s"');
   const tenant = await runAsPlatform(() => Tenant.findOne({ slug: 'paysafe' }).lean());
-  callbackBase = `/api/v1/integrations/mpesa/${tenant!._id}/${tenant!.callbackToken}`;
+  callbackBase = `/api/v1/hooks/pay/${tenant!._id}/${tenant!.callbackToken}`;
   await openShift(t.client, till);
 });
 afterAll(teardown);
@@ -104,7 +104,7 @@ describe('STK push lifecycle', () => {
     expect(bad.body.ResultCode).toBe(0);
     expect((await t.client.get(`/payments/intents/${i.id}`)).body.data.status).toBe('pending');
     const o = await runAsPlatform(() => Tenant.findOne({ slug: 'otherpay' }).lean());
-    await callback(buildStkCallback(i.checkoutRequestId, 'm', 0, 20, '254712345678', 'FAKE002'), `/api/v1/integrations/mpesa/${o!._id}/${o!.callbackToken}`);
+    await callback(buildStkCallback(i.checkoutRequestId, 'm', 0, 20, '254712345678', 'FAKE002'), `/api/v1/hooks/pay/${o!._id}/${o!.callbackToken}`);
     expect((await t.client.get(`/payments/intents/${i.id}`)).body.data.status).toBe('pending');
     expect((await other.client.get(`/payments/intents/${i.id}`)).status).toBe(404);
   });

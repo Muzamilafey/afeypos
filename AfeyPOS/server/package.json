@@ -12,7 +12,8 @@
     "test": "vitest run",
     "seed:demo": "tsx --env-file-if-exists=.env src/scripts/seedDemo.ts",
     "backup": "tsx --env-file-if-exists=.env src/scripts/backup.ts",
-    "restore": "tsx --env-file-if-exists=.env src/scripts/restore.ts"
+    "restore": "tsx --env-file-if-exists=.env src/scripts/restore.ts",
+    "reset-password": "tsx --env-file-if-exists=.env src/scripts/resetPassword.ts"
   },
   "dependencies": {
     "@afeypos/shared": "0.1.0",
