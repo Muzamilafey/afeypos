@@ -1,0 +1,28 @@
+{
+  "name": "afeypos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Afey POS - Point of Sale and Business Management System",
+  "workspaces": ["packages/shared", "server", "web", "bridge"],
+  "scripts": {
+    "build:shared": "npm run build -w @afeypos/shared",
+    "dev": "npm run build:shared && node scripts/dev.mjs",
+    "dev:server": "npm run dev -w @afeypos/server",
+    "dev:web": "npm run dev -w @afeypos/web",
+    "build": "npm run build:shared && npm run build -w @afeypos/server && npm run build -w @afeypos/web && npm run build -w @afeypos/bridge",
+    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "test": "npm run build:shared && npm run test --workspaces --if-present",
+    "test:e2e": "npm run test:e2e -w @afeypos/web",
+    "start": "npm run start -w @afeypos/server"
+  },
+  "engines": { "node": ">=20.11" },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "eslint": "9.39.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.2",
+    "globals": "16.4.0",
+    "eslint-plugin-react-hooks": "5.2.0"
+  }
+}

@@ -1,0 +1,48 @@
+export interface TemplateDef {
+  sms?: string;
+  email?: { subject: string; body: string };
+}
+
+/** Built-in templates. Tenants can override them (NotificationTemplate). Variables use {{name}}. */
+export const DEFAULT_TEMPLATES: Record<string, TemplateDef> = {
+  receipt: {
+    sms: '{{business}}: Receipt {{number}}. Total {{total}}. Paid {{paid}}. {{footer}}',
+    email: { subject: 'Your receipt {{number}} from {{business}}', body: 'Hello {{customer}},\n\nThank you for your purchase.\n\n{{receiptText}}\n\n{{footer}}' },
+  },
+  payment_confirmation: {
+    sms: '{{business}}: We have received {{amount}} ref {{reference}}. Balance {{balance}}. Thank you.',
+    email: { subject: 'Payment received - {{business}}', body: 'Hello {{customer}},\n\nWe have received your payment of {{amount}} (ref {{reference}}).\nYour balance is {{balance}}.\n\nThank you.' },
+  },
+  customer_statement: {
+    email: { subject: 'Account statement - {{business}}', body: 'Hello {{customer}},\n\nPlease find your statement below.\n\n{{statementText}}\n\nBalance due: {{balance}}' },
+    sms: '{{business}}: Your account balance is {{balance}}. Thank you for your business.',
+  },
+  credit_reminder: {
+    sms: '{{business}}: Dear {{customer}}, your balance of {{balance}} is overdue. Kindly arrange payment.',
+    email: { subject: 'Payment reminder - {{business}}', body: 'Hello {{customer}},\n\nThis is a reminder that your balance of {{balance}} is overdue.\n\nThank you.' },
+  },
+  low_stock: {
+    email: { subject: 'Low stock alert - {{business}}', body: 'The following products are at or below their reorder level:\n\n{{items}}' },
+    sms: '{{business}}: {{count}} product(s) are low on stock: {{items}}',
+  },
+  purchase_order: {
+    email: { subject: 'Purchase order {{number}} from {{business}}', body: 'Dear {{supplier}},\n\nPlease supply the following:\n\n{{items}}\n\nTotal: {{total}}\n\nRegards,\n{{business}}' },
+  },
+  password_reset: {
+    email: { subject: 'Reset your Afey POS password', body: 'Hello {{name}},\n\nUse this link to reset your password (valid for 30 minutes):\n{{link}}\n\nIf you did not request this, ignore this email.' },
+  },
+  email_verify: {
+    email: { subject: 'Verify your Afey POS account', body: 'Hello {{name}},\n\nWelcome to Afey POS. Please verify your email address:\n{{link}}' },
+  },
+  scheduled_report: {
+    email: { subject: '{{business}} - {{reportName}} ({{period}})', body: '{{reportText}}' },
+  },
+  test: {
+    sms: 'Afey POS test message from {{business}}.',
+    email: { subject: 'Afey POS test email', body: 'This is a test email from {{business}}. Your email integration works.' },
+  },
+};
+
+export function render(template: string, data: Record<string, unknown>): string {
+  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => (data[k] === undefined || data[k] === null ? '' : String(data[k])));
+}
