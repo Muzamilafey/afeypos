@@ -32,7 +32,7 @@ export function DashboardPage() {
         {can('reports.financial') && <Stat label="Gross profit" value={money(d.grossProfitCents)} tone={d.grossProfitCents < 0 ? 'red' : 'green'} hint="Net of tax and returns" />}
         <Stat label="Returns" value={money(d.returnsCents)} />
         {(widgets.includes('receivables') || has('customerCredit')) && <Stat label="Owed by customers" value={money(d.receivablesCents)} hint={`${d.debtorCount} ${d.debtorCount === 1 ? 'customer' : 'customers'}`} />}
-        <Stat label="Low stock items" value={d.lowStockCount} tone={d.lowStockCount ? 'red' : undefined} hint={<Link className="text-brand-700" to="/inventory?belowReorder=true">View</Link>} />
+        <Stat label="Low stock items" value={d.lowStockCount} tone={d.lowStockCount ? 'red' : undefined} hint={<Link className="text-brand-700 dark:text-brand-200" to="/inventory?belowReorder=true">View</Link>} />
         {has('batchExpiry') && <Stat label="Expiring in 30 days" value={d.expiringSoonCount} tone={d.expiringSoonCount ? 'red' : undefined} />}
         <Stat label="Open shifts" value={d.openShifts} />
         {d.sales.creditCents > 0 && <Stat label="Credit sales" value={money(d.sales.creditCents)} />}
