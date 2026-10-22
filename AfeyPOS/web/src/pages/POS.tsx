@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { allocateProportionally, calculateTax, lineAmount, percentOf, roundQty, type PriceListKey } from '@afeypos/shared';
+import { allocateProportionally, calculateTax, lineAmount, roundQty, type PriceListKey } from '@afeypos/shared';
 import { api, ApiError, newRequestId, openPrintable } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useLocations } from '../lib/hooks';
@@ -138,7 +138,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
     } catch (e) {
       setError(e);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [quote, update]);
 
   const lookupAndAdd = async (code: string) => {

@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { permissionsForRoles, type Permission } from '@afeypos/shared';
 import { AttendanceRecord, BiometricChallenge, BiometricDevice, BiometricTemplate, User } from '../../models/index.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
-import { requireModule, requirePermission, signShortToken } from '../../http/auth.js';
+import { requirePermission, signShortToken } from '../../http/auth.js';
 import { decrypt, encrypt, hmacSha256, randomToken, safeEqual } from '../../lib/crypto.js';
 import { forbidden, notFound, unauthorized } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';

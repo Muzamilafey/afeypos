@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { Sale, SaleReturn, Customer, Tenant } from '../../models/index.js';
 import { parse, idParam, objectId, pagination, positiveCents, escapeRegex } from '../../http/validate.js';
-import { can, requireModule, requirePermission, assertBranchAccess } from '../../http/auth.js';
+import { can, requirePermission, assertBranchAccess } from '../../http/auth.js';
 import { idempotent } from '../../http/idempotency.js';
 import { notFound } from '../../lib/errors.js';
 import { emitToTenant } from '../../realtime/socket.js';

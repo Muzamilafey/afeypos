@@ -267,7 +267,7 @@ export function IntegrationsPage() {
       setEdit(null); qc.invalidateQueries({ queryKey: ['integrations'] }); toast.success('Saved. Secrets are stored encrypted and never shown again.');
     } catch (e) { setError(e); }
   };
-  const test = async (id: string) => { try { const r = await api<{ data: any }>(`/settings/integrations/${id}/test`, { body: { to: testTo || undefined } }); r.data.ok ? toast.success(r.data.message) : toast.error(r.data.message); q.refetch(); } catch (e) { toast.error(e); } };
+  const test = async (id: string) => { try { const r = await api<{ data: any }>(`/settings/integrations/${id}/test`, { body: { to: testTo || undefined } }); if (r.data.ok) toast.success(r.data.message); else toast.error(r.data.message); q.refetch(); } catch (e) { toast.error(e); } };
   return (
     <div className="max-w-5xl">
       <PageHeader title="Integrations" subtitle="M-Pesa, SMS and email. Credentials stay on the server." actions={<>{(['mpesa', 'sms', 'email'] as const).map((k) => <Button key={k} variant="secondary" onClick={() => setEdit({ kind: k, provider: q.data.providers[k][0], name: '', enabled: true, isDefault: true, environment: 'sandbox', settings: {}, secrets: {} })}>Add {k}</Button>)}</>} />
@@ -323,7 +323,7 @@ export function HardwarePage() {
         { key: 'k', header: 'Type', render: (r: any) => r.kind.replace(/_/g, ' ') }, { key: 'n', header: 'Name', render: (r: any) => r.name }, { key: 'c', header: 'Connection', render: (r: any) => `${r.connection}${r.settings?.host ? ` ${r.settings.host}:${r.settings.port ?? 9100}` : ''}` },
         { key: 't', header: 'Till', render: (r: any) => locs.data?.tills.find((t) => t._id === r.tillId)?.name ?? '—' },
         { key: 's', header: 'Status', render: (r: any) => (r.status?.lastCheckAt ? <Badge tone={r.status.ok ? 'green' : 'red'}>{r.status.ok ? 'ok' : 'error'}</Badge> : '—') },
-        { key: 'a', header: '', render: (r: any) => <div className="flex gap-1"><Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/hardware/devices/${r._id}/test`, { body: {} }).then((x) => { x.data.ok ? toast.success(x.data.message) : toast.error(x.data.message); q.refetch(); })}>Test</Button><Button size="sm" variant="secondary" onClick={() => setEdit(r)}>Edit</Button></div> },
+        { key: 'a', header: '', render: (r: any) => <div className="flex gap-1"><Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/hardware/devices/${r._id}/test`, { body: {} }).then((x) => { if (x.data.ok) toast.success(x.data.message); else toast.error(x.data.message); q.refetch(); })}>Test</Button><Button size="sm" variant="secondary" onClick={() => setEdit(r)}>Edit</Button></div> },
       ]} /></div>
       {edit && (
         <Modal open onClose={() => setEdit(null)} title="Device" footer={<Button onClick={async () => { try { const body = { kind: edit.kind, name: edit.name, connection: edit.connection, tillId: edit.tillId || undefined, settings: edit.settings }; if (edit._id) await api(`/hardware/devices/${edit._id}`, { method: 'PATCH', body }); else await api('/hardware/devices', { body }); setEdit(null); qc.invalidateQueries({ queryKey: ['devices'] }); } catch (e) { toast.error(e); } }}>Save</Button>}>

@@ -49,10 +49,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, [reload]);
 
-  const finish = async (accessToken: string) => {
+  const finish = useCallback(async (accessToken: string) => {
     setAccessToken(accessToken);
     await reload();
-  };
+  }, [reload]);
 
   const value = useMemo<AuthState>(
     () => ({
@@ -81,7 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       can: (p) => Boolean(me?.permissions.includes(p)),
       has: (m) => Boolean(me?.capabilities.modules.includes(m)),
     }),
-    [me, loading, reload],
+    [me, loading, reload, finish],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

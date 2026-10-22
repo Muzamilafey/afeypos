@@ -4,7 +4,7 @@ import { Types } from 'mongoose';
 import { formatMoney, lineAmount, roundQty } from '@afeypos/shared';
 import { GoodsReceipt, LedgerEntry, Product, PurchaseOrder, Supplier, SupplierReturn, Tenant, Warehouse } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
-import { requireModule, requirePermission } from '../../http/auth.js';
+import { requirePermission } from '../../http/auth.js';
 import { idempotent } from '../../http/idempotency.js';
 import { withTransaction } from '../../db/connection.js';
 import { badRequest, notFound, unprocessable } from '../../lib/errors.js';

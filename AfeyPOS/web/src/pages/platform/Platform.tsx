@@ -143,7 +143,7 @@ export function PlatformPlans() {
         { key: 'l', header: 'Limits', render: (r: any) => `${r.limits.branches} branches · ${r.limits.users} users · ${r.limits.tills} tills · ${r.limits.smsPerMonth} SMS` },
         { key: 'm', header: 'Modules', render: (r: any) => (r.modules?.length ? `${r.modules.length} modules` : 'All') },
       ]} /></div>
-      {edit && <Modal open onClose={() => setEdit(null)} title={edit._id ? `Edit ${edit.code}` : 'New plan'} footer={<Button onClick={async () => { try { const { _id, __v, createdAt, updatedAt, code, ...rest } = edit; if (_id) await p(`/plans/${code}`, { method: 'PATCH', body: rest }); else await p('/plans', { body: edit }); setEdit(null); qc.invalidateQueries({ queryKey: ['p-plans'] }); } catch (e) { toast.error(e); } }}>Save</Button>}>
+      {edit && <Modal open onClose={() => setEdit(null)} title={edit._id ? `Edit ${edit.code}` : 'New plan'} footer={<Button onClick={async () => { try { const { _id, __v: _v, createdAt: _c, updatedAt: _u, code, ...rest } = edit; if (_id) await p(`/plans/${code}`, { method: 'PATCH', body: rest }); else await p('/plans', { body: edit }); setEdit(null); qc.invalidateQueries({ queryKey: ['p-plans'] }); } catch (e) { toast.error(e); } }}>Save</Button>}>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Code"><Input value={edit.code} disabled={Boolean(edit._id)} onChange={(e) => setEdit({ ...edit, code: e.target.value })} /></Field>
           <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>

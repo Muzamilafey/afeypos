@@ -13,7 +13,7 @@ import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
 import { IntegrationConfig, MpesaEvent, PaymentIntent, Tenant, Till, type PaymentIntentDoc } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
-import { requireModule, requirePermission } from '../../http/auth.js';
+import { requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { safeEqual } from '../../lib/crypto.js';

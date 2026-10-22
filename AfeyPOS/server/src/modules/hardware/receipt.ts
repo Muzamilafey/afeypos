@@ -26,7 +26,7 @@ function pad(left: string, right: string, width: number) {
 }
 
 function money(c: number, currency: string) {
-  return formatMoney(c, currency).replace(/ /g, ' ');
+  return formatMoney(c, currency).replace(/\u00a0/g, ' ');
 }
 
 export function receiptLines(tenant: ReceiptTenant, sale: ReceiptSale, width = 42, cashierName?: string): string[] {
