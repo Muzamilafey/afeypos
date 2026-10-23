@@ -15,6 +15,16 @@ It runs two ways:
 | Device bridge for the till PC | `bridge` | Node.js, no native dependencies |
 | Windows installer scripts | `installer/windows` | PowerShell |
 
+## Run it on your computer (one command)
+
+Requirements: [Node.js](https://nodejs.org) 22.9 or newer. MongoDB is optional: if it is not installed, a private copy is downloaded on the first run.
+
+```bash
+npm run local
+```
+
+Then open http://localhost:5173 and set up your business. The command installs dependencies, creates `server/.env` with fresh secrets, starts a MongoDB replica set in `./data/mongo` (port 27018, data kept between runs) unless `server/.env` already points to a reachable replica set, and starts the API (port 4000) and the web app. Press Ctrl+C to stop everything. Works on Windows, macOS and Linux.
+
 ## Quick start (development)
 
 Requirements: Node.js 22.9 or newer and MongoDB 7 or newer **running as a replica set** (a single node is fine; see [docs/DATABASE.md](docs/DATABASE.md)).
@@ -33,6 +43,7 @@ Open http://localhost:5173. In local mode you are asked to set up the business o
 
 | Command | What it does |
 |---|---|
+| `npm run local` | Everything at once: install, config, database, API + web |
 | `npm run dev` | API + web dev servers |
 | `npm run build` | Builds shared, server, web and bridge |
 | `npm run typecheck` | TypeScript checks for every package |
