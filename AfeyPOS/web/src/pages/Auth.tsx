@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Button, ErrorBox, Field, Input, Card, cx } from '../components/ui';
+import { Button, ErrorBox, Field, Input, Card, cx, Spinner } from '../components/ui';
 import { Icon } from '../components/icons';
 
 interface PublicConfig {
@@ -245,6 +245,13 @@ export function RegisterPage({ setup }: { setup?: boolean }) {
       <form onSubmit={submit} className="space-y-6">
         <div>
           <div className="label">What kind of business is this?</div>
+          {types.isLoading && <div className="flex items-center gap-2 py-4 text-sm text-ink-500"><Spinner className="h-4 w-4" />Loading business types…</div>}
+          {types.isError && (
+            <div className="space-y-2 py-2">
+              <ErrorBox error="Can't reach the Afey POS server, so business types could not be loaded. Check that the API is running (the terminal shows the error), then retry." />
+              <Button type="button" variant="secondary" size="sm" onClick={() => types.refetch()}>Retry</Button>
+            </div>
+          )}
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {types.data?.data.map((t) => (
               <button type="button" key={t.type} onClick={() => setForm((f) => ({ ...f, businessType: t.type }))} aria-pressed={form.businessType === t.type}
