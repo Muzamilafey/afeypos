@@ -13,12 +13,23 @@ import { Icon } from '../../components/icons';
 const FIELD_LABELS: Partial<Record<ProductField, string>> = {
   brand: 'Brand', dimensions: 'Dimensions', grade: 'Grade', specifications: 'Specifications', size: 'Size', color: 'Colour', material: 'Material', model: 'Model',
   genericName: 'Generic name', strength: 'Strength', dosageForm: 'Dosage form', abv: 'Alcohol % (ABV)', volumeMl: 'Volume (ml)', department: 'Department',
+  isbn: 'ISBN', author: 'Author(s)', publisher: 'Publisher', edition: 'Edition', publicationYear: 'Publication year', language: 'Language',
+  bookFormat: 'Format', bookCondition: 'Condition', gradeLevel: 'Class / grade', subject: 'Subject',
+};
+const FIELD_OPTIONS: Partial<Record<ProductField, string[]>> = {
+  bookFormat: ['Paperback', 'Hardcover', 'Spiral bound', 'Board book', 'Audio / CD', 'eBook code'],
+  bookCondition: ['New', 'Used - like new', 'Used - good', 'Used - fair'],
+};
+const FIELD_HINTS: Partial<Record<ProductField, string>> = {
+  isbn: 'ISBN-10 or ISBN-13. It is saved as ISBN-13 and added as a barcode so scanning the cover finds the book.',
+  gradeLevel: 'e.g. Grade 4, Form 2, PP1. Lets you search textbooks for a school book list.',
 };
 const ATTRIBUTE_FIELDS = Object.keys(FIELD_LABELS) as ProductField[];
 
 export function ProductsPage() {
   const nav = useNavigate();
-  const { can } = useAuth();
+  const { me, can } = useAuth();
+  const caps = me!.capabilities;
   const [page, setPage] = useState(1);
   const [q, setQ] = useState('');
   const [importing, setImporting] = useState(false);
@@ -31,10 +42,10 @@ export function ProductsPage() {
         {can('products.manage') && <Button onClick={() => nav('/products/new')}><Icon name="plus" className="h-4 w-4" />New product</Button>}
       </>} />
       <div className="card">
-        <div className="border-b border-ink-100 p-3 dark:border-ink-800"><Input className="max-w-sm" placeholder="Search name, SKU or barcode" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} /></div>
+        <div className="border-b border-ink-100 p-3 dark:border-ink-800"><Input className="max-w-sm" placeholder={caps.productFields.includes('isbn') ? 'Search title, author, ISBN or SKU' : 'Search name, SKU or barcode'} value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} /></div>
         <DataTable rows={list.data?.data} loading={list.isLoading} error={list.error} page={page} total={list.data?.total} limit={25} onPage={setPage} onRowClick={(r: any) => nav(`/products/${r._id}`)} empty="No products yet"
           columns={[
-            { key: 'name', header: 'Product', render: (r: any) => <div><div className="font-medium">{r.name}</div><div className="text-xs text-ink-500">{r.sku}{r.barcodes?.[0] ? ` · ${r.barcodes[0].code}` : ''}</div></div> },
+            { key: 'name', header: 'Product', render: (r: any) => <div><div className="font-medium">{r.name}</div><div className="text-xs text-ink-500">{r.attributes?.author ? `${r.attributes.author} · ` : ''}{r.sku}{r.barcodes?.[0] ? ` · ${r.barcodes[0].code}` : ''}</div></div> },
             { key: 'type', header: 'Type', render: (r: any) => (r.type === 'stock' ? (r.trackSerials ? <Badge tone="blue">serialised</Badge> : r.trackBatches ? <Badge tone="blue">batches</Badge> : 'stock') : r.type) },
             { key: 'price', header: 'Retail', className: 'num', render: (r: any) => money(r.prices?.retail) },
             { key: 'cost', header: 'Cost', className: 'num', render: (r: any) => money(r.costCents) },
@@ -139,7 +150,15 @@ export function ProductEditPage() {
             <Field label="Category"><Select value={p.categoryId} onChange={(e) => set('categoryId', e.target.value)} placeholder="None" options={(cats.data ?? []).map((c) => ({ value: c._id, label: c.name }))} /></Field>
             <Field label="Type"><Select value={p.type} onChange={(e) => set('type', e.target.value)} options={[{ value: 'stock', label: 'Stocked item' }, { value: 'service', label: 'Service' }, { value: 'non_stock', label: 'Non-stock item' }]} /></Field>
             <Field label="Base unit (stock is counted in this unit)"><Select value={p.baseUnit} onChange={(e) => set('baseUnit', e.target.value)} options={STANDARD_UNITS.map((u) => ({ value: u.code, label: `${u.name} (${u.code})` }))} /></Field>
-            {ATTRIBUTE_FIELDS.filter(has).map((f) => <Field key={f} label={FIELD_LABELS[f]!}><Input value={p.attributes?.[f] ?? ''} onChange={(e) => setAttr(f, e.target.value)} /></Field>)}
+            {ATTRIBUTE_FIELDS.filter(has).map((f) => (
+              <Field key={f} label={FIELD_LABELS[f]!} hint={FIELD_HINTS[f]}>
+                {FIELD_OPTIONS[f] ? (
+                  <Select value={p.attributes?.[f] ?? ''} onChange={(e) => setAttr(f, e.target.value)} placeholder="Not set" options={FIELD_OPTIONS[f]!.map((o) => ({ value: o, label: o }))} />
+                ) : (
+                  <Input value={p.attributes?.[f] ?? ''} inputMode={f === 'isbn' || f === 'publicationYear' ? 'numeric' : undefined} onChange={(e) => setAttr(f, e.target.value)} />
+                )}
+              </Field>
+            ))}
             <Field label="Description" className="sm:col-span-2"><Input value={p.description ?? ''} onChange={(e) => set('description', e.target.value)} /></Field>
           </div>
         </Card>

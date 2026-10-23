@@ -7,7 +7,8 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Feature | Status | Notes |
 |---|---|---|
 | Monorepo: React+Vite+TS web, Node+Express+TS API, MongoDB/Mongoose, Zod, REST /api/v1, Socket.IO | Tested | |
-| Business-type onboarding (10 types) driving modules, nav, fields, checkout, dashboards | Tested | `packages/shared/src/businessProfiles.ts` |
+| Business-type onboarding (11 types) driving modules, nav, fields, checkout, dashboards | Tested | `packages/shared/src/businessProfiles.ts` |
+| Bookshop & stationery: ISBN-10/13 (stored as ISBN-13, auto-added as scannable barcode), author, publisher, edition, year, language, format, condition (new/second-hand), class/grade, subject; search by title/author/publisher/ISBN/grade; school accounts, quotations, invoices, special orders (sales orders), school prices, loyalty | Tested | No school book-list import or bulk "book list → quotation" tool yet |
 | Owners enable/disable modules later without data loss | Tested | |
 | Local single-tenant mode (setup once, LAN tills, one database) | Tested | |
 | Selling during internet outages (local) | Implemented | No internet dependency except integrations |

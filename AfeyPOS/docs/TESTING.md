@@ -17,8 +17,8 @@ npm run typecheck && npm run lint && npm test && npm run build && npm run test:e
 |---|---|
 | `npm run typecheck` (shared, server, web, bridge) | pass |
 | `npm run lint` (ESLint, whole monorepo) | pass, 0 problems |
-| Shared unit tests | 14 passed |
-| Server integration + unit tests | 99 passed in 15 files |
+| Shared unit tests | 16 passed |
+| Server integration + unit tests | 101 passed in 16 files |
 | Web unit tests | 4 passed |
 | Bridge tests | 4 passed |
 | `npm run build` (all packages) | pass |
@@ -34,6 +34,7 @@ Server test files and coverage areas:
 | inventory | 10 | units and conversions, barcodes per unit, duplicate barcodes, CSV import/export dry run, weighted average cost, supplier balance/payment/return, PO partial receipt, adjustment approval by another user, transfers via in-transit, stocktake variances, FEFO batches skipping expired, serial/IMEI and warranty |
 | checkout | 13 | shift required, VAT-inclusive totals and change, payment mismatch, split payments, idempotent duplicate submissions, **12 concurrent checkouts on 5 units (exactly 5 succeed)**, discount limits and single-use supervisor override, price lists/tiers/customer prices, price override protection, credit limits and payment allocation/statement/ageing, partial returns and restock, voids, quotation conversion once, delivery notes, shift reconciliation |
 | mpesa | 9 | Daraja password/timestamp/callback parsing, validation, pending cannot pay, confirmed pays once, duplicate callbacks, receipt reuse, amount mismatch, cancellation code, wrong secret / other tenant ignored, expiry via job, confirmation via status query + late receipt, C2B once and allocation |
+| bookshop | 2 | bookshop offered at setup with book fields/modules/price lists; ISBN-10 → ISBN-13 stored and auto-barcoded; lookup by ISBN-13, hyphenated and ISBN-10; search by author and class; second-hand copy with the same ISBN (no barcode clash, found by ISBN); invalid ISBN rejected; sale |
 | gateways | 14 | Paystack/Flutterwave/pawaPay/Airtel/Kopo Kopo/Hubtel/iPay/ZenoPay/Africa's Talking request shapes, signatures (HMAC-SHA512/SHA256, shared secrets) and status mapping against stubbed HTTP; Kopo Kopo host pinning; config validation without secret leakage; simulator flow pending → confirmed → sale once; gateway vs M-Pesa intent separation; amount mismatch; idempotent charge; payment links; late confirmations; forged and wrong-token webhooks ignored; webhook confirmed only after the verify API agrees |
 | notifications | 3 | phone normalisation, templates, no-provider skip, dedupe, delivery via provider, retry after transient failure |
 | backup-sync | 4 | tenant backup → data loss → exact restore, tampered backup refused, sync ingest once as a stock delta, conflicts recorded, sync token required |

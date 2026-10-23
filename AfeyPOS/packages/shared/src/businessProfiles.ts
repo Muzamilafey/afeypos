@@ -105,6 +105,7 @@ export const BUSINESS_TYPES = [
   'fashion',
   'pharmacy',
   'liquor',
+  'bookshop',
   'multibranch',
 ] as const;
 
@@ -134,6 +135,16 @@ export const PRODUCT_FIELDS = [
   'department',
   'plu',
   'soldByWeight',
+  'isbn',
+  'author',
+  'publisher',
+  'edition',
+  'publicationYear',
+  'language',
+  'bookFormat',
+  'bookCondition',
+  'gradeLevel',
+  'subject',
 ] as const;
 
 export type ProductField = (typeof PRODUCT_FIELDS)[number];
@@ -169,6 +180,8 @@ export const STANDARD_UNITS: UnitTemplate[] = [
   { code: 'bottle', name: 'Bottle', fractional: false },
   { code: 'strip', name: 'Strip', fractional: false },
   { code: 'tab', name: 'Tablet', fractional: false },
+  { code: 'set', name: 'Set', fractional: false },
+  { code: 'ream', name: 'Ream', fractional: false },
 ];
 
 export interface CheckoutOptions {
@@ -316,6 +329,21 @@ export const BUSINESS_PROFILES: Record<BusinessType, BusinessProfile> = {
     checkout: { ...baseCheckout, showUnitSelector: true },
     dashboardWidgets: ['salesToday', 'paymentMix', 'lowStock', 'topProducts'],
     suggestedCategories: ['Beer', 'Spirits', 'Wine', 'Soft drinks', 'Mixers'],
+  },
+  bookshop: {
+    type: 'bookshop',
+    name: 'Bookshop & stationery',
+    description: 'Books by ISBN, author and publisher, school book lists and accounts, special orders and stationery.',
+    // Schools buy on account (credit, quotations, invoices); special orders are sales orders; second-hand and
+    // promotional pricing via promotions; regular readers via loyalty; book sets/bundles via unit conversions.
+    modules: [...CORE, 'customerCredit', 'quotations', 'salesOrders', 'invoices', 'customerPricing', 'promotions', 'loyalty', 'unitConversions'],
+    productFields: ['isbn', 'author', 'publisher', 'edition', 'publicationYear', 'language', 'bookFormat', 'bookCondition', 'gradeLevel', 'subject', 'brand'],
+    units: ['pc', 'set', 'pack', 'box', 'dozen', 'ream'],
+    // Wholesale = school / institution prices, selectable at checkout.
+    priceLists: ['retail', 'wholesale'],
+    checkout: { ...baseCheckout, showPriceListSelector: true },
+    dashboardWidgets: ['salesToday', 'topProducts', 'receivables', 'lowStock'],
+    suggestedCategories: ['Textbooks', 'Revision & past papers', 'Fiction', 'Non-fiction', "Children's books", 'Religious', 'Dictionaries & reference', 'Second-hand books', 'Exercise books', 'Stationery'],
   },
   multibranch: {
     type: 'multibranch',

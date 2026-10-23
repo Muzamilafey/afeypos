@@ -1,6 +1,6 @@
 # Afey POS
 
-Afey POS is a point of sale and business management system for shops, wholesalers, hardware stores, minimarts, supermarkets, electronics shops, boutiques, pharmacies, liquor stores and multi-branch chains, in Kenya and elsewhere.
+Afey POS is a point of sale and business management system for shops, wholesalers, hardware stores, minimarts, supermarkets, electronics shops, boutiques, pharmacies, liquor stores, bookshops and multi-branch chains, in Kenya and elsewhere.
 
 It runs two ways:
 

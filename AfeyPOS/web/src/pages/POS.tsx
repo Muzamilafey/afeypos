@@ -13,7 +13,7 @@ import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
-  taxRateBp: number | null; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number };
+  taxRateBp: number | null; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>;
 }
 interface Line { key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean }
 interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string }
@@ -260,6 +260,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
               {results.data.map((p) => (
                 <button key={p._id} onClick={() => { addProduct(p); searchRef.current?.focus(); }} className={cx('card text-left transition hover:border-brand-500', big ? 'p-4' : 'p-3')}>
                   <div className="line-clamp-2 font-medium">{p.name}</div>
+                  {p.attributes?.author && <div className="truncate text-xs text-ink-500">{[p.attributes.author, p.attributes.edition, p.attributes.bookCondition && p.attributes.bookCondition !== 'New' ? p.attributes.bookCondition : null].filter(Boolean).join(' · ')}</div>}
                   <div className="mt-1 flex items-center justify-between text-sm">
                     <span className="text-ink-500">{p.sku}</span>
                     <span className="font-semibold">{money(p.prices?.[cart.priceList] ?? p.prices?.retail)}</span>

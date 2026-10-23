@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   allocateProportionally, calculateTax, lineAmount, toCents, roundQty,
-  ean13CheckDigit, isValidEan13, parseVariableWeightBarcode, DEFAULT_VARIABLE_WEIGHT_CONFIG,
+  ean13CheckDigit, isValidEan13, parseVariableWeightBarcode, DEFAULT_VARIABLE_WEIGHT_CONFIG, normalizeIsbn, isbn13To10,
   resolveCapabilities, BUSINESS_TYPES, BUSINESS_PROFILES, navigationFor, permissionsForRoles, hasPermission,
   subdomainFromHost, validateSubdomain,
 } from './index.js';
@@ -50,6 +50,23 @@ describe('business profiles', () => {
       expect(BUSINESS_PROFILES[t].modules).toContain('pos');
       expect(BUSINESS_PROFILES[t].modules).toContain('inventory');
     }
+  });
+  it('bookshop gets book fields, school accounts and special orders', () => {
+    const c = resolveCapabilities({ businessType: 'bookshop' });
+    expect(c.productFields).toEqual(expect.arrayContaining(['isbn', 'author', 'publisher', 'edition', 'bookCondition', 'gradeLevel']));
+    expect(c.modules).toEqual(expect.arrayContaining(['customerCredit', 'quotations', 'salesOrders', 'invoices', 'loyalty']));
+    expect(c.priceLists).toContain('wholesale');
+    expect(resolveCapabilities({ businessType: 'minimart' }).productFields).not.toContain('isbn');
+  });
+  it('normalises ISBN-10 and ISBN-13 and rejects bad check digits', () => {
+    expect(normalizeIsbn('0-306-40615-2')).toBe('9780306406157');
+    expect(normalizeIsbn('978-0-306-40615-7')).toBe('9780306406157');
+    expect(normalizeIsbn('080442957X')).toBe('9780804429573');
+    expect(normalizeIsbn('0-306-40615-3')).toBeNull();
+    expect(normalizeIsbn('9780306406158')).toBeNull();
+    expect(normalizeIsbn('6161100100011')).toBeNull(); // a valid EAN-13, but not an ISBN
+    expect(isbn13To10('9780306406157')).toBe('0306406152');
+    expect(isbn13To10('9780804429573')).toBe('080442957X');
   });
   it('hardware gets fractional quantities, unit conversions and contractor prices', () => {
     const c = resolveCapabilities({ businessType: 'hardware' });
