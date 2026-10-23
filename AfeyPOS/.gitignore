@@ -5,9 +5,13 @@ coverage/
 .env.*
 !.env.example
 *.log
-backups/
-uploads/
-data/
+# Runtime data only (anchored so source folders such as server/src/modules/backups are not ignored)
+/backups/
+/uploads/
+/data/
+/server/data/
+/server/backups/
+/server/uploads/
 test-results/
 playwright-report/
 .mongo-test/
