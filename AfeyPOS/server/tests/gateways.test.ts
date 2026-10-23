@@ -213,7 +213,7 @@ describe('gateway configuration', () => {
   });
 
   it('lists gateways to cashiers without secrets', async () => {
-    const r = await t.client.get('/payments/gateways', { tillId: till });
+    const r = await t.client.get(`/payments/gateways?tillId=${till}`);
     expect(r.status).toBe(200);
     const sim = r.body.data.find((g: any) => g.provider === 'simulator');
     expect(sim).toMatchObject({ label: 'Payment simulator', flows: ['push', 'link'], currency: 'KES' });
