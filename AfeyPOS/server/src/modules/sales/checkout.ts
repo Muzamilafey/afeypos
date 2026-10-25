@@ -15,6 +15,7 @@ import { adjustReserved, applyMovement } from '../inventory/stock.js';
 import { quotePrice } from '../catalog/pricing.js';
 import { resolveUnit } from '../catalog/units.js';
 import { consumeOverride } from '../auth/routes.js';
+import { queueSaleForEtims } from '../etims/service.js';
 
 export const PAYMENT_METHODS = ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'gateway', 'other'] as const;
 
@@ -374,6 +375,7 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     },
   ]);
 
+  await queueSaleForEtims(saleId, till.branchId, caps);
   await audit(req, {
     action: 'sale.completed',
     entity: 'Sale',

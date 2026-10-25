@@ -63,6 +63,19 @@ const productSchema = new Schema(
     parentId: { type: ObjectId, ref: 'Product' },
     variantAttributes: { type: Schema.Types.Mixed },
     active: { type: Boolean, default: true },
+    /**
+     * KRA eTIMS item registration. itemClsCd is KRA's item classification code; taxTyCd overrides the
+     * type derived from the tax rate (A exempt, B 16%, C zero-rated, D non-VAT, E 8%).
+     */
+    etims: {
+      itemCd: String,
+      itemClsCd: String,
+      taxTyCd: { type: String, enum: ['A', 'B', 'C', 'D', 'E'] },
+      pkgUnitCd: String,
+      qtyUnitCd: String,
+      registeredAt: Date,
+      error: String,
+    },
   },
   { timestamps: true },
 );

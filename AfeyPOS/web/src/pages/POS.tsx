@@ -554,10 +554,27 @@ export function OverrideModal({ permission, message, onClose, onApproved }: { pe
   );
 }
 
-function ReceiptModal({ sale, tillId, onClose }: { sale: any; tillId: string; onClose: () => void }) {
+function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: string; onClose: () => void }) {
   const toast = useToast();
   const { has } = useAuth();
   const [to, setTo] = useState('');
+  // eTIMS signs in the background; give it a few seconds so the printed receipt carries the KRA signature.
+  const [sale, setSale] = useState<any>(initial);
+  const [waited, setWaited] = useState(!initial.etims || initial.etims.status !== 'pending');
+  useEffect(() => {
+    if (waited) return;
+    let n = 0;
+    const t = setInterval(async () => {
+      n += 1;
+      const s = await api<{ data: any }>(`/sales/${initial._id}`).then((r) => r.data).catch(() => null);
+      if (s) setSale(s);
+      if (s?.etims?.status !== 'pending' || n >= 6) {
+        clearInterval(t);
+        setWaited(true);
+      }
+    }, 700);
+    return () => clearInterval(t);
+  }, [initial._id, waited]);
   const print = async () => {
     try {
       await api(`/sales/${sale._id}/print`, { body: { tillId } });
@@ -567,15 +584,22 @@ function ReceiptModal({ sale, tillId, onClose }: { sale: any; tillId: string; on
     }
   };
   useEffect(() => {
-    if (getWorkstation().autoPrint) print();
+    if (waited && getWorkstation().autoPrint) print();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [waited]);
   return (
     <Modal open onClose={onClose} title={`Sale ${sale.number} complete`} size="sm" footer={<Button size="lg" className="w-full" onClick={onClose} autoFocus>New sale</Button>}>
       <div className="text-center">
         <div className="text-sm text-ink-500">Total</div>
         <div className="text-3xl font-semibold">{money(sale.totalCents)}</div>
         {sale.changeCents > 0 && <div className="mt-2 text-xl font-semibold text-emerald-700">Change: {money(sale.changeCents)}</div>}
+        {sale.etims && (
+          <div className="mt-2 text-xs">
+            {sale.etims.status === 'signed' ? <Badge tone="green">KRA eTIMS signed · CU {sale.etims.sdcId}/{sale.etims.rcptNo}</Badge>
+              : sale.etims.status === 'failed' ? <Badge tone="red">eTIMS rejected: see KRA eTIMS page</Badge>
+              : <Badge tone="amber">{waited ? 'eTIMS will sign when KRA is reachable; reprint later' : 'Signing with KRA eTIMS…'}</Badge>}
+          </div>
+        )}
       </div>
       <div className="mt-4 space-y-2">
         <Button variant="secondary" className="w-full" onClick={print}><Icon name="printer" className="h-4 w-4" />Print receipt</Button>

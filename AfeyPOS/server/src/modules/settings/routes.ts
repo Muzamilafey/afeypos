@@ -184,7 +184,7 @@ router.patch('/settings/tills/:id', requirePermission('branches.manage'), async 
 
 // ---------- integrations (secrets never returned) ----------
 const integrationSchema = z.object({
-  kind: z.enum(['mpesa', 'payment', 'sms', 'email']),
+  kind: z.enum(['mpesa', 'payment', 'etims', 'sms', 'email']),
   provider: z.string().min(2).max(40),
   name: z.string().trim().min(2).max(80),
   enabled: z.boolean().default(true),
@@ -198,6 +198,7 @@ const integrationSchema = z.object({
 const PROVIDERS: Record<string, string[]> = {
   mpesa: ['daraja', 'mock'],
   payment: PAYMENT_PROVIDERS.filter((p) => PAYMENT_PROVIDER_INFO[p].availability === 'available'),
+  etims: ['oscu', 'vscu', 'mock'],
   sms: ['talksasa', 'africastalking', 'console'],
   email: ['smtp', 'console'],
 };
@@ -226,6 +227,12 @@ router.post('/settings/integrations', requirePermission('integrations.manage'), 
   if (!PROVIDERS[body.kind].includes(body.provider)) throw badRequest(`Unknown ${body.kind} provider`);
   if (isSimulator(body) && body.environment === 'production') throw badRequest('The simulator cannot be used in production mode');
   if (body.kind === 'payment') assertGatewayFields(body.provider, body.settings, body.secrets ?? {});
+  if (body.kind === 'etims') {
+    if (!/^[AP]\d{9}[A-Z]$/.test(String(body.settings.tin ?? '').toUpperCase())) throw badRequest('eTIMS: enter the KRA PIN, e.g. P051234567X');
+    if (!/^\d{2}$/.test(String(body.settings.bhfId ?? ''))) throw badRequest('eTIMS: branch id is two digits, "00" for head office');
+    if (body.provider === 'vscu' && !body.settings.baseUrl) throw badRequest('eTIMS: enter the VSCU address on your network');
+    body.settings.tin = String(body.settings.tin).toUpperCase();
+  }
   const { secrets, ...rest } = body;
   const cfg = new IntegrationConfig(rest);
   if (secrets) cfg.secretsEnc = sealSecrets(cfg._id, secrets);
@@ -269,6 +276,9 @@ router.post('/settings/integrations/:id/test', requirePermission('integrations.m
       message = 'Daraja OAuth token obtained';
     } else if (cfg.kind === 'payment') {
       message = await paymentGatewayFor(cfg).testCredentials();
+    } else if (cfg.kind === 'etims') {
+      if (!openSecrets(cfg).cmcKey) throw new Error('Not initialised yet: press Initialise device');
+      message = `Initialised: SCU ${cfg.settings?.sdcId ?? '?'}, MRC ${cfg.settings?.mrcNo ?? '?'}`;
     } else if (cfg.kind === 'email') {
       await createEmailProvider(cfg.provider, cfg.settings ?? {}, openSecrets(cfg)).verify();
       message = 'SMTP connection verified';

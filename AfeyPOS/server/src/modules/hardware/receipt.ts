@@ -1,4 +1,5 @@
 import { formatMoney, paymentProviderLabel } from '@afeypos/shared';
+import qrcode from 'qrcode-generator';
 import { EscPosBuilder } from './escpos.js';
 
 interface ReceiptTenant {
@@ -18,6 +19,37 @@ interface ReceiptSale {
   changeCents?: number | null;
   creditCents?: number | null;
   status?: string;
+  etims?: { status?: string | null; invcNo?: number | null; rcptNo?: number | null; totRcptNo?: number | null; intrlData?: string | null; rcptSign?: string | null; sdcId?: string | null; mrcNo?: string | null; sdcDateTime?: string | null; qrUrl?: string | null } | null;
+}
+
+/** "20261025143000" -> "25/10/2026 14:30:00" */
+const etimsTime = (s?: string | null) => (s && /^\d{14}$/.test(s) ? `${s.slice(6, 8)}/${s.slice(4, 6)}/${s.slice(0, 4)} ${s.slice(8, 10)}:${s.slice(10, 12)}:${s.slice(12, 14)}` : (s ?? ''));
+
+/** The KRA eTIMS block every fiscal receipt must carry once the invoice is signed. */
+export function etimsLines(sale: ReceiptSale, width: number): string[] {
+  const e = sale.etims;
+  if (!e) return [];
+  const wrap = (label: string, v: string) => {
+    const out: string[] = [];
+    let rest = `${label}${v}`;
+    while (rest.length > width) {
+      out.push(rest.slice(0, width));
+      rest = rest.slice(width);
+    }
+    out.push(rest);
+    return out;
+  };
+  if (e.status !== 'signed') return ['-'.repeat(width), 'KRA eTIMS: awaiting signature', 'Reprint this receipt for the signed copy'];
+  return [
+    '-'.repeat(width), 'KRA eTIMS',
+    pad('CU Invoice No.', `${e.sdcId ?? ''}/${e.rcptNo ?? ''}`, width),
+    pad('SCU ID', e.sdcId ?? '', width),
+    pad('MRC No.', e.mrcNo ?? '', width),
+    pad('Invoice No.', String(e.invcNo ?? ''), width),
+    pad('Date', etimsTime(e.sdcDateTime), width),
+    ...wrap('Internal data: ', e.intrlData ?? ''),
+    ...wrap('Receipt signature: ', e.rcptSign ?? ''),
+  ];
 }
 
 function pad(left: string, right: string, width: number) {
@@ -53,6 +85,7 @@ export function receiptLines(tenant: ReceiptTenant, sale: ReceiptSale, width = 4
   }
   if (sale.changeCents) out.push(pad('Change', money(sale.changeCents, cur), width));
   if (sale.creditCents) out.push(pad('On account', money(sale.creditCents, cur), width));
+  out.push(...etimsLines(sale, width));
   return out;
 }
 
@@ -74,6 +107,7 @@ export function renderReceiptEscPos(tenant: ReceiptTenant, sale: ReceiptSale, op
     else b.line(l);
   }
   b.line().align('center');
+  if (sale.etims?.status === 'signed' && sale.etims.qrUrl) b.qr(sale.etims.qrUrl).line();
   if (tenant.settings?.receiptFooter) b.line(tenant.settings.receiptFooter);
   b.barcode(sale.number).line().line('Powered by Afey POS').feed(4).cut();
   if (opts.openDrawer) b.openDrawer(0);
@@ -84,7 +118,14 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 
 export function renderReceiptHtml(tenant: ReceiptTenant, sale: ReceiptSale, cashierName?: string): string {
   const text = renderReceiptText(tenant, sale, 42, cashierName);
+  let qrSvg = '';
+  if (sale.etims?.status === 'signed' && sale.etims.qrUrl) {
+    const qr = qrcode(0, 'M');
+    qr.addData(sale.etims.qrUrl);
+    qr.make();
+    qrSvg = `<div class="qr">${qr.createSvgTag({ cellSize: 3, margin: 2, scalable: true })}<div>Scan to verify with KRA</div></div>`;
+  }
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(sale.number)}</title><style>
   @page { size: 80mm auto; margin: 4mm; } body { font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; width: 72mm; margin: 0 auto; color: #000; }
-  pre { white-space: pre-wrap; margin: 0; }</style></head><body><pre>${esc(text)}</pre></body></html>`;
+  pre { white-space: pre-wrap; margin: 0; } .qr { text-align: center; margin: 8px 0; } .qr svg { width: 34mm; height: 34mm; }</style></head><body><pre>${esc(text)}</pre>${qrSvg}</body></html>`;
 }

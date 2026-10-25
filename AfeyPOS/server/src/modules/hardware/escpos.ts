@@ -43,6 +43,18 @@ export class EscPosBuilder {
     const bytes = Buffer.from('{B' + data, 'ascii');
     return this.raw([GS, 0x68, 80, GS, 0x77, 2, GS, 0x48, 2, GS, 0x6b, 73, bytes.length, ...bytes]);
   }
+  /** QR code (model 2, error correction M), e.g. the KRA eTIMS verification link. */
+  qr(data: string, moduleSize = 5) {
+    const bytes = Buffer.from(data, 'utf8');
+    const len = bytes.length + 3;
+    return this.raw([
+      GS, 0x28, 0x6b, 4, 0, 49, 65, 50, 0,
+      GS, 0x28, 0x6b, 3, 0, 49, 67, moduleSize,
+      GS, 0x28, 0x6b, 3, 0, 49, 69, 49,
+      GS, 0x28, 0x6b, len & 0xff, len >> 8, 49, 80, 48, ...bytes,
+      GS, 0x28, 0x6b, 3, 0, 49, 81, 48,
+    ]);
+  }
   build(): Buffer {
     return Buffer.concat(this.chunks);
   }

@@ -253,10 +253,12 @@ const PROVIDER_FIELDS: Record<string, { settings: [string, string][]; secrets: [
   africastalking: { settings: [['username', 'Username'], ['senderId', 'Sender ID / short code']], secrets: [['apiKey', 'API key']] },
   smtp: { settings: [['host', 'SMTP host'], ['port', 'Port'], ['user', 'Username'], ['from', 'From address']], secrets: [['password', 'Password']] },
   console: { settings: [], secrets: [] },
+  oscu: { settings: [['tin', 'KRA PIN of the business'], ['bhfId', 'KRA branch id (00 = head office)'], ['dvcSrlNo', 'Device serial number (from KRA)']], secrets: [] },
+  vscu: { settings: [['tin', 'KRA PIN of the business'], ['bhfId', 'KRA branch id (00 = head office)'], ['dvcSrlNo', 'Device serial number (from KRA)'], ['baseUrl', 'VSCU address on your network, e.g. http://192.168.1.5:8088']], secrets: [] },
 };
 
 const providerLabel = (kind: string, p: string) =>
-  kind === 'payment' ? PAYMENT_PROVIDER_INFO[p as PaymentProviderKey]?.label ?? p : p === 'mock' ? 'Simulator (testing)' : p === 'console' ? 'Development log (no delivery)' : p === 'daraja' ? 'Safaricom Daraja' : p;
+  kind === 'payment' ? PAYMENT_PROVIDER_INFO[p as PaymentProviderKey]?.label ?? p : p === 'oscu' ? 'OSCU (online, KRA servers)' : p === 'vscu' ? 'VSCU (KRA software on your network)' : p === 'mock' ? 'Simulator (testing)' : p === 'console' ? 'Development log (no delivery)' : p === 'daraja' ? 'Safaricom Daraja' : p;
 
 /** Provider chips (M-Pesa + gateways); "soon" providers are shown but cannot be configured yet. */
 function PaymentProviderGrid({ onPick }: { onPick: (kind: 'mpesa' | 'payment', provider: string) => void }) {
@@ -296,7 +298,7 @@ export function IntegrationsPage() {
   const test = async (id: string) => { try { const r = await api<{ data: any }>(`/settings/integrations/${id}/test`, { body: { to: testTo || undefined } }); if (r.data.ok) toast.success(r.data.message); else toast.error(r.data.message); q.refetch(); } catch (e) { toast.error(e); } };
   return (
     <div className="max-w-5xl">
-      <PageHeader title="Integrations" subtitle="Payments, SMS and email. Credentials stay on the server." actions={<>{(['mpesa', 'sms', 'email'] as const).map((k) => <Button key={k} variant="secondary" onClick={() => setEdit({ kind: k, provider: q.data.providers[k][0], name: '', enabled: true, isDefault: true, environment: 'sandbox', settings: {}, secrets: {} })}>Add {k}</Button>)}</>} />
+      <PageHeader title="Integrations" subtitle="Payments, SMS and email. Credentials stay on the server." actions={<>{(['mpesa', 'etims', 'sms', 'email'] as const).map((k) => <Button key={k} variant="secondary" onClick={() => setEdit({ kind: k, provider: q.data.providers[k][0], name: k === 'etims' ? 'KRA eTIMS' : '', enabled: true, isDefault: true, environment: 'sandbox', settings: k === 'etims' ? { bhfId: '00' } : {}, secrets: {} })}>Add {k === 'etims' ? 'KRA eTIMS' : k}</Button>)}</>} />
       <Card title="Payment methods" className="mb-4">
         <p className="mb-3 text-sm text-ink-600 dark:text-ink-300">Pick a provider to connect it. Payments are only accepted after the provider confirms them to the server.</p>
         <PaymentProviderGrid onPick={(kind, provider) => setEdit({ kind, provider, name: kind === 'mpesa' ? 'M-Pesa' : PAYMENT_PROVIDER_INFO[provider as PaymentProviderKey].label, enabled: true, isDefault: true, environment: 'sandbox', settings: {}, secrets: {} })} />
@@ -312,7 +314,7 @@ export function IntegrationsPage() {
         { key: 'e', header: 'Mode', render: (r: any) => <Badge tone={r.environment === 'production' ? 'green' : 'amber'}>{r.environment}</Badge> },
         { key: 's', header: 'Secrets', render: (r: any) => <span className="text-xs">{r.secretsSet.join(', ') || 'none'}</span> },
         { key: 't', header: 'Last test', render: (r: any) => (r.lastTest ? <Badge tone={r.lastTest.ok ? 'green' : 'red'}>{r.lastTest.ok ? 'ok' : 'failed'}</Badge> : '—') },
-        { key: 'a', header: '', render: (r: any) => <div className="flex gap-1"><Button size="sm" variant="secondary" onClick={() => test(r.id)}>Test</Button><Button size="sm" variant="secondary" onClick={() => setEdit({ ...r, secrets: {} })}>Edit</Button>{r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => api(`/settings/integrations/${r.id}/register-c2b`, { body: {} }).then(() => toast.success('C2B URLs registered')).catch(toast.error)}>Register C2B</Button>}</div> },
+        { key: 'a', header: '', render: (r: any) => <div className="flex gap-1"><Button size="sm" variant="secondary" onClick={() => test(r.id)}>Test</Button><Button size="sm" variant="secondary" onClick={() => setEdit({ ...r, secrets: {} })}>Edit</Button>{r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => api(`/settings/integrations/${r.id}/register-c2b`, { body: {} }).then(() => toast.success('C2B URLs registered')).catch(toast.error)}>Register C2B</Button>}{r.kind === 'etims' && <Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/settings/integrations/${r.id}/etims/initialize`, { body: {} }).then((x) => { toast.success(`eTIMS device initialised: SCU ${x.data.sdcId}`); q.refetch(); }).catch(toast.error)}>Initialise device</Button>}</div> },
       ]} /></div>
       {edit && (
         <Modal open onClose={() => setEdit(null)} title={`${edit.id ? 'Edit' : 'Add'} ${edit.kind === 'payment' ? providerLabel('payment', edit.provider) : edit.kind} integration`} size="lg" footer={<Button onClick={save}>Save</Button>}>

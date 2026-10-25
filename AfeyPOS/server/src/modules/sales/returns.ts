@@ -10,6 +10,7 @@ import { audit } from '../../lib/audit.js';
 import { objectId, qty } from '../../http/validate.js';
 import { can } from '../../http/auth.js';
 import { applyMovement } from '../inventory/stock.js';
+import { queueReturnForEtims } from '../etims/service.js';
 
 export const returnSchema = z.object({
   clientRequestId: z.string().min(8).max(100),
@@ -86,6 +87,7 @@ export async function processReturn(req: Request, saleId: Types.ObjectId, input:
     await sale.save();
 
     const [ret] = await SaleReturn.create([{ _id: returnId, number, clientRequestId: input.clientRequestId, saleId: sale._id, branchId: sale.branchId, shiftId: shift?._id, customerId: sale.customerId, lines, refundCents: refund, refundMethod: input.refundMethod, reason: input.reason, processedBy: userId }]);
+    await queueReturnForEtims(ret._id, sale, req.capabilities!);
     await audit(req, { action: 'sale.returned', entity: 'Sale', entityId: sale._id, details: { returnNumber: number, refundCents: refund, method: input.refundMethod, reference: input.reference } });
     return ret;
   });
@@ -158,6 +160,17 @@ export async function voidSale(req: Request, saleId: Types.ObjectId, input: z.in
     sale.voidReason = input.reason;
     for (const l of sale.lines) l.returnedQty = l.qty ?? 0;
     await sale.save();
+    if (sale.etims?.invcNo) {
+      // eTIMS has no "void": a voided invoice is reversed by a full credit note.
+      const main = [...sale.payments].sort((a, b) => b.amountCents - a.amountCents)[0]?.method;
+      const [note] = await SaleReturn.create([{
+        number: await nextNumber('return', 'RTN'), clientRequestId: `void:${sale._id}`, saleId: sale._id, branchId: sale.branchId, shiftId: sale.shiftId, customerId: sale.customerId,
+        lines: sale.lines.map((l) => ({ lineId: l._id, productId: l.productId, name: l.name, qty: l.qty, baseQty: l.baseQty, refundCents: l.totalCents, netCents: l.netCents, taxCents: l.taxCents, costCents: l.costCents, restocked: true })),
+        refundCents: sale.totalCents, refundMethod: main === 'mpesa' || main === 'gateway' ? 'mpesa' : main === 'card' ? 'card' : main === 'credit' ? 'account' : 'cash',
+        reason: `Void: ${input.reason}`, isVoid: true, processedBy: userId,
+      }]);
+      await queueReturnForEtims(note._id, sale, req.capabilities!);
+    }
     await audit(req, { action: 'sale.voided', entity: 'Sale', entityId: sale._id, details: { number: sale.number, reason: input.reason, totalCents: sale.totalCents } });
     return sale;
   });

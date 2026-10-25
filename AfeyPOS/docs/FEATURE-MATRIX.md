@@ -111,6 +111,6 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Backups (full/tenant), checksums, restore, scheduled backups, retention | Tested |
 | Health checks, startup validation | Tested |
 | Idempotent operations, recovery from interrupted workflows | Tested |
-| KRA eTIMS fiscal integration | Not implemented |
+| KRA eTIMS (OSCU/VSCU): item registration, sale signing, credit notes, voids, offline queue, receipt QR | Tested with simulator; not verified against KRA (see ETIMS.md) |
 | Offline-capable browser (PWA/service worker) | Not implemented: tills need the local server |
 | Dark mode, responsive/touch layouts, loading/empty/error states, confirmations | Implemented |

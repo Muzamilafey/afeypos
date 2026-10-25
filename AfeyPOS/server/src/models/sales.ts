@@ -1,6 +1,28 @@
 import { Schema } from 'mongoose';
 import { ObjectId, tenantModel } from './common.js';
 
+/** KRA eTIMS submission of a sale or credit note (see modules/etims). */
+const etimsSubmissionSchema = new Schema(
+  {
+    status: { type: String, enum: ['pending', 'signed', 'failed'], default: 'pending' },
+    configId: ObjectId,
+    invcNo: Number,
+    orgInvcNo: Number,
+    rcptNo: Number,
+    totRcptNo: Number,
+    intrlData: String,
+    rcptSign: String,
+    sdcId: String,
+    mrcNo: String,
+    sdcDateTime: String,
+    qrUrl: String,
+    attempts: { type: Number, default: 0 },
+    error: String,
+    signedAt: Date,
+  },
+  { _id: false },
+);
+
 const saleLineSchema = new Schema({
   productId: { type: ObjectId, required: true },
   sku: String,
@@ -78,6 +100,7 @@ const saleSchema = new Schema(
     dueDate: Date,
     notes: String,
     commissionCents: { type: Number, default: 0 },
+    etims: { type: etimsSubmissionSchema, default: undefined },
     completedAt: { type: Date, default: () => new Date() },
     voidedAt: Date,
     voidedBy: ObjectId,
@@ -109,6 +132,7 @@ const saleReturnSchema = new Schema(
     isVoid: { type: Boolean, default: false },
     processedBy: ObjectId,
     approvedBy: ObjectId,
+    etims: { type: etimsSubmissionSchema, default: undefined },
   },
   { timestamps: true },
 );

@@ -12,6 +12,7 @@ import { applyMovement } from '../inventory/stock.js';
 import { quotePrice } from './pricing.js';
 import { parseCsv, toCsv } from '../../lib/csv.js';
 import { recordTombstone } from '../sync/hq.js';
+import { queueItemRegistration } from '../etims/service.js';
 
 const router = Router();
 
@@ -58,6 +59,12 @@ const productSchema = z.object({
   parentId: objectId.nullish(),
   variantAttributes: z.record(z.string(), z.string().max(60)).optional(),
   active: z.boolean().default(true),
+  etims: z.object({
+    itemClsCd: z.string().trim().regex(/^\d{1,10}$/, 'KRA item classification codes are digits').optional().or(z.literal('')),
+    taxTyCd: z.enum(['A', 'B', 'C', 'D', 'E']).optional().or(z.literal('')),
+    pkgUnitCd: z.string().trim().max(5).optional(),
+    qtyUnitCd: z.string().trim().max(5).optional(),
+  }).optional(),
 });
 
 const createSchema = productSchema.extend({
@@ -196,6 +203,7 @@ router.post('/products', requirePermission('products.manage'), async (req, res) 
     await audit(req, { action: 'product.created', entity: 'Product', entityId: p._id, details: { sku: p.sku } });
     return p;
   });
+  await queueItemRegistration(product._id, req.capabilities!);
   res.status(201).json({ data: product });
 });
 
@@ -210,7 +218,11 @@ router.put('/products/:id', requirePermission('products.manage'), async (req, re
     const hasStock = await StockLevel.exists({ productId: id, qty: { $ne: 0 } });
     if (hasStock) throw badRequest('Batch/serial tracking can only be changed when the product has no stock');
   }
-  const p = await Product.findOneAndUpdate({ _id: id }, { $set: data }, { new: true, runValidators: true });
+  // eTIMS settings are merged field by field so the registered item code is kept.
+  const { etims, ...rest } = data;
+  const etimsSet = Object.fromEntries(Object.entries(etims ?? {}).map(([k, v]) => [`etims.${k}`, v || undefined]));
+  const p = await Product.findOneAndUpdate({ _id: id }, { $set: { ...rest, ...etimsSet } }, { new: true, runValidators: true });
+  if (p) await queueItemRegistration(p._id, req.capabilities!);
   await audit(req, { action: 'product.updated', entity: 'Product', entityId: id, details: { pricesBefore: before.prices, pricesAfter: data.prices, costBefore: before.costCents, costAfter: data.costCents } });
   res.json({ data: p });
 });

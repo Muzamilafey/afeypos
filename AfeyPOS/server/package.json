@@ -26,6 +26,7 @@
     "mongoose": "8.19.1",
     "nodemailer": "7.0.9",
     "pino": "10.0.0",
+    "qrcode-generator": "1.4.4",
     "socket.io": "4.8.1",
     "zod": "3.25.76"
   },

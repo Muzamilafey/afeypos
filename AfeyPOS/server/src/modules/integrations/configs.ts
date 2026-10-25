@@ -2,7 +2,7 @@ import { Types } from 'mongoose';
 import { IntegrationConfig, type IntegrationConfigDoc } from '../../models/index.js';
 import { decrypt, encrypt } from '../../lib/crypto.js';
 
-export type IntegrationKind = 'mpesa' | 'payment' | 'sms' | 'email';
+export type IntegrationKind = 'mpesa' | 'payment' | 'etims' | 'sms' | 'email';
 
 export function sealSecrets(id: Types.ObjectId, secrets: Record<string, unknown>): string {
   return encrypt(JSON.stringify(secrets), String(id));

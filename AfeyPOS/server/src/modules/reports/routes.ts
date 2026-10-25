@@ -185,7 +185,7 @@ router.get('/reports/profit', requirePermission('reports.financial'), async (req
   const gp = netRevenue - cogs;
   const pay = await Sale.aggregate([{ $match: saleMatch(p) }, { $unwind: '$payments' }, { $match: { 'payments.method': { $nin: ['credit', 'loyalty'] } } }, { $group: { _id: null, total: { $sum: '$payments.amountCents' } } }]);
   const [acct] = await LedgerEntry.aggregate([{ $match: { partyType: 'customer', kind: 'payment', at: { $gte: p.start, $lt: p.end } } }, { $group: { _id: null, total: { $sum: '$amountCents' } } }]);
-  const refundsPaid = await SaleReturn.aggregate([{ $match: { createdAt: { $gte: p.start, $lt: p.end }, refundMethod: { $in: ['cash', 'mpesa', 'card'] } } }, { $group: { _id: null, total: { $sum: '$refundCents' } } }]);
+  const refundsPaid = await SaleReturn.aggregate([{ $match: { createdAt: { $gte: p.start, $lt: p.end }, isVoid: { $ne: true }, refundMethod: { $in: ['cash', 'mpesa', 'card'] } } }, { $group: { _id: null, total: { $sum: '$refundCents' } } }]);
   const data = {
     period: { from: p.from, to: p.to, timezone: p.tz },
     salesCount: s?.count ?? 0,

@@ -113,7 +113,7 @@ export const Payout = tenantModel('Payout', payoutSchema);
 
 const integrationConfigSchema = new Schema(
   {
-    kind: { type: String, enum: ['mpesa', 'payment', 'sms', 'email'], required: true },
+    kind: { type: String, enum: ['mpesa', 'payment', 'etims', 'sms', 'email'], required: true },
     provider: { type: String, required: true },
     name: { type: String, required: true },
     enabled: { type: Boolean, default: true },
