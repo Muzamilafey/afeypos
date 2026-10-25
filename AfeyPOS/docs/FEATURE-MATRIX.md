@@ -104,6 +104,17 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | ZKTeco reader helper (ZKFinger SDK) | Source only; not compiled or tested with hardware |
 | Staff ID cards (Code 128), card + PIN sign-in, card approval, card clock in/out, reissue/revoke, lockout | Tested (server and browser) |
 
+## HR and payroll
+
+| Feature | Status |
+|---|---|
+| Employees (KRA PIN, NSSF, SHIF, pay type, allowances, deductions, M-Pesa/bank/cash) | Tested |
+| Kenyan statutory: NSSF tiers, SHIF, Housing Levy, PAYE after deductions, personal relief, NITA | Tested against worked examples; confirm with KRA before filing (see HR.md) |
+| Payroll runs: attendance-based daily/hourly pay, unpaid leave, overtime, one-off items, advance recovery with the one-third rule, separate approver | Tested |
+| Payslips (A5), statutory schedule CSV (P10 figures), bank file | Tested |
+| Salary payment by M-Pesa B2C (payouts approved and sent by a second person, payslips marked paid on Safaricom's result) | Tested with the simulator |
+| Leave (accrual, balance, approval), salary advances (approval, payment, recovery), attendance from card/fingerprint clocking | Tested |
+
 ## Reports, security, reliability
 
 | Feature | Status |

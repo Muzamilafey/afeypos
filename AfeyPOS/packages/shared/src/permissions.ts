@@ -50,6 +50,14 @@ export const PERMISSIONS = [
   'payouts.request',
   'payouts.approve',
   'expenses.manage',
+  // HR, accounting, CRM, online orders
+  'hr.manage',
+  'payroll.manage',
+  'payroll.approve',
+  'accounting.read',
+  'accounting.manage',
+  'crm.manage',
+  'orders.manage',
   // reporting
   'reports.read',
   'reports.financial',
@@ -89,7 +97,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'purchasing.read',
     'sales.create', 'sales.read', 'sales.read.all', 'sales.discount', 'sales.discount.override', 'sales.price.override', 'sales.void', 'sales.return', 'returns.approve', 'sales.credit',
     'quotations.manage', 'shifts.open', 'shifts.manage', 'cash.movement', 'payments.reconcile', 'expenses.manage',
-    'reports.read', 'commissions.read', 'biometrics.enroll', 'hardware.manage',
+    'reports.read', 'commissions.read', 'biometrics.enroll', 'hardware.manage', 'hr.manage', 'crm.manage', 'orders.manage',
   ],
   inventory_manager: [
     'products.read', 'products.manage', 'inventory.read', 'inventory.adjust', 'inventory.adjust.approve', 'inventory.transfer',
@@ -98,16 +106,17 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   procurement_officer: [
     'products.read', 'inventory.read', 'inventory.receive', 'suppliers.read', 'suppliers.manage', 'purchasing.read', 'purchasing.manage', 'reports.read',
   ],
-  cashier: ['products.read', 'inventory.read', 'customers.read', 'sales.create', 'sales.read', 'sales.discount', 'shifts.open', 'cash.movement', 'customers.payments'],
+  cashier: ['products.read', 'inventory.read', 'customers.read', 'sales.create', 'sales.read', 'sales.discount', 'shifts.open', 'cash.movement', 'customers.payments', 'orders.manage'],
   accountant: [
     'products.read', 'inventory.read', 'customers.read', 'suppliers.read', 'suppliers.pay', 'purchasing.read', 'sales.read', 'sales.read.all',
     'payments.reconcile', 'payouts.request', 'expenses.manage', 'customers.payments', 'reports.read', 'reports.financial', 'commissions.read', 'audit.read',
+    'payroll.manage', 'accounting.read', 'accounting.manage',
   ],
   auditor: [
     'products.read', 'inventory.read', 'customers.read', 'suppliers.read', 'purchasing.read', 'sales.read', 'sales.read.all',
-    'reports.read', 'reports.financial', 'audit.read', 'commissions.read',
+    'reports.read', 'reports.financial', 'audit.read', 'commissions.read', 'accounting.read',
   ],
-  salesperson: ['products.read', 'inventory.read', 'customers.read', 'customers.manage', 'sales.create', 'sales.read', 'quotations.manage', 'sales.discount', 'commissions.read'],
+  salesperson: ['products.read', 'inventory.read', 'customers.read', 'customers.manage', 'sales.create', 'sales.read', 'quotations.manage', 'sales.discount', 'commissions.read', 'crm.manage'],
   warehouse_operator: ['products.read', 'inventory.read', 'inventory.receive', 'inventory.transfer', 'inventory.stocktake', 'purchasing.read'],
 };
 

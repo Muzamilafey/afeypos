@@ -29,6 +29,7 @@ import { reportRoutes } from './modules/reports/routes.js';
 import { hardwareRoutes } from './modules/hardware/routes.js';
 import { biometricBridgeRoutes, biometricRoutes } from './modules/biometrics/routes.js';
 import { staffCardRoutes } from './modules/staff/cards.js';
+import { hrRoutes } from './modules/hr/routes.js';
 import { backupRoutes } from './modules/backups/routes.js';
 import { syncSettingsRoutes } from './modules/sync/routes.js';
 import { hqSyncRoutes } from './modules/sync/hq.js';
@@ -123,14 +124,16 @@ export function createApp() {
   tenant.use('/payments/intents', requireAnyModule('mpesa', 'payments'));
   tenant.use('/reports', requireModule('reports'));
   tenant.use('/etims', requireModule('etims'));
-  tenant.use(['/biometrics', '/attendance'], requireModule('biometrics'));
+  tenant.use('/biometrics', requireModule('biometrics'));
+  tenant.use('/attendance', requireAnyModule('biometrics', 'hr'));
+  tenant.use('/hr', requireModule('hr'));
   tenant.use(branchReadOnly);
   tenant.use('/sync', hqSyncRoutes);
   tenant.use(biometricBridgeRoutes);
   tenant.use('/auth', recoveryRoutes);
   tenant.use('/auth', authRoutes);
   tenant.use(authenticate);
-  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, backupRoutes, fileRoutes]) {
+  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, backupRoutes, fileRoutes]) {
     tenant.use(r);
   }
   v1.use(tenant);

@@ -9,7 +9,7 @@ import { applyTheme, getWorkstation, setWorkstation } from '../lib/workstation';
 import { connectRealtime, disconnectRealtime, useRealtime } from '../lib/realtime';
 import { useToast } from '../components/ui';
 
-const GROUPS: Record<string, string> = { sell: 'Sell', stock: 'Stock', parties: 'Customers & suppliers', finance: 'Finance', admin: 'Administration' };
+const GROUPS: Record<string, string> = { sell: 'Sell', stock: 'Stock', parties: 'Customers & suppliers', people: 'People', finance: 'Finance', admin: 'Administration' };
 
 export function AppShell() {
   const { me, logout } = useAuth();

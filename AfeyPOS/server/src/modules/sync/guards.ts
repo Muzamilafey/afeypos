@@ -11,6 +11,7 @@ const HQ_OWNED: [RegExp, string][] = [
   [/^\/settings\/(business|modules|users|branches|warehouses|tills|integrations|notifications)(\/|$)/, 'settings, staff, branches and integrations'],
   [/^\/suppliers(\/[a-f0-9]{24})?$/, 'suppliers'],
   [/^\/auth\/(password\/change|pin|2fa)(\/|$)/, 'staff passwords and PINs'],
+  [/^\/(hr|accounting)(\/|$)/, 'HR, payroll and accounts'],
 ];
 
 export const branchReadOnly: RequestHandler = (req, _res, next) => {

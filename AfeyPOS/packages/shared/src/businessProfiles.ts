@@ -50,6 +50,10 @@ export const MODULES = [
   'email',
   'biometrics',
   'hardware',
+  'hr',
+  'accounting',
+  'crm',
+  'onlineStore',
 ] as const;
 
 export type ModuleKey = (typeof MODULES)[number];
@@ -95,6 +99,10 @@ export const MODULE_INFO: Record<ModuleKey, { label: string; description: string
   email: { label: 'Email', description: 'Email receipts, statements and reports' },
   biometrics: { label: 'Biometrics', description: 'Fingerprint verification and attendance' },
   hardware: { label: 'Hardware', description: 'Printers, drawers, scales and displays' },
+  hr: { label: 'HR & payroll', description: 'Employees, attendance, leave, advances and Kenyan payroll (PAYE, SHIF, NSSF, Housing Levy) with optional M-Pesa salary payments' },
+  accounting: { label: 'Accounting', description: 'Chart of accounts, automatic journals, trial balance, profit & loss and balance sheet' },
+  crm: { label: 'CRM', description: 'Customer segments, activities and follow-ups, insights and SMS campaigns' },
+  onlineStore: { label: 'Online shop', description: 'A separate shopping website with orders picked and fulfilled from your branches' },
 };
 
 /** Afey POS is built for food and grocery retail: minimarts and supermarkets (one or many branches). */
@@ -190,7 +198,7 @@ export interface BusinessProfile {
   suggestedCategories: string[];
 }
 
-const CORE: ModuleKey[] = ['pos', 'inventory', 'customers', 'suppliers', 'purchasing', 'reports', 'expenses', 'stocktake', 'mpesa', 'payments', 'etims', 'sms', 'email', 'hardware', 'labels'];
+const CORE: ModuleKey[] = ['pos', 'inventory', 'customers', 'suppliers', 'purchasing', 'reports', 'expenses', 'stocktake', 'mpesa', 'payments', 'etims', 'sms', 'email', 'hardware', 'labels', 'hr', 'accounting', 'crm', 'onlineStore'];
 
 const baseCheckout: CheckoutOptions = {
   touchMode: false,
@@ -304,7 +312,7 @@ export interface NavItem {
   module?: ModuleKey;
   anyModule?: ModuleKey[];
   permission?: Permission;
-  group: 'sell' | 'stock' | 'parties' | 'finance' | 'admin';
+  group: 'sell' | 'stock' | 'parties' | 'people' | 'finance' | 'admin';
 }
 
 export const NAVIGATION: NavItem[] = [
@@ -328,9 +336,14 @@ export const NAVIGATION: NavItem[] = [
   { key: 'customers', label: 'Customers', path: '/customers', icon: 'users', module: 'customers', permission: 'customers.read', group: 'parties' },
   { key: 'suppliers', label: 'Suppliers', path: '/suppliers', icon: 'factory', module: 'suppliers', permission: 'suppliers.read', group: 'parties' },
   { key: 'promotions', label: 'Promotions', path: '/promotions', icon: 'percent', module: 'promotions', permission: 'prices.manage', group: 'parties' },
+  { key: 'employees', label: 'Employees', path: '/hr/employees', icon: 'users', module: 'hr', permission: 'hr.manage', group: 'people' },
+  { key: 'payroll', label: 'Payroll', path: '/hr/payroll', icon: 'wallet', module: 'hr', permission: 'payroll.manage', group: 'people' },
+  { key: 'leave', label: 'Leave & advances', path: '/hr/leave', icon: 'clock', module: 'hr', permission: 'hr.manage', group: 'people' },
+  { key: 'attendance', label: 'Attendance', path: '/hr/attendance', icon: 'clipboard', module: 'hr', permission: 'hr.manage', group: 'people' },
   { key: 'reports', label: 'Reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'finance' },
   { key: 'expenses', label: 'Expenses', path: '/expenses', icon: 'wallet', module: 'expenses', permission: 'expenses.manage', group: 'finance' },
   { key: 'mpesa', label: 'M-Pesa', path: '/payments/mpesa', icon: 'phone', module: 'mpesa', permission: 'payments.reconcile', group: 'finance' },
+  { key: 'payouts', label: 'M-Pesa payouts', path: '/payments/payouts', icon: 'phone', module: 'mpesa', permission: 'payouts.request', group: 'finance' },
   { key: 'etims', label: 'KRA eTIMS', path: '/etims', icon: 'shield', module: 'etims', permission: 'reports.financial', group: 'finance' },
   { key: 'gatewayPayments', label: 'Online payments', path: '/payments/online', icon: 'card', module: 'payments', permission: 'payments.reconcile', group: 'finance' },
   { key: 'audit', label: 'Audit trail', path: '/audit', icon: 'shield', permission: 'audit.read', group: 'finance' },

@@ -19,6 +19,7 @@ import { emitToTenant } from '../../realtime/socket.js';
 import { parseAsyncResult, splitParty } from '../../integrations/mpesa/daraja.js';
 import { findActiveConfig } from '../integrations/configs.js';
 import { callbackUrls, gatewayFor } from './mpesa.js';
+import { onPayoutSucceeded } from '../hr/events.js';
 
 const router = Router();
 
@@ -154,6 +155,7 @@ export async function handleB2CResult(tenantId: Types.ObjectId, payload: any, ip
     await p.save();
     event.outcome = p.status;
     await event.save();
+    if (ok) await onPayoutSucceeded(p);
     emitToTenant(tenantId, 'payout.updated', { id: p._id, status: p.status });
   });
 }

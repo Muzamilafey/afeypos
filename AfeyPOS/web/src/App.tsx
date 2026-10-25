@@ -9,6 +9,8 @@ import { DashboardPage } from './pages/Dashboard';
 import { POSPage } from './pages/POS';
 import { SaleDetailPage, SalesPage, ShiftsPage } from './pages/sales/Sales';
 import { ReturnsPage } from './pages/sales/Returns';
+import { AttendancePage, EmployeeDetailPage, EmployeesPage, LeavePage, PayrollPage, PayrollRunPage } from './pages/hr/HR';
+import { PayoutsPage } from './pages/Payouts';
 import { PurchasingPage } from './pages/sales/Purchasing';
 import { DocumentsPage } from './pages/sales/Documents';
 import { ProductEditPage, ProductsPage } from './pages/inventory/Products';
@@ -70,6 +72,13 @@ export function App() {
         <Route path="expenses" element={<Gate perm="expenses.manage"><ExpensesPage /></Gate>} />
         <Route path="payments/mpesa" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaPage /></Gate>} />
         <Route path="payments/online" element={<Gate perm="payments.reconcile" module="payments"><OnlinePaymentsPage /></Gate>} />
+        <Route path="payments/payouts" element={<Gate perm="payouts.request" module="mpesa"><PayoutsPage /></Gate>} />
+        <Route path="hr/employees" element={<Gate perm="hr.manage" module="hr"><EmployeesPage /></Gate>} />
+        <Route path="hr/employees/:id" element={<Gate perm="hr.manage" module="hr"><EmployeeDetailPage /></Gate>} />
+        <Route path="hr/payroll" element={<Gate perm="payroll.manage" module="hr"><PayrollPage /></Gate>} />
+        <Route path="hr/payroll/:id" element={<Gate perm="payroll.manage" module="hr"><PayrollRunPage /></Gate>} />
+        <Route path="hr/leave" element={<Gate perm="hr.manage" module="hr"><LeavePage /></Gate>} />
+        <Route path="hr/attendance" element={<Gate perm="hr.manage" module="hr"><AttendancePage /></Gate>} />
         <Route path="etims" element={<Gate perm="reports.financial" module="etims"><EtimsPage /></Gate>} />
         <Route path="audit" element={<Gate perm="audit.read"><AuditPage /></Gate>} />
         <Route path="settings" element={<Gate perm="settings.manage"><BusinessSettingsPage /></Gate>} />

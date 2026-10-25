@@ -8,3 +8,4 @@ export * from './purchasing.js';
 export * from './sales.js';
 export * from './payments.js';
 export * from './system.js';
+export * from './hr.js';
