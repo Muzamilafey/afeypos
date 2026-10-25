@@ -129,3 +129,27 @@ export function renderReceiptHtml(tenant: ReceiptTenant, sale: ReceiptSale, cash
   @page { size: 80mm auto; margin: 4mm; } body { font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; width: 72mm; margin: 0 auto; color: #000; }
   pre { white-space: pre-wrap; margin: 0; } .qr { text-align: center; margin: 8px 0; } .qr svg { width: 34mm; height: 34mm; }</style></head><body><pre>${esc(text)}</pre>${qrSvg}</body></html>`;
 }
+
+interface ReceiptReturn {
+  number: string;
+  createdAt: Date | string;
+  lines: { name?: string | null; qty?: number | null; refundCents?: number | null; taxCents?: number | null }[];
+  refundCents?: number | null;
+  refundMethod?: string | null;
+  reason?: string | null;
+  isVoid?: boolean | null;
+  etims?: ReceiptSale['etims'];
+}
+
+/** A return printed as a credit note: same layout as a receipt, refund lines and the KRA block of the credit note. */
+export function creditNoteAsReceipt(ret: ReceiptReturn, sale: { number: string }): { header: string; sale: ReceiptSale } {
+  const lines = ret.lines.map((l) => ({ name: l.name, qty: l.qty, unitCode: '', unitPriceCents: l.qty ? Math.round((l.refundCents ?? 0) / l.qty) : 0, totalCents: l.refundCents }));
+  const method = ret.refundMethod === 'credit_note' ? 'store credit' : ret.refundMethod === 'account' ? 'to account' : (ret.refundMethod ?? 'cash');
+  return {
+    header: `CREDIT NOTE ${ret.number}\nFor receipt ${sale.number}${ret.reason ? `\nReason: ${ret.reason}` : ''}`,
+    sale: {
+      number: ret.number, completedAt: ret.createdAt, lines, totalCents: ret.refundCents ?? 0, taxCents: ret.lines.reduce((a, l) => a + (l.taxCents ?? 0), 0),
+      payments: [{ method: `refund ${method}`, amountCents: ret.refundCents ?? 0 }], etims: ret.etims,
+    },
+  };
+}

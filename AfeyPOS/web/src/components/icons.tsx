@@ -40,6 +40,7 @@ const paths: Record<string, string> = {
   barcode: 'M4 5v14M7 5v14M10 5v14M14 5v14M17 5v14M20 5v14',
   download: 'M12 3v12M7 10l5 5 5-5M4 21h16',
   upload: 'M12 21V9M7 14l5-5 5 5M4 3h16',
+  undo: 'M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3',
   refresh: 'M4 4v6h6M20 20v-6h-6M5 15a7 7 0 0012 3M19 9A7 7 0 007 6',
   alert: 'M12 3l10 18H2zM12 10v5M12 18h0',
   mail: 'M3 6h18v12H3zM3 7l9 6 9-6',

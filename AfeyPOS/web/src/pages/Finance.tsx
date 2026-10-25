@@ -22,40 +22,48 @@ function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFro
 
 export function ReportsPage() {
   const { can, has } = useAuth();
-  const [tab, setTab] = useState('sales');
+  const [tab, setTab] = useState('daily');
   const [from, setFrom] = useState(daysAgoLocal(6));
   const [to, setTo] = useState(todayLocal());
   const [groupBy, setGroupBy] = useState('day');
+  const [deadDays, setDeadDays] = useState(30);
+  const [leadDays, setLeadDays] = useState(7);
   const period = { from, to };
   const q = useQuery({
-    queryKey: ['report', tab, from, to, groupBy],
+    queryKey: ['report', tab, from, to, groupBy, deadDays, leadDays],
     queryFn: () => {
       const map: Record<string, [string, Record<string, unknown>]> = {
         sales: ['/reports/sales', { ...period, groupBy }], profit: ['/reports/profit', period], inventory: ['/reports/inventory-valuation', {}], receivables: ['/reports/receivables', {}],
         payables: ['/reports/payables', {}], exceptions: ['/reports/exceptions', period], tax: ['/reports/tax', period], branches: ['/reports/branches', period], shifts: ['/reports/shifts', period],
         losses: ['/reports/losses', period], expenses: ['/reports/expenses', period], purchases: ['/reports/purchases', period], activity: ['/reports/activity', period],
+        daily: ['/reports/daily-summary', period], returns: ['/reports/returns', period], basket: ['/reports/basket', period], discounts: ['/reports/discounts', period],
+        performance: ['/reports/product-performance', period], dead: ['/reports/dead-stock', { ...period, days: deadDays }], reorder: ['/reports/reorder', { ...period, leadDays }],
       };
       const [path, query] = map[tab];
       return api<any>(path, { query });
     },
   });
   const tabs = [
-    { key: 'sales', label: 'Sales' }, ...(can('reports.financial') ? [{ key: 'profit', label: 'Profit & cash' }, { key: 'inventory', label: 'Stock value' }, { key: 'tax', label: 'Tax' }, { key: 'purchases', label: 'Purchases' }, { key: 'expenses', label: 'Expenses' }] : []),
+    { key: 'daily', label: 'Daily summary' }, { key: 'sales', label: 'Sales' }, { key: 'basket', label: 'Baskets & peak hours' }, { key: 'returns', label: 'Returns' }, { key: 'discounts', label: 'Discounts' },
+    ...(can('reports.financial') ? [{ key: 'performance', label: 'Product performance' }] : []), { key: 'dead', label: 'Dead stock' }, ...(can('inventory.read') ? [{ key: 'reorder', label: 'Reorder' }] : []), ...(can('reports.financial') ? [{ key: 'profit', label: 'Profit & cash' }, { key: 'inventory', label: 'Stock value' }, { key: 'tax', label: 'Tax' }, { key: 'purchases', label: 'Purchases' }, { key: 'expenses', label: 'Expenses' }] : []),
     ...(can('reports.financial') && has('customerCredit') ? [{ key: 'receivables', label: 'Receivables' }] : []), ...(can('reports.financial') ? [{ key: 'payables', label: 'Payables' }] : []),
     { key: 'exceptions', label: 'Voids & discounts' }, { key: 'losses', label: 'Losses' }, { key: 'shifts', label: 'Cashier shifts' }, ...(has('multiBranch') ? [{ key: 'branches', label: 'Branches' }] : []), ...(can('audit.read') ? [{ key: 'activity', label: 'User activity' }] : []),
   ];
   const d = q.data;
-  const csvTabs = ['sales', 'inventory', 'shifts', 'branches', 'losses', 'purchases', 'activity'];
+  const csvTabs = ['sales', 'inventory', 'shifts', 'branches', 'losses', 'purchases', 'activity', 'daily', 'returns', 'performance', 'dead', 'reorder'];
+  const csvPath: Record<string, string> = { sales: '/reports/sales', inventory: '/reports/inventory-valuation', daily: '/reports/daily-summary', performance: '/reports/product-performance', dead: '/reports/dead-stock', reorder: '/reports/reorder' };
   return (
     <div>
-      <PageHeader title="Reports" subtitle="Periods use the business timezone" actions={csvTabs.includes(tab) && <Button variant="secondary" onClick={() => download(tab === 'sales' ? '/reports/sales' : `/reports/${tab === 'inventory' ? 'inventory-valuation' : tab}`, `${tab}.csv`, { ...period, groupBy, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>} />
+      <PageHeader title="Reports" subtitle="Periods use the business timezone" actions={csvTabs.includes(tab) && <Button variant="secondary" onClick={() => download(csvPath[tab] ?? `/reports/${tab}`, `${tab}.csv`, { ...period, groupBy, days: deadDays, leadDays, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>} />
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
-      {!['inventory', 'receivables', 'payables'].includes(tab) && <div className="mb-4"><Period from={from} to={to} setFrom={setFrom} setTo={setTo} /></div>}
+      {!['inventory', 'receivables', 'payables', 'dead', 'reorder'].includes(tab) && <div className="mb-4"><Period from={from} to={to} setFrom={setFrom} setTo={setTo} /></div>}
+      {tab === 'dead' && <div className="mb-4 max-w-xs"><Field label="No sale for (days)"><Input type="number" min={1} value={deadDays} onChange={(e) => setDeadDays(Math.max(1, Number(e.target.value) || 30))} /></Field></div>}
+      {tab === 'reorder' && <div className="mb-4 max-w-xs"><Field label="Supplier lead time (days)"><Input type="number" min={0} value={leadDays} onChange={(e) => setLeadDays(Math.max(0, Number(e.target.value) || 0))} /></Field></div>}
       {q.isLoading ? <Loading /> : q.error ? <ErrorBox error={q.error} /> : (
         <>
           {tab === 'sales' && (
             <div className="space-y-4">
-              <Select className="max-w-xs" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} options={['day', 'week', 'month', 'hour', 'product', 'category', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'].map((x) => ({ value: x, label: `By ${x}` }))} />
+              <Select className="max-w-xs" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} options={['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'].map((x) => ({ value: x, label: `By ${x}` }))} />
               {['day', 'week', 'month', 'hour'].includes(groupBy) && <Card><BarChart data={d.data.map((r: any) => ({ label: r._id, value: r.grossCents }))} format={money} /></Card>}
               <div className="card"><DataTable rows={d.data.map((r: any, i: number) => ({ ...r, id: String(r._id ?? i) }))} columns={[
                 { key: 'k', header: groupBy, render: (r: any) => r.name ?? r._id ?? '—' },
@@ -89,9 +97,120 @@ export function ReportsPage() {
           {tab === 'tax' && <div className="grid gap-3 sm:grid-cols-4"><Stat label="Output tax" value={money(d.data.outputTaxCents)} /><Stat label="Input tax" value={money(d.data.inputTaxCents)} /><Stat label="Net payable" value={money(d.data.netTaxPayableCents)} /><Card className="sm:col-span-4"><p className="text-sm text-ink-500">{d.data.note}</p>{d.data.outputByRate.map((r: any) => <div key={r.rateBp} className="flex justify-between text-sm"><span>{r.rateBp / 100}%</span><span>net {money(r.netCents)} · tax {money(r.taxCents)}</span></div>)}</Card></div>}
           {tab === 'exceptions' && <div className="grid gap-4 lg:grid-cols-3"><Stat label="Voided" value={money(d.data.totals.voidsCents)} hint={`${d.data.voids.length} sales`} /><Stat label="Returned" value={money(d.data.totals.returnsCents)} hint={`${d.data.returns.length} returns`} /><Stat label="Discounts given" value={money(d.data.totals.discountsCents)} hint={`${d.data.discounts.length} sales`} /><Card title="Supervisor overrides" className="lg:col-span-3"><ul className="text-sm">{d.data.overrides.map((s: any) => <li key={s._id}>{s.number}: {s.overrides.map((o: any) => o.action).join('; ')}</li>)}</ul></Card></div>}
           {['branches', 'shifts', 'losses', 'purchases', 'activity'].includes(tab) && <div className="card"><DataTable rows={d.data.map((r: any, i: number) => ({ ...r, id: String(i) }))} columns={Object.keys(d.data[0] ?? {}).filter((k) => !['_id', 'productId', 'warehouseId'].includes(k)).map((k) => ({ key: k, header: k.replace(/Cents$/, '').replace(/([A-Z])/g, ' $1'), className: /Cents$|count|qty/i.test(k) ? 'num' : undefined, render: (r: any) => (/Cents$/.test(k) ? money(r[k]) : /At$/.test(k) ? dateTime(r[k]) : typeof r[k] === 'object' ? JSON.stringify(r[k]) : String(r[k] ?? '')) }))} /></div>}
+          {tab === 'daily' && <RetailDaily d={d} />}
+          {tab === 'basket' && <RetailBasket d={d.data} />}
+          {tab === 'returns' && <RetailReturns d={d.data} />}
+          {tab === 'discounts' && <RetailDiscounts d={d.data} />}
+          {tab === 'performance' && <RetailPerformance d={d} />}
+          {tab === 'dead' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Value tied up" value={money(d.totalValueCents)} hint={`${d.data.length} products without a sale in ${d.days} days`} tone={d.totalValueCents ? 'red' : undefined} /></div><div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.productId }))} empty="Every stocked product sold recently" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'q', header: 'On hand', className: 'num', render: (r: any) => `${qty(r.qty)} ${r.unit}` }, { key: 'v', header: 'Cost value', className: 'num', render: (r: any) => money(r.valueCents) }, { key: 'rv', header: 'Retail value', className: 'num', render: (r: any) => money(r.retailValueCents) }, { key: 'l', header: 'Last sold', render: (r: any) => (r.lastSoldAt ? `${dateTime(r.lastSoldAt)} (${r.daysSinceSale} d)` : 'Never') }]} /></div></>}
+          {tab === 'reorder' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Products to reorder" value={String(d.data.length)} /><Stat label="Estimated cost" value={money(d.totalCostCents)} hint={`Sales rate of the last ${d.params.days} days, cover ${d.params.leadDays + d.params.coverDays} days`} /></div><div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.productId }))} empty="Nothing needs reordering" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 's', header: 'Last supplier', render: (r: any) => r.supplier || '—' }, { key: 'h', header: 'On hand', className: 'num', render: (r: any) => qty(r.onHand) }, { key: 'o', header: 'On order', className: 'num', render: (r: any) => qty(r.onOrder) }, { key: 'a', header: 'Sells / day', className: 'num', render: (r: any) => r.avgDailySales }, { key: 'd', header: 'Days left', className: 'num', render: (r: any) => (r.daysLeft ?? '—') }, { key: 'q', header: 'Order', className: 'num font-semibold', render: (r: any) => `${qty(r.suggestQty)} ${r.unit}` }, { key: 'c', header: 'Est. cost', className: 'num', render: (r: any) => money(r.estCostCents) }]} /></div></>}
           {tab === 'expenses' && <div className="grid gap-4 lg:grid-cols-2"><Card title="By category">{d.data.map((r: any) => <div key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</Card><Card title="Cash movements">{d.cashMovements.map((r: any) => <div key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</Card></div>}
         </>
       )}
+    </div>
+  );
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const pct = (bp: number) => `${(bp / 100).toFixed(1)}%`;
+
+function RetailDaily({ d }: { d: any }) {
+  const t = d.totals ?? {};
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Sales (incl. tax)" value={money(t.grossCents ?? 0)} hint={`${t.salesCount ?? 0} receipts · average ${money(t.avgBasketCents ?? 0)}`} />
+        <Stat label="Money collected" value={money(t.netCollectedCents ?? 0)} hint="Cash, M-Pesa, card and bank less refunds paid" />
+        <Stat label="Returns" value={money(t.returnsCents ?? 0)} hint={`${t.returnsCount ?? 0} returns`} tone={t.returnsCents ? 'red' : undefined} />
+        <Stat label="Voids" value={money(t.voidsCents ?? 0)} hint={`${t.voidsCount ?? 0} voided`} tone={t.voidsCount ? 'red' : undefined} />
+      </div>
+      <div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.date }))} empty="No trading in this period" columns={[
+        { key: 'd', header: 'Day', render: (r: any) => r.date }, { key: 'c', header: 'Receipts', className: 'num', render: (r: any) => r.salesCount },
+        { key: 'g', header: 'Sales', className: 'num', render: (r: any) => money(r.grossCents) }, { key: 'di', header: 'Discounts', className: 'num', render: (r: any) => money(r.discountCents) },
+        { key: 't', header: 'Tax', className: 'num', render: (r: any) => money(r.taxCents) }, { key: 'ca', header: 'Cash', className: 'num', render: (r: any) => money(r.cashCents) },
+        { key: 'm', header: 'M-Pesa', className: 'num', render: (r: any) => money(r.mpesaCents) }, { key: 'cd', header: 'Card', className: 'num', render: (r: any) => money(r.cardCents) },
+        { key: 'cr', header: 'Credit', className: 'num', render: (r: any) => money(r.creditCents) }, { key: 'r', header: 'Returns', className: 'num', render: (r: any) => money(r.returnsCents) },
+        { key: 'v', header: 'Voids', className: 'num', render: (r: any) => (r.voidsCount ? `${r.voidsCount} · ${money(r.voidsCents)}` : '—') },
+        { key: 'n', header: 'Collected', className: 'num font-semibold', render: (r: any) => money(r.netCollectedCents) },
+      ]} /></div>
+    </div>
+  );
+}
+
+function RetailBasket({ d }: { d: any }) {
+  const s = d.summary;
+  const max = Math.max(1, ...d.heatmap.map((h: any) => h.count));
+  const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => d.heatmap.some((x: any) => x.hour === h) || (h >= 7 && h <= 21));
+  const cell = (wd: number, h: number) => d.heatmap.find((x: any) => x.weekday === wd && x.hour === h);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Transactions" value={String(s.transactions)} />
+        <Stat label="Average basket" value={money(s.avgBasketCents)} hint={`${s.avgLines} lines · ${s.avgUnits} units`} />
+        <Stat label="Largest basket" value={money(s.largestCents)} />
+        <Stat label="Known customers" value={pct(s.identifiedCustomersBp)} hint="Sales linked to a customer (loyalty)" />
+      </div>
+      <Card title="Basket sizes (KES)"><BarChart data={d.buckets.map((b: any) => ({ label: b.label, value: b.count }))} format={(v: number) => String(v)} /></Card>
+      <Card title="Busy hours (receipts)">
+        <div className="overflow-x-auto">
+          <table className="text-xs">
+            <thead><tr><th className="px-1" />{hours.map((h) => <th key={h} className="px-1 font-normal text-ink-500">{String(h).padStart(2, '0')}</th>)}</tr></thead>
+            <tbody>{[2, 3, 4, 5, 6, 7, 1].map((wd) => (
+              <tr key={wd}><td className="pr-2 text-ink-500">{WEEKDAYS[wd - 1]}</td>{hours.map((h) => {
+                const c = cell(wd, h);
+                return <td key={h} title={c ? `${c.count} receipts · ${money(c.grossCents)}` : ''} className="h-7 w-8 rounded text-center tabular-nums" style={{ background: c ? `rgba(16,185,129,${0.15 + 0.85 * (c.count / max)})` : undefined }}>{c?.count ?? ''}</td>;
+              })}</tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function RetailReturns({ d }: { d: any }) {
+  const rows = (x: any[], label: (r: any) => string) => x.map((r: any, i: number) => <div key={i} className="flex justify-between text-sm"><span>{label(r)}</span><span className="tabular-nums">{r.count ?? qty(r.qty)} · {money(r.refundCents)}</span></div>);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+        <Stat label="Refunded" value={money(d.summary.refundCents)} hint={`${d.summary.count} returns`} tone={d.summary.refundCents ? 'red' : undefined} />
+        <Stat label="Return rate" value={pct(d.summary.returnRateBp)} hint={`of ${money(d.summary.salesCents)} sales`} />
+      </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card title="By reason">{rows(d.byReason, (r) => r.name)}</Card>
+        <Card title="By refund method">{rows(d.byMethod, (r) => r._id)}</Card>
+        <Card title="By staff">{rows(d.byCashier, (r) => `${r.name}${r.approved ? ` (${r.approved} approved)` : ''}`)}</Card>
+      </div>
+      <Card title="Most returned products"><DataTable rows={d.byProduct.map((r: any) => ({ ...r, id: String(r._id) }))} empty="No returns" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'q', header: 'Qty', className: 'num', render: (r: any) => qty(r.qty) }, { key: 'rs', header: 'Back to shelf', className: 'num', render: (r: any) => qty(r.restockedQty) }, { key: 'a', header: 'Refunded', className: 'num', render: (r: any) => money(r.refundCents) }]} /></Card>
+    </div>
+  );
+}
+
+function RetailDiscounts({ d }: { d: any }) {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3"><Stat label="Discounts given" value={money(d.totalCents)} /></div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card title="By cashier"><DataTable rows={d.byCashier.map((r: any) => ({ ...r, id: String(r._id) }))} empty="No discounts" columns={[{ key: 'n', header: 'Cashier', render: (r: any) => r.name }, { key: 'c', header: 'Sales', className: 'num', render: (r: any) => r.count }, { key: 'a', header: 'Discount', className: 'num', render: (r: any) => money(r.discountCents) }, { key: 'r', header: 'Rate', className: 'num', render: (r: any) => pct(r.rateBp) }]} /></Card>
+        <Card title="By promotion"><DataTable rows={d.byPromotion.map((r: any) => ({ ...r, id: String(r._id) }))} empty="No promotions used" columns={[{ key: 'n', header: 'Promotion', render: (r: any) => r.name }, { key: 'c', header: 'Lines', className: 'num', render: (r: any) => r.count }, { key: 'a', header: 'Discount', className: 'num', render: (r: any) => money(r.discountCents) }, { key: 's', header: 'Sales', className: 'num', render: (r: any) => money(r.salesCents) }]} /></Card>
+      </div>
+      <Card title="By product"><DataTable rows={d.byProduct.map((r: any) => ({ ...r, id: String(r._id) }))} empty="No discounts" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'c', header: 'Lines', className: 'num', render: (r: any) => r.count }, { key: 'a', header: 'Discount', className: 'num', render: (r: any) => money(r.discountCents) }]} /></Card>
+    </div>
+  );
+}
+
+function RetailPerformance({ d }: { d: any }) {
+  const tone = (c: string) => (c === 'A' ? 'green' : c === 'B' ? 'blue' : 'gray') as 'green';
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-3">{d.classes.map((c: any) => <Stat key={c.class} label={`Class ${c.class}`} value={money(c.netCents)} hint={`${c.products} products · ${c.class === 'A' ? 'top 80% of revenue' : c.class === 'B' ? 'next 15%' : 'last 5%'}`} />)}</div>
+      <div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: String(r.productId) }))} empty="No sales in this period" columns={[
+        { key: 'r', header: '#', className: 'num', render: (r: any) => r.rank }, { key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'c', header: 'ABC', render: (r: any) => <Badge tone={tone(r.abc)}>{r.abc}</Badge> },
+        { key: 'q', header: 'Qty sold', className: 'num', render: (r: any) => qty(r.qtySold) }, { key: 'g', header: 'Sales', className: 'num', render: (r: any) => money(r.grossCents) },
+        { key: 'p', header: 'Gross profit', className: 'num', render: (r: any) => money(r.grossProfitCents) }, { key: 'm', header: 'Margin', className: 'num', render: (r: any) => pct(r.marginBp) },
+        { key: 's', header: 'Share', className: 'num', render: (r: any) => pct(r.shareBp) }, { key: 'h', header: 'On hand', className: 'num', render: (r: any) => qty(r.onHand) },
+        { key: 'dc', header: 'Days of cover', className: 'num', render: (r: any) => (r.daysOfCover ?? '—') },
+      ]} /></div>
     </div>
   );
 }

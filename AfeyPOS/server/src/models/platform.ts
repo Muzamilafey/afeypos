@@ -35,6 +35,12 @@ const tenantSettingsSchema = new Schema(
     restrictedSaleHours: { start: { type: String }, end: { type: String } },
     dailyReportEmails: { type: [String], default: [] },
     creditReminders: { enabled: { type: Boolean, default: false }, overdueDays: { type: Number, default: 7 } },
+    /** Returns policy: older sales or bigger refunds need someone with returns.approve. */
+    returns: {
+      windowDays: { type: Number, default: 14 },
+      approvalAboveCents: { type: Number, default: 0 },
+      restockByDefault: { type: Boolean, default: true },
+    },
   },
   { _id: false },
 );

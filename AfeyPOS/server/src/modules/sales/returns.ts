@@ -2,7 +2,7 @@ import type { Request } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
 import { roundQty } from '@afeypos/shared';
-import { CashMovement, Customer, LedgerEntry, PaymentIntent, Product, Sale, SaleReturn, Shift, Till } from '../../models/index.js';
+import { CashMovement, Customer, LedgerEntry, PaymentIntent, Payout, Product, Sale, SaleReturn, Shift, Till } from '../../models/index.js';
 import { withTransaction } from '../../db/connection.js';
 import { AppError, badRequest, notFound, unprocessable } from '../../lib/errors.js';
 import { nextNumber } from '../../lib/numbering.js';
@@ -11,6 +11,10 @@ import { objectId, qty } from '../../http/validate.js';
 import { can } from '../../http/auth.js';
 import { applyMovement } from '../inventory/stock.js';
 import { queueReturnForEtims } from '../etims/service.js';
+import { normalizePhone } from '../../lib/phone.js';
+import { Authorizer } from './checkout.js';
+
+export const RETURN_REASONS = ['damaged', 'expired', 'wrong_item', 'not_wanted', 'quality', 'overcharged', 'other'] as const;
 
 export const returnSchema = z.object({
   clientRequestId: z.string().min(8).max(100),
@@ -18,8 +22,23 @@ export const returnSchema = z.object({
   lines: z.array(z.object({ lineId: objectId, qty, restock: z.boolean().default(true), serials: z.array(z.string()).optional() })).min(1),
   refundMethod: z.enum(['cash', 'mpesa', 'card', 'account', 'credit_note']),
   reference: z.string().max(100).optional(),
+  reasonCode: z.enum(RETURN_REASONS).optional(),
   reason: z.string().trim().min(2).max(300),
+  /** M-Pesa refunds: send the money back to this phone with B2C (a draft payout someone approves). */
+  mpesaPhone: z.string().max(20).optional(),
+  overrideToken: z.string().optional(),
 });
+
+/** What the return policy demands for this sale and refund: plain sales.return, or returns.approve. */
+export function returnPolicy(settings: { returns?: { windowDays?: number | null; approvalAboveCents?: number | null } | null } | undefined, soldAt: Date, refundCents: number, now = new Date()) {
+  const windowDays = settings?.returns?.windowDays ?? 14;
+  const above = settings?.returns?.approvalAboveCents ?? 0;
+  const reasons: string[] = [];
+  const ageDays = (now.getTime() - soldAt.getTime()) / 86400_000;
+  if (windowDays > 0 && ageDays > windowDays) reasons.push(`sold ${Math.floor(ageDays)} days ago (return window ${windowDays} days)`);
+  if (above > 0 && refundCents > above) reasons.push('refund above the approval amount');
+  return reasons;
+}
 
 export const voidSchema = z.object({
   clientRequestId: z.string().min(8).max(100),
@@ -38,6 +57,7 @@ export async function processReturn(req: Request, saleId: Types.ObjectId, input:
     if (!sale) throw notFound('Sale');
     if (sale.status === 'voided' || sale.status === 'returned') throw unprocessable('This sale has already been fully returned or voided', 'SALE_CLOSED');
     const userId = req.auth!.userId;
+    const authz = new Authorizer(req, input.overrideToken);
     const number = await nextNumber('return', 'RTN');
     const returnId = new Types.ObjectId();
 
@@ -79,6 +99,22 @@ export async function processReturn(req: Request, saleId: Types.ObjectId, input:
       lines.push({ lineId: line._id, productId: line.productId, name: line.name, qty: q, baseQty, refundCents, netCents: proportion(line.netCents ?? 0, q, line.qty ?? 1), taxCents: proportion(line.taxCents ?? 0, q, line.qty ?? 1), costCents: l.restock ? costCents : 0, restocked: l.restock, serials });
     }
 
+    const approvalReasons = returnPolicy(req.tenant!.settings ?? undefined, sale.completedAt ?? sale.createdAt, refund);
+    if (approvalReasons.length) await authz.require('returns.approve', `Approve return: ${approvalReasons.join('; ')}`);
+    else await authz.require('sales.return', 'Process a return');
+    const approvedBy = authz.overrides[0]?.supervisorId ?? (approvalReasons.length ? userId : undefined);
+
+    let payoutId: Types.ObjectId | undefined;
+    if (input.refundMethod === 'mpesa' && input.mpesaPhone !== undefined) {
+      const phone = normalizePhone(input.mpesaPhone || (await mpesaPhoneOf(sale)) || '');
+      if (!phone) throw badRequest('Enter the phone number to refund by M-Pesa');
+      // B2C sends whole shillings; any cents are paid in cash or noted on the return.
+      const amount = Math.floor(refund / 100) * 100;
+      if (amount < 1000) throw badRequest('M-Pesa refunds must be at least KES 10; refund smaller amounts in cash');
+      const [p] = await Payout.create([{ purpose: 'refund', amountCents: amount, phone, status: 'draft', requestedBy: userId, ref: { type: 'SaleReturn', id: returnId, number } }]);
+      payoutId = p._id;
+    }
+
     if (shift) await CashMovement.create([{ shiftId: shift._id, tillId: shift.tillId, type: 'refund', amountCents: -refund, userId, reason: input.reason, ref: { type: 'SaleReturn', id: returnId, number } }]);
     if (input.refundMethod === 'account' && sale.customerId) await postCustomerCredit(sale.customerId, refund, { type: 'SaleReturn', id: returnId, number }, userId, 'return');
 
@@ -86,11 +122,19 @@ export async function processReturn(req: Request, saleId: Types.ObjectId, input:
     sale.status = sale.lines.every((l) => roundQty((l.returnedQty ?? 0)) >= (l.qty ?? 0)) ? 'returned' : 'partially_returned';
     await sale.save();
 
-    const [ret] = await SaleReturn.create([{ _id: returnId, number, clientRequestId: input.clientRequestId, saleId: sale._id, branchId: sale.branchId, shiftId: shift?._id, customerId: sale.customerId, lines, refundCents: refund, refundMethod: input.refundMethod, reason: input.reason, processedBy: userId }]);
+    const [ret] = await SaleReturn.create([{ _id: returnId, number, clientRequestId: input.clientRequestId, saleId: sale._id, branchId: sale.branchId, shiftId: shift?._id, customerId: sale.customerId, lines, refundCents: refund, refundMethod: input.refundMethod, reason: input.reason, reasonCode: input.reasonCode, reference: input.reference, processedBy: userId, approvedBy, approvalReasons: approvalReasons.length ? approvalReasons : undefined, payoutId }]);
     await queueReturnForEtims(ret._id, sale, req.capabilities!);
-    await audit(req, { action: 'sale.returned', entity: 'Sale', entityId: sale._id, details: { returnNumber: number, refundCents: refund, method: input.refundMethod, reference: input.reference } });
+    await audit(req, { action: 'sale.returned', entity: 'Sale', entityId: sale._id, details: { returnNumber: number, refundCents: refund, method: input.refundMethod, reference: input.reference, overrides: authz.overrides, approvalReasons } });
     return ret;
   });
+}
+
+/** Phone that paid the sale by M-Pesa, the default for an M-Pesa refund. */
+export async function mpesaPhoneOf(sale: { payments: { method: string; paymentIntentId?: Types.ObjectId | null }[] }) {
+  const ids = sale.payments.filter((p) => p.method === 'mpesa' && p.paymentIntentId).map((p) => p.paymentIntentId);
+  if (!ids.length) return null;
+  const intent = await PaymentIntent.findOne({ _id: { $in: ids }, phone: { $exists: true } }, { phone: 1 }).lean();
+  return intent?.phone ?? null;
 }
 
 /** Reduces what a customer owes (or creates a credit balance) and allocates it against open debts. */

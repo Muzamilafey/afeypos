@@ -5,9 +5,9 @@ import { api, newRequestId, openPrintable } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useList, useLocations } from '../../lib/hooks';
 import { dateTime, money, paymentLabel, qty } from '../../lib/format';
-import { getWorkstation } from '../../lib/workstation';
 import { DataTable } from '../../components/DataTable';
-import { Button, Card, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, Checkbox, useConfirm, useToast } from '../../components/ui';
+import { ReturnWizard } from './Returns';
+import { Button, Card, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, useConfirm, useToast } from '../../components/ui';
 
 export function SalesPage() {
   const nav = useNavigate();
@@ -62,7 +62,7 @@ export function SaleDetailPage() {
       <PageHeader title={`Sale ${s.number}`} subtitle={dateTime(s.completedAt)} actions={<>
         <Button variant="secondary" onClick={() => openPrintable(`/sales/${s._id}/receipt?format=html`).catch(toast.error)}>Reprint</Button>
         <Button variant="secondary" onClick={() => openPrintable(`/sales/${s._id}/invoice`).catch(toast.error)}>A4 invoice</Button>
-        {can('sales.return') && s.status !== 'voided' && s.status !== 'returned' && <Button variant="secondary" onClick={() => setReturning(true)}>Return items</Button>}
+        {(can('sales.return') || can('sales.create')) && s.status !== 'voided' && s.status !== 'returned' && <Button variant="secondary" onClick={() => setReturning(true)}>Return items</Button>}
         {can('sales.void') && s.status === 'completed' && <Button variant="danger" onClick={voidSale}>Void</Button>}
       </>} />
       <div className="grid gap-4 lg:grid-cols-3">
@@ -85,45 +85,8 @@ export function SaleDetailPage() {
         </Card>
         {s.returns?.length > 0 && <Card title="Returns" className="lg:col-span-3"><ul className="text-sm">{s.returns.map((r: any) => <li key={r._id}>{r.number} · {dateTime(r.createdAt)} · {money(r.refundCents)} via {r.refundMethod} · {r.reason}</li>)}</ul></Card>}
       </div>
-      {returning && <ReturnModal sale={s} onClose={() => setReturning(false)} onDone={() => { setReturning(false); qc.invalidateQueries({ queryKey: ['sale', id] }); }} />}
+      {returning && <ReturnWizard sale={s} onClose={() => setReturning(false)} onDone={() => { setReturning(false); qc.invalidateQueries({ queryKey: ['sale', id] }); }} />}
     </div>
-  );
-}
-
-function ReturnModal({ sale, onClose, onDone }: { sale: any; onClose: () => void; onDone: () => void }) {
-  const locs = useLocations();
-  const toast = useToast();
-  const [requestId] = useState(newRequestId);
-  const [lines, setLines] = useState<Record<string, { qty: number; restock: boolean; serials: string }>>({});
-  const [method, setMethod] = useState('cash');
-  const [reason, setReason] = useState('');
-  const [tillId, setTillId] = useState(getWorkstation().tillId ?? '');
-  const [error, setError] = useState<unknown>(null);
-  const submit = async () => {
-    try {
-      const payload = Object.entries(lines).filter(([, v]) => v.qty > 0).map(([lineId, v]) => ({ lineId, qty: v.qty, restock: v.restock, serials: v.serials ? v.serials.split(/[,\s]+/).filter(Boolean) : undefined }));
-      await api(`/sales/${sale._id}/returns`, { body: { clientRequestId: requestId, tillId: method === 'cash' ? tillId : undefined, lines: payload, refundMethod: method, reason }, idempotencyKey: requestId });
-      toast.success('Return processed');
-      onDone();
-    } catch (e) { setError(e); }
-  };
-  return (
-    <Modal open onClose={onClose} title={`Return items from ${sale.number}`} size="lg" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={submit} disabled={!reason}>Process return</Button></>}>
-      <table className="min-w-full text-sm"><thead><tr><th className="th">Item</th><th className="th">Returnable</th><th className="th">Qty</th><th className="th">Restock</th></tr></thead>
-        <tbody>{sale.lines.map((l: any) => {
-          const max = l.qty - (l.returnedQty ?? 0);
-          const v = lines[l._id] ?? { qty: 0, restock: true, serials: '' };
-          return <tr key={l._id}><td className="td">{l.name}{l.serials?.length ? <Input className="mt-1" placeholder="Serials returned" value={v.serials} onChange={(e) => setLines({ ...lines, [l._id]: { ...v, serials: e.target.value } })} /> : null}</td><td className="td">{qty(max)}</td>
-            <td className="td"><Input type="number" min={0} max={max} step="any" className="w-24" value={v.qty} onChange={(e) => setLines({ ...lines, [l._id]: { ...v, qty: Math.min(max, Number(e.target.value)) } })} /></td>
-            <td className="td"><Checkbox label="" checked={v.restock} onChange={(c) => setLines({ ...lines, [l._id]: { ...v, restock: c } })} /></td></tr>;
-        })}</tbody></table>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <Field label="Refund via"><Select value={method} onChange={(e) => setMethod(e.target.value)} options={[{ value: 'cash', label: 'Cash' }, { value: 'mpesa', label: 'M-Pesa (manual reversal)' }, { value: 'card', label: 'Card' }, ...(sale.customerId ? [{ value: 'account', label: 'Customer account' }] : []), { value: 'credit_note', label: 'Credit note' }]} /></Field>
-        {method === 'cash' && <Field label="Till paying out"><Select value={tillId} onChange={(e) => setTillId(e.target.value)} placeholder="Select till" options={(locs.data?.tills ?? []).map((t) => ({ value: t._id, label: t.name }))} /></Field>}
-        <Field label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-      </div>
-      <div className="mt-3"><ErrorBox error={error} /></div>
-    </Modal>
   );
 }
 

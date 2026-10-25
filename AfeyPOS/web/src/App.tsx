@@ -8,6 +8,7 @@ import { ForgotPasswordPage, LoginPage, SetupPage, ResetPasswordPage, VerifyEmai
 import { DashboardPage } from './pages/Dashboard';
 import { POSPage } from './pages/POS';
 import { SaleDetailPage, SalesPage, ShiftsPage } from './pages/sales/Sales';
+import { ReturnsPage } from './pages/sales/Returns';
 import { PurchasingPage } from './pages/sales/Purchasing';
 import { DocumentsPage } from './pages/sales/Documents';
 import { ProductEditPage, ProductsPage } from './pages/inventory/Products';
@@ -47,6 +48,7 @@ export function App() {
         <Route path="pos" element={<Gate perm="sales.create" module="pos"><POSPage /></Gate>} />
         <Route path="sales" element={<Gate perm="sales.read"><SalesPage /></Gate>} />
         <Route path="sales/:id" element={<Gate perm="sales.read"><SaleDetailPage /></Gate>} />
+        <Route path="returns" element={<Gate perm="sales.read" module="pos"><ReturnsPage /></Gate>} />
         <Route path="shifts" element={<Gate perm="shifts.open"><ShiftsPage /></Gate>} />
         <Route path="documents/:type" element={<Gate perm="sales.read"><DocumentsPage /></Gate>} />
         <Route path="repairs" element={<Gate module="repairs"><RepairsPage /></Gate>} />

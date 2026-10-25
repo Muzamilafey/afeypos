@@ -129,15 +129,24 @@ const saleReturnSchema = new Schema(
     refundCents: Number,
     refundMethod: { type: String, enum: ['cash', 'mpesa', 'card', 'account', 'credit_note'] },
     reason: String,
+    /** Why it came back (damaged, expired, wrong item...), for the returns report. */
+    reasonCode: String,
+    reference: String,
     isVoid: { type: Boolean, default: false },
     processedBy: ObjectId,
     approvedBy: ObjectId,
+    /** Why a supervisor had to approve (outside the return window, above the approval amount). */
+    approvalReasons: { type: [String], default: undefined },
+    /** M-Pesa refund sent back to the customer's phone with B2C (draft until approved). */
+    payoutId: ObjectId,
     etims: { type: etimsSubmissionSchema, default: undefined },
   },
   { timestamps: true },
 );
 saleReturnSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 saleReturnSchema.index({ tenantId: 1, clientRequestId: 1 }, { unique: true });
+saleReturnSchema.index({ tenantId: 1, createdAt: -1 });
+saleReturnSchema.index({ tenantId: 1, saleId: 1 });
 export const SaleReturn = tenantModel('SaleReturn', saleReturnSchema);
 
 const salesDocumentSchema = new Schema(

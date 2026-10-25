@@ -1,18 +1,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { Sale, SaleReturn, Customer, Tenant } from '../../models/index.js';
+import { Sale, SaleReturn, Customer, Tenant, User, Payout } from '../../models/index.js';
 import { parse, idParam, objectId, pagination, positiveCents, escapeRegex } from '../../http/validate.js';
 import { can, requirePermission, assertBranchAccess } from '../../http/auth.js';
 import { idempotent } from '../../http/idempotency.js';
-import { notFound } from '../../lib/errors.js';
+import { forbidden, notFound } from '../../lib/errors.js';
 import { emitToTenant } from '../../realtime/socket.js';
 import { notify } from '../notifications/service.js';
 import { formatMoney } from '@afeypos/shared';
 import { checkout, checkoutSchema } from './checkout.js';
-import { processReturn, returnSchema, voidSale, voidSchema } from './returns.js';
+import { mpesaPhoneOf, processReturn, returnPolicy, returnSchema, voidSale, voidSchema } from './returns.js';
 import { closeShift, openShift, recordCashMovement, shiftSummary } from './shifts.js';
 import { Shift } from '../../models/index.js';
-import { renderReceiptText } from '../hardware/receipt.js';
+import { creditNoteAsReceipt, renderReceiptEscPos, renderReceiptHtml, renderReceiptText } from '../hardware/receipt.js';
+import { runAsPlatform } from '../../lib/context.js';
 
 const router = Router();
 
@@ -48,6 +49,16 @@ router.get('/sales', requirePermission('sales.read'), async (req, res) => {
   res.json({ data, total, page: q.page, limit: q.limit });
 });
 
+/** Finds a sale for a return from a scanned or typed receipt number (the receipt barcode is the number). */
+router.get('/sales/lookup', requirePermission('sales.read'), async (req, res) => {
+  const { code } = parse(z.object({ code: z.string().trim().min(2).max(100) }), req.query);
+  const filter: Record<string, unknown> = { $or: [{ number: new RegExp(`^${escapeRegex(code)}$`, 'i') }, { 'payments.reference': code.toUpperCase() }, { 'lines.serials': code }] };
+  if (req.auth!.branchIds.length) filter.branchId = { $in: req.auth!.branchIds };
+  if (!can(req, 'sales.read.all') && !can(req, 'sales.return')) filter.cashierId = req.auth!.userId;
+  const sales = await Sale.find(filter, { number: 1, completedAt: 1, totalCents: 1, status: 1, customerId: 1, branchId: 1 }).sort({ completedAt: -1 }).limit(10).lean();
+  res.json({ data: sales });
+});
+
 router.get('/sales/:id', requirePermission('sales.read'), async (req, res) => {
   const sale = await Sale.findById(idParam(req.params.id)).lean();
   if (!sale) throw notFound('Sale');
@@ -55,10 +66,18 @@ router.get('/sales/:id', requirePermission('sales.read'), async (req, res) => {
   assertBranchAccess(req, sale.branchId);
   const returns = await SaleReturn.find({ saleId: sale._id }).lean();
   const customer = sale.customerId ? await Customer.findById(sale.customerId, { name: 1, phone: 1, email: 1 }).lean() : null;
-  res.json({ data: { ...sale, returns, customer } });
+  // What the return policy will ask for, so the till can warn before the cashier starts.
+  const returnPolicyInfo = { windowDays: req.tenant!.settings?.returns?.windowDays ?? 14, approvalAboveCents: req.tenant!.settings?.returns?.approvalAboveCents ?? 0, restockByDefault: req.tenant!.settings?.returns?.restockByDefault ?? true, outsideWindow: returnPolicy(req.tenant!.settings ?? undefined, sale.completedAt ?? sale.createdAt, 0).length > 0, mpesaPhone: await mpesaPhoneOf(sale as any) };
+  res.json({ data: { ...sale, returns, customer, returnPolicy: returnPolicyInfo } });
 });
 
-router.post('/sales/:id/returns', requirePermission('sales.return'), idempotent('sale-return'), async (req, res) => {
+/** Cashiers without sales.return can still start a return; the service asks for a supervisor's approval. */
+const canStartReturn = (req: any, _res: any, next: any) => {
+  if (!can(req, 'sales.return') && !can(req, 'sales.create')) throw forbidden('Missing permission: sales.return');
+  next();
+};
+
+router.post('/sales/:id/returns', canStartReturn, idempotent('sale-return'), async (req, res) => {
   const input = parse(returnSchema, req.body);
   const ret = await processReturn(req, idParam(req.params.id), input);
   emitToTenant(req.tenant!._id, 'sale.returned', { saleId: req.params.id, refundCents: ret.refundCents });
@@ -70,6 +89,59 @@ router.post('/sales/:id/void', requirePermission('sales.void'), idempotent('sale
   const sale = await voidSale(req, idParam(req.params.id), input);
   emitToTenant(req.tenant!._id, 'sale.voided', { id: sale._id, number: sale.number });
   res.json({ data: sale });
+});
+
+router.get('/returns', requirePermission('sales.read'), async (req, res) => {
+  const q = parse(pagination.extend({ from: z.coerce.date().optional(), to: z.coerce.date().optional(), branchId: objectId.optional(), refundMethod: z.string().optional(), reasonCode: z.string().optional(), saleId: objectId.optional() }), req.query);
+  const filter: Record<string, unknown> = {};
+  if (!can(req, 'sales.read.all')) filter.processedBy = req.auth!.userId;
+  if (req.auth!.branchIds.length) filter.branchId = { $in: req.auth!.branchIds };
+  if (q.branchId) {
+    assertBranchAccess(req, q.branchId);
+    filter.branchId = q.branchId;
+  }
+  for (const k of ['refundMethod', 'reasonCode', 'saleId'] as const) if (q[k]) filter[k] = q[k];
+  if (q.from || q.to) filter.createdAt = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
+  if (q.q) {
+    const sales = await Sale.find({ number: new RegExp(escapeRegex(q.q), 'i') }, { _id: 1 }).limit(50).lean();
+    filter.$or = [{ number: new RegExp(escapeRegex(q.q), 'i') }, { saleId: { $in: sales.map((s) => s._id) } }];
+  }
+  const [rows, total] = await Promise.all([
+    SaleReturn.find(filter).sort({ createdAt: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(),
+    SaleReturn.countDocuments(filter),
+  ]);
+  const sales = new Map((await Sale.find({ _id: { $in: rows.map((r) => r.saleId) } }, { number: 1 }).lean()).map((s) => [String(s._id), s.number]));
+  const users = new Map((await User.find({ _id: { $in: rows.flatMap((r) => [r.processedBy, r.approvedBy].filter(Boolean)) } }, { name: 1 }).lean()).map((u) => [String(u._id), u.name]));
+  const data = rows.map((r) => ({ ...r, saleNumber: sales.get(String(r.saleId)), processedByName: users.get(String(r.processedBy)), approvedByName: r.approvedBy ? users.get(String(r.approvedBy)) : undefined }));
+  res.json({ data, total, page: q.page, limit: q.limit });
+});
+
+async function loadReturn(req: any) {
+  const ret = await SaleReturn.findById(idParam(req.params.id)).lean();
+  if (!ret) throw notFound('Return');
+  assertBranchAccess(req, ret.branchId);
+  if (!can(req, 'sales.read.all') && String(ret.processedBy) !== String(req.auth!.userId)) throw notFound('Return');
+  const sale = (await Sale.findById(ret.saleId, { number: 1, completedAt: 1, totalCents: 1, status: 1 }).lean())!;
+  return { ret, sale };
+}
+
+router.get('/returns/:id', requirePermission('sales.read'), async (req, res) => {
+  const { ret, sale } = await loadReturn(req);
+  const payout = ret.payoutId ? await Payout.findById(ret.payoutId, { status: 1, amountCents: 1, phone: 1, receiptNumber: 1, resultDesc: 1 }).lean() : null;
+  res.json({ data: { ...ret, sale, payout } });
+});
+
+/** The credit note slip (text, HTML for browser printing, or ESC/POS for the bridge). */
+router.get('/returns/:id/receipt', requirePermission('sales.read'), async (req, res) => {
+  const { format, width } = parse(z.object({ format: z.enum(['html', 'text', 'escpos']).default('html'), width: z.coerce.number().int().min(24).max(64).default(42) }), req.query);
+  const { ret, sale } = await loadReturn(req);
+  const tenant: any = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
+  const note = creditNoteAsReceipt(ret as any, sale);
+  const t = { ...tenant, settings: { ...tenant.settings, receiptHeader: note.header } };
+  const user = await User.findById(ret.processedBy, { name: 1 }).lean();
+  if (format === 'html') res.type('html').send(renderReceiptHtml(t, note.sale, user?.name));
+  else if (format === 'text') res.type('text').send(renderReceiptText(t, note.sale, width, user?.name));
+  else res.json({ data: { base64: renderReceiptEscPos(t, note.sale, { width, openDrawer: ret.refundMethod === 'cash', cashierName: user?.name }).toString('base64') } });
 });
 
 /** Sends a receipt by SMS/email in the background (never blocks checkout). */

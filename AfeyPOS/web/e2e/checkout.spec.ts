@@ -57,6 +57,23 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await expect(page.getByText(/RCP-000001/)).toBeVisible();
   await page.getByRole('link', { name: 'Stock levels', exact: true }).click();
   await expect(page.getByText('22 pc')).toBeVisible();
+
+  // Return one milk from the receipt by scanning its number.
+  await page.getByRole('link', { name: 'Returns', exact: true }).click();
+  await page.getByTestId('return-lookup').fill('RCP-000001');
+  await page.getByTestId('return-lookup').press('Enter');
+  await expect(page.getByRole('dialog').getByText('Return from RCP-000001')).toBeVisible();
+  await page.getByRole('button', { name: 'More' }).click();
+  await expect(page.getByTestId('return-total')).toHaveText(/65\.00/);
+  await page.getByLabel('Reason').selectOption('damaged');
+  const till = page.getByLabel('Till paying out');
+  if (await till.inputValue() === '') await till.selectOption({ index: 1 });
+  await page.screenshot({ path: 'test-results/return.png', fullPage: true });
+  await page.getByRole('button', { name: 'Process return' }).click();
+  await expect(page.getByText(/Return RTN-\d+ done: refund .*65\.00/)).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Damaged' })).toBeVisible();
+  await page.getByRole('link', { name: 'Stock levels', exact: true }).click();
+  await expect(page.getByText('23 pc')).toBeVisible();
 });
 
 test('rejects bad credentials with a clear message', async ({ page }) => {

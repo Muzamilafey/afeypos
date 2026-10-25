@@ -59,6 +59,8 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Receipt printing/reprinting (browser, ESC/POS, network printer) | Implemented / Tested (TCP) |
 | Email/SMS receipts | Tested |
 | Returns, exchanges (return + new sale), refunds, voids | Tested |
+| Returns page: scan receipt, partial/full returns, reasons, return window and approval amount, supervisor approval, M-Pesa B2C refunds, credit note slip | Tested (server and browser) |
+| Supermarket reports: daily Z summary, baskets and peak hours, returns, discounts, ABC product performance, dead stock, reorder suggestions, sales by weekday/department/brand | Tested |
 | Till opening/closing, shifts, cash in/out, expected vs actual | Tested |
 | Sales history and search (receipt, M-Pesa ref, serial) | Implemented |
 | Payment failure/timeout handling, duplicate-submission protection, safe stock deduction | Tested |

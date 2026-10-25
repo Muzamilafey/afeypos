@@ -314,6 +314,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'quotations', label: 'Quotations', path: '/documents/quotation', icon: 'doc', module: 'quotations', permission: 'quotations.manage', group: 'sell' },
   { key: 'salesOrders', label: 'Sales orders', path: '/documents/sales_order', icon: 'doc', module: 'salesOrders', permission: 'quotations.manage', group: 'sell' },
   { key: 'deliveryNotes', label: 'Delivery notes', path: '/documents/delivery_note', icon: 'truck', module: 'deliveryNotes', permission: 'sales.read', group: 'sell' },
+  { key: 'returns', label: 'Returns', path: '/returns', icon: 'undo', module: 'pos', permission: 'sales.read', group: 'sell' },
   { key: 'shifts', label: 'Shifts & tills', path: '/shifts', icon: 'clock', module: 'pos', permission: 'shifts.open', group: 'sell' },
   { key: 'repairs', label: 'Repairs', path: '/repairs', icon: 'wrench', module: 'repairs', permission: 'sales.create', group: 'sell' },
   { key: 'products', label: 'Products', path: '/products', icon: 'box', module: 'inventory', permission: 'products.read', group: 'stock' },

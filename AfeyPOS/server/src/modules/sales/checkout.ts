@@ -72,7 +72,7 @@ export function assertRestrictedHours(hours: { start?: string; end?: string } | 
 }
 
 /** Tracks permissions granted either directly or through a single-use supervisor override. */
-class Authorizer {
+export class Authorizer {
   overrides: { action: string; supervisorId: Types.ObjectId; at: Date }[] = [];
   private consumed: Record<string, string> = {};
   constructor(private req: Request, private overrideToken?: string) {}

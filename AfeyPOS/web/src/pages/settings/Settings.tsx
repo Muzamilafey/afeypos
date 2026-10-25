@@ -23,7 +23,7 @@ export function BusinessSettingsPage() {
   const setS = (k: string, v: any) => setF({ ...f, settings: { ...s, [k]: v } });
   const save = async () => {
     try {
-      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, receiptHeader: s.receiptHeader ?? '', receiptFooter: s.receiptFooter ?? '', logoFileId: s.logoFileId ?? '', tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders } } });
+      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, receiptHeader: s.receiptHeader ?? '', receiptFooter: s.receiptFooter ?? '', logoFileId: s.logoFileId ?? '', tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders, returns: { windowDays: s.returns?.windowDays ?? 14, approvalAboveCents: s.returns?.approvalAboveCents ?? 0, restockByDefault: s.returns?.restockByDefault ?? true } } } });
       await reload();
       toast.success('Settings saved');
     } catch (e) { toast.error(e); }
@@ -73,6 +73,11 @@ export function BusinessSettingsPage() {
               </div>
             </div>
           )}
+          <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
+            <Field label="Return window (days)" hint="Older sales need a manager; 0 = no limit"><Input type="number" min={0} className="w-28" value={s.returns?.windowDays ?? 14} onChange={(e) => setS('returns', { ...s.returns, windowDays: Math.max(0, Number(e.target.value) || 0) })} /></Field>
+            <Field label="Manager approves refunds above (KES)" hint="0 = never"><Input inputMode="decimal" className="w-36" value={(s.returns?.approvalAboveCents ?? 0) / 100} onChange={(e) => setS('returns', { ...s.returns, approvalAboveCents: Math.max(0, Math.round(Number(e.target.value) * 100) || 0) })} /></Field>
+            <Checkbox label="Returned items go back to the shelf by default" checked={s.returns?.restockByDefault ?? true} onChange={(v) => setS('returns', { ...s.returns, restockByDefault: v })} />
+          </div>
           <Field label="Daily sales summary emails" hint="Comma separated; sent at 21:00 local time" className="sm:col-span-2"><Input value={(s.dailyReportEmails ?? []).join(', ')} onChange={(e) => setS('dailyReportEmails', e.target.value.split(',').map((x: string) => x.trim()).filter(Boolean))} /></Field>
           {enabled.has('customerCredit') && (
             <div className="flex flex-wrap items-end gap-3 sm:col-span-2">

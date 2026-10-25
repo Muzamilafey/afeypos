@@ -13,13 +13,14 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Types } from 'mongoose';
 import {
-  AuditLog, Branch, CashMovement, Category, Customer, Expense, GoodsReceipt, LedgerEntry, PaymentIntent, Product, Sale, SaleReturn,
+  AuditLog, Branch, Brand, CashMovement, Category, Customer, Expense, GoodsReceipt, LedgerEntry, PaymentIntent, Product, Sale, SaleReturn,
   Shift, StockBatch, StockLevel, StockMovement, Supplier, User, Warehouse, Till,
 } from '../../models/index.js';
 import { objectId, parse } from '../../http/validate.js';
 import { requirePermission, requireModule } from '../../http/auth.js';
 import { toCsv } from '../../lib/csv.js';
 import { ageing } from '../parties/routes.js';
+import { retailReports } from './retail.js';
 
 const router = Router();
 
@@ -51,7 +52,7 @@ const periodSchema = z.object({
   format: z.enum(['json', 'csv']).default('json'),
 });
 
-function period(req: Request) {
+export function period(req: Request) {
   const q = parse(periodSchema.passthrough(), req.query);
   const tz = req.tenant!.settings?.timezone ?? 'Africa/Nairobi';
   const today = localDateString(new Date(), tz);
@@ -64,7 +65,7 @@ function period(req: Request) {
   return { from, to, start, end, tz, branchIds, format: q.format, query: q as Record<string, any> };
 }
 
-function send(res: Response, format: string, name: string, rows: Record<string, unknown>[], extra: Record<string, unknown> = {}) {
+export function send(res: Response, format: string, name: string, rows: Record<string, unknown>[], extra: Record<string, unknown> = {}) {
   if (format === 'csv') {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${name}.csv"`);
@@ -74,7 +75,7 @@ function send(res: Response, format: string, name: string, rows: Record<string, 
   res.json({ data: rows, ...extra });
 }
 
-function saleMatch(p: ReturnType<typeof period>) {
+export function saleMatch(p: ReturnType<typeof period>) {
   const m: Record<string, unknown> = { completedAt: { $gte: p.start, $lt: p.end }, status: { $ne: 'voided' } };
   if (p.branchIds) m.branchId = { $in: p.branchIds };
   return m;
@@ -125,7 +126,7 @@ router.get('/reports/dashboard', requirePermission('reports.read'), async (req, 
   });
 });
 
-const GROUPS = ['day', 'week', 'month', 'hour', 'product', 'category', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'] as const;
+const GROUPS = ['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'] as const;
 
 router.get('/reports/sales', requirePermission('reports.read'), async (req, res) => {
   const p = period(req);
@@ -139,9 +140,17 @@ router.get('/reports/sales', requirePermission('reports.read'), async (req, res)
       { $group: { _id: { $dateToString: { date: '$completedAt', format: fmt, timezone: p.tz } }, count: { $sum: 1 }, grossCents: { $sum: '$totalCents' }, netCents: { $sum: '$netCents' }, taxCents: { $sum: '$taxCents' }, discountCents: { $sum: '$discountCents' }, costCents: { $sum: '$costCents' } } },
       { $sort: { _id: 1 } },
     ]);
+  } else if (groupBy === 'weekday') {
+    const names = ['', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    rows = await Sale.aggregate([
+      { $match: match },
+      { $group: { _id: { $dayOfWeek: { date: '$completedAt', timezone: p.tz } }, count: { $sum: 1 }, grossCents: { $sum: '$totalCents' }, netCents: { $sum: '$netCents' }, taxCents: { $sum: '$taxCents' }, discountCents: { $sum: '$discountCents' }, costCents: { $sum: '$costCents' } } },
+      { $sort: { _id: 1 } },
+    ]);
+    rows = rows.map((r) => ({ ...r, name: names[r._id] }));
   } else if (groupBy === 'paymentMethod') {
     rows = await Sale.aggregate([{ $match: match }, { $unwind: '$payments' }, { $group: { _id: '$payments.method', count: { $sum: 1 }, grossCents: { $sum: '$payments.amountCents' } } }, { $sort: { grossCents: -1 } }]);
-  } else if (groupBy === 'product' || groupBy === 'category') {
+  } else if (['product', 'category', 'department', 'brand'].includes(groupBy)) {
     rows = await Sale.aggregate([
       { $match: match },
       { $unwind: '$lines' },
@@ -149,13 +158,19 @@ router.get('/reports/sales', requirePermission('reports.read'), async (req, res)
       { $sort: { grossCents: -1 } },
       { $limit: 5000 },
     ]);
-    if (groupBy === 'category') {
-      const prods = new Map((await Product.find({ _id: { $in: rows.map((r) => r._id) } }, { categoryId: 1 }).lean()).map((x) => [String(x._id), x.categoryId ? String(x.categoryId) : 'none']));
-      const cats = new Map((await Category.find({}).lean()).map((c) => [String(c._id), c.name]));
+    if (groupBy !== 'product') {
+      const fields = { category: { categoryId: 1 }, department: { 'attributes.department': 1 }, brand: { brandId: 1 } }[groupBy as 'category'];
+      const prods = new Map((await Product.find({ _id: { $in: rows.map((r) => r._id) } }, fields).lean()).map((x: any) => {
+        const key = groupBy === 'category' ? x.categoryId : groupBy === 'brand' ? x.brandId : x.attributes?.department;
+        return [String(x._id), key ? String(key) : 'none'];
+      }));
+      const names = groupBy === 'department' ? new Map<string, string>() : new Map((await ((groupBy === 'brand' ? Brand : Category) as any).find({}).lean()).map((c: any) => [String(c._id), c.name as string]));
+      const none = { category: 'Uncategorised', department: 'No department', brand: 'No brand' }[groupBy as 'category'];
       const agg = new Map<string, any>();
       for (const r of rows) {
         const key = prods.get(String(r._id)) ?? 'none';
-        const a = agg.get(key) ?? { _id: key, name: cats.get(key) ?? 'Uncategorised', grossCents: 0, netCents: 0, costCents: 0, discountCents: 0 };
+        const a = agg.get(key) ?? { _id: key, name: key === 'none' ? none : names.get(key) ?? key, qty: 0, grossCents: 0, netCents: 0, costCents: 0, discountCents: 0 };
+        a.qty += r.qty;
         for (const k of ['grossCents', 'netCents', 'costCents', 'discountCents']) a[k] += r[k];
         agg.set(key, a);
       }
@@ -354,4 +369,5 @@ router.get('/reports/activity', requirePermission('audit.read'), async (req, res
 });
 
 export const reportRoutes = router;
+router.use(retailReports);
 export { Types };
