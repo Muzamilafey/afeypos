@@ -46,7 +46,8 @@ Open http://localhost:5173. In local mode you are asked to set up the business o
 |---|---|
 | `npm run local` | Everything at once: install, config, database, API + web |
 | `npm run dev` | API + web dev servers |
-| `npm run build` | Builds shared, server, web and bridge |
+| `npm run build` | Builds shared, server, web, bridge and the online shop |
+| `npm run dev:shop` | The online shop website on http://localhost:5174 |
 | `npm run typecheck` | TypeScript checks for every package |
 | `npm run lint` | ESLint over the monorepo |
 | `npm test` | Unit and integration tests (real MongoDB replica set in memory) |
@@ -60,7 +61,7 @@ Open http://localhost:5173. In local mode you are asked to set up the business o
 - [Windows installation](docs/INSTALL-WINDOWS.md) for shop owners
 - [Head-office server online, DNS, HTTPS and branch servers](docs/DEPLOYMENT-HQ.md)
 - [M-Pesa (Daraja)](docs/MPESA.md), [Payment gateways](docs/PAYMENTS.md) (Paystack, Flutterwave, pawaPay, Airtel Money, Kopo Kopo, Hubtel, iPay, ZenoPay, Africa's Talking), [SMS and email](docs/NOTIFICATIONS.md)
-- [KRA eTIMS (OSCU/VSCU)](docs/ETIMS.md), [HR and payroll](docs/HR.md), [Accounting](docs/ACCOUNTING.md), [CRM](docs/CRM.md), [Staff cards and fingerprints](docs/BIOMETRICS.md)
+- [KRA eTIMS (OSCU/VSCU)](docs/ETIMS.md), [HR and payroll](docs/HR.md), [Accounting](docs/ACCOUNTING.md), [CRM](docs/CRM.md), [Online shop](docs/ONLINE-SHOP.md), [Staff cards and fingerprints](docs/BIOMETRICS.md)
 - [Hardware](docs/HARDWARE.md), [Fingerprint readers](docs/BIOMETRICS.md)
 - [Backups and recovery](docs/BACKUP.md), [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Security](docs/SECURITY.md), [Reports and definitions](docs/REPORTS.md), [Branch ↔ head-office sync](docs/SYNC.md)

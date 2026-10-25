@@ -1,4 +1,6 @@
 import { Schema, model } from 'mongoose';
+
+const ObjectId = Schema.Types.ObjectId;
 import { MODULES } from '@afeypos/shared';
 
 const tenantSettingsSchema = new Schema(
@@ -36,6 +38,24 @@ const tenantSettingsSchema = new Schema(
     dailyReportEmails: { type: [String], default: [] },
     creditReminders: { enabled: { type: Boolean, default: false }, overdueDays: { type: Number, default: 7 } },
     /** Staff sign-in with an employee card: require the PIN as well (recommended; a barcode can be copied). */
+    /** Online shop (separate website): where orders are fulfilled and how customers receive and pay for them. */
+    store: {
+      enabled: { type: Boolean, default: false },
+      branchId: ObjectId,
+      warehouseId: ObjectId,
+      pickup: { type: Boolean, default: true },
+      delivery: { type: Boolean, default: true },
+      deliveryAreas: { type: [{ name: String, feeCents: Number, _id: false }], default: [] },
+      deliveryFeeCents: { type: Number, default: 0 },
+      freeDeliveryAboveCents: { type: Number, default: 0 },
+      minOrderCents: { type: Number, default: 0 },
+      payOnDelivery: { type: Boolean, default: true },
+      mpesa: { type: Boolean, default: true },
+      notifyPhone: String,
+      contactPhone: String,
+      announcement: String,
+      hours: String,
+    },
     /** CRM: spend tiers over the last 12 months and the birthday greeting. */
     crm: {
       tiers: { type: [{ name: String, minSpendCents: Number, _id: false }], default: () => [{ name: 'Bronze', minSpendCents: 0 }, { name: 'Silver', minSpendCents: 2_000_000 }, { name: 'Gold', minSpendCents: 10_000_000 }, { name: 'Platinum', minSpendCents: 30_000_000 }] },

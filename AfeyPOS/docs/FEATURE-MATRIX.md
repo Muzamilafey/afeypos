@@ -126,6 +126,15 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Activities and follow-ups, tags, marketing consent and opt-out | Tested |
 | SMS/email campaigns to opted-in segments, birthday greetings | Tested with the console SMS provider |
 
+## Online shop
+
+| Feature | Status |
+|---|---|
+| Separate shop website (catalogue, categories, search, basket, delivery/pickup checkout, order tracking) | Tested in the browser against the real server |
+| M-Pesa STK at checkout, retry, pay on delivery; payment kept for the order | Tested with the simulator |
+| Stock reservation, SMS updates, staff workflow (accept, pack, ready / out for delivery, complete as a sale at quoted prices, cancel with refund payout), unpaid-order expiry | Tested |
+| Hosting on the HQ server by hostname or any static host; public API with open CORS and no cookies | Tested |
+
 ## Reports, security, reliability
 
 | Feature | Status |

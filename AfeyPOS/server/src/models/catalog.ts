@@ -55,6 +55,8 @@ const productSchema = new Schema(
     reorderQty: { type: Number, default: 0 },
     attributes: { type: Schema.Types.Mixed, default: {} },
     warrantyMonths: { type: Number, default: 0 },
+    /** Online shop: listed when enabled; description and featured flag for the shop pages. */
+    online: { enabled: { type: Boolean, default: false }, description: String, featured: { type: Boolean, default: false } },
     requiresPrescription: { type: Boolean, default: false },
     ageRestricted: { type: Boolean, default: false },
     minAge: { type: Number, default: 18 },

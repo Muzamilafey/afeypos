@@ -37,6 +37,12 @@ export const DEFAULT_TEMPLATES: Record<string, TemplateDef> = {
   scheduled_report: {
     email: { subject: '{{business}} - {{reportName}} ({{period}})', body: '{{reportText}}' },
   },
+  order_new: {
+    sms: '{{business}}: New online order {{number}} from {{customer}}, {{total}} ({{fulfilment}}).',
+  },
+  order_update: {
+    sms: '{{business}}: Your order {{number}} {{statusText}} {{extra}}',
+  },
   campaign: {
     sms: '{{business}}: {{message}} Reply STOP to opt out.',
     email: { subject: '{{subject}}', body: 'Hello {{customer}},\n\n{{message}}\n\n{{business}}\nTo stop these messages, reply "unsubscribe".' },

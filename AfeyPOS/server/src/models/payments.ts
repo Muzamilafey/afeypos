@@ -42,6 +42,8 @@ const paymentIntentSchema = new Schema(
     transactionDate: Date,
     initiatedBy: ObjectId,
     allocatedTo: { kind: { type: String, enum: ['sale', 'customer_payment'] }, id: ObjectId, number: String },
+    /** Paid for an online order: kept for that order's sale, not offered at the till. */
+    onlineOrderId: ObjectId,
     allocatedCents: { type: Number, default: 0 },
     allocatedAt: Date,
     lastQueriedAt: Date,

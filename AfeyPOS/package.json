@@ -3,21 +3,30 @@
   "version": "0.1.0",
   "private": true,
   "description": "Afey POS - Point of Sale and Business Management System",
-  "workspaces": ["packages/shared", "server", "web", "bridge"],
+  "workspaces": [
+    "packages/shared",
+    "server",
+    "web",
+    "bridge",
+    "shop"
+  ],
   "scripts": {
     "build:shared": "npm run build -w @afeypos/shared",
     "local": "node scripts/local.mjs",
     "dev": "npm run build:shared && node scripts/dev.mjs",
     "dev:server": "npm run dev -w @afeypos/server",
     "dev:web": "npm run dev -w @afeypos/web",
-    "build": "npm run build:shared && npm run build -w @afeypos/server && npm run build -w @afeypos/web && npm run build -w @afeypos/bridge",
+    "build": "npm run build:shared && npm run build -w @afeypos/server && npm run build -w @afeypos/web && npm run build -w @afeypos/bridge && npm run build -w @afeypos/shop",
     "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "test": "npm run build:shared && npm run test --workspaces --if-present",
     "test:e2e": "npm run test:e2e -w @afeypos/web",
-    "start": "npm run start -w @afeypos/server"
+    "start": "npm run start -w @afeypos/server",
+    "dev:shop": "npm run dev -w @afeypos/shop"
   },
-  "engines": { "node": ">=22.9" },
+  "engines": {
+    "node": ">=22.9"
+  },
   "devDependencies": {
     "@eslint/js": "9.39.1",
     "eslint": "9.39.1",

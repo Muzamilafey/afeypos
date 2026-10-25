@@ -70,23 +70,21 @@ const stkSchema = z.object({
   accountReference: z.string().trim().max(12).optional(),
 });
 
-router.post('/payments/mpesa/stk', requirePermission('sales.create'), async (req, res) => {
-  const body = parse(stkSchema, req.body);
-  const existing = await PaymentIntent.findOne({ clientRequestId: body.clientRequestId }).lean();
-  if (existing) {
-    res.json({ data: presentIntent(existing), replay: true });
-    return;
-  }
-  const phone = normalizePhone(body.phone);
+/** Sends an STK Push and creates the pending intent (till checkout, account payments and online orders). */
+export async function startStk(opts: { tenant: any; clientRequestId: string; amountCents: number; phone: string; accountReference?: string; tillId?: unknown; branchId?: unknown; initiatedBy?: unknown; description?: string }) {
+  const existing = await PaymentIntent.findOne({ clientRequestId: opts.clientRequestId });
+  if (existing) return { intent: existing, replay: true };
+  const phone = normalizePhone(opts.phone);
   if (!phone || !isKenyanMobile(phone)) throw badRequest('Enter a valid Safaricom number, e.g. 0712345678');
-  const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
-  const cfg = await findActiveConfig('mpesa', till?.branchId);
+  const till = opts.tillId ? await Till.findById(opts.tillId).lean() : null;
+  const branchId = till?.branchId ?? (opts.branchId as any);
+  const cfg = await findActiveConfig('mpesa', branchId);
   if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
-  const tenant = req.tenant!;
-  const accountReference = (body.accountReference || tenant.slug).replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'AFEYPOS';
-  const [intent] = await PaymentIntent.create([{ source: 'stk', status: 'pending', clientRequestId: body.clientRequestId, amountCents: body.amountCents, phone, accountReference, shortCode: cfg.settings?.shortCode, branchId: till?.branchId, tillId: till?._id, configId: cfg._id, initiatedBy: req.auth!.userId }]);
+  const tenant = opts.tenant;
+  const accountReference = (opts.accountReference || tenant.slug).replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'AFEYPOS';
+  const [intent] = await PaymentIntent.create([{ source: 'stk', status: 'pending', clientRequestId: opts.clientRequestId, amountCents: opts.amountCents, phone, accountReference, shortCode: cfg.settings?.shortCode, branchId, tillId: till?._id, configId: cfg._id, initiatedBy: opts.initiatedBy }]);
   try {
-    const resp = await gatewayFor(cfg).stkPush({ amount: body.amountCents / 100, phone, accountReference, description: 'Payment', callbackUrl: callbackUrls(tenant._id, tenant.callbackToken).stk });
+    const resp = await gatewayFor(cfg).stkPush({ amount: opts.amountCents / 100, phone, accountReference, description: opts.description ?? 'Payment', callbackUrl: callbackUrls(tenant._id, tenant.callbackToken).stk });
     if (resp.ResponseCode !== '0') {
       await PaymentIntent.updateOne({ _id: intent._id }, { $set: { status: 'failed', resultDesc: resp.ResponseDescription, completedAt: new Date() } });
       throw unprocessable(`M-Pesa rejected the request: ${resp.ResponseDescription}`, 'MPESA_REJECTED');
@@ -104,7 +102,17 @@ router.post('/payments/mpesa/stk', requirePermission('sales.create'), async (req
   const timeout = tenant.settings?.stkPendingTimeoutSeconds ?? 180;
   await enqueue('mpesa.checkIntent', { intentId: String(intent._id) }, { runAt: new Date(Date.now() + 45_000), dedupeKey: `mpesa-check:${intent._id}:1` });
   await enqueue('mpesa.checkIntent', { intentId: String(intent._id), final: true }, { runAt: new Date(Date.now() + timeout * 1000), dedupeKey: `mpesa-check:${intent._id}:final` });
-  await audit(req, { action: 'mpesa.stk_initiated', entity: 'PaymentIntent', entityId: intent._id, details: { amountCents: body.amountCents, phone: phone.replace(/\d(?=\d{3})/g, '*') } });
+  return { intent, replay: false };
+}
+
+router.post('/payments/mpesa/stk', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(stkSchema, req.body);
+  const { intent, replay } = await startStk({ tenant: req.tenant!, clientRequestId: body.clientRequestId, amountCents: body.amountCents, phone: body.phone, accountReference: body.accountReference, tillId: body.tillId, initiatedBy: req.auth!.userId });
+  if (replay) {
+    res.json({ data: presentIntent(intent), replay: true });
+    return;
+  }
+  await audit(req, { action: 'mpesa.stk_initiated', entity: 'PaymentIntent', entityId: intent._id, details: { amountCents: body.amountCents, phone: String(intent.phone).replace(/\d(?=\d{3})/g, '*') } });
   res.status(201).json({ data: presentIntent(intent) });
 });
 
@@ -115,7 +123,10 @@ router.get('/payments/intents', requirePermission('sales.create'), async (req, r
   if (q.provider) filter.provider = q.provider === 'gateway' ? { $ne: 'mpesa' } : q.provider;
   if (q.status) filter.status = q.status;
   if (q.source) filter.source = q.source;
-  if (q.unallocated) filter.$expr = { $lt: ['$allocatedCents', '$paidAmountCents'] };
+  if (q.unallocated) {
+    filter.$expr = { $lt: ['$allocatedCents', '$paidAmountCents'] };
+    filter.onlineOrderId = null;
+  }
   if (q.q) {
     const digits = q.q.replace(/\D/g, '');
     filter.$or = [{ receiptNumber: q.q.toUpperCase() }, { receiptNumber: q.q }, { reference: q.q }, ...(digits ? [{ phone: { $regex: digits } }] : []), { accountReference: q.q }];

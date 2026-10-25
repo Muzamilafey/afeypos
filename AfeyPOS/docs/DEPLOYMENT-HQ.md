@@ -38,6 +38,9 @@ No Docker or Kubernetes is required. A small VM (2 vCPU / 4 GB) is enough for mo
    TRUST_PROXY=loopback
    COOKIE_SECURE=true
    WEB_DIST_DIR=/opt/afeypos/AfeyPOS/web/dist
+   # Optional: the online shop website on its own name, served by this server (see ONLINE-SHOP.md)
+   # SHOP_DIST_DIR=/opt/afeypos/AfeyPOS/shop/dist
+   # SHOP_HOSTNAMES=shop.myshop.co.ke
    UPLOAD_DIR=/var/lib/afeypos/uploads
    BACKUP_DIR=/var/lib/afeypos/backups
    ```

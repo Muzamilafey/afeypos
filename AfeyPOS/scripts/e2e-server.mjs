@@ -28,6 +28,8 @@ const child = spawn(process.execPath, [path.join(root, 'server', 'dist', 'server
     JWT_ACCESS_SECRET: 'e2e-secret-e2e-secret-e2e-secret-e2e-secret',
     ENCRYPTION_KEY: Buffer.alloc(32, 9).toString('base64'),
     WEB_DIST_DIR: path.join(root, 'web', 'dist'),
+    SHOP_DIST_DIR: path.join(root, 'shop', 'dist'),
+    SHOP_HOSTNAMES: 'shop.lan.test',
     PUBLIC_APP_URL: `http://127.0.0.1:${port}`,
     API_PUBLIC_URL: `http://127.0.0.1:${port}`,
     CORS_ORIGINS: `http://127.0.0.1:${port}`,

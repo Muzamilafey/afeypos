@@ -185,6 +185,18 @@ export function ProductEditPage() {
             </div>
           </Card>
         )}
+        {caps.modules.includes('onlineStore') && (
+          <Card title="Online shop">
+            <div className="space-y-3">
+              <Checkbox label="Sell on the online shop" checked={Boolean(p.online?.enabled)} onChange={(v) => set('online', { ...p.online, enabled: v })} />
+              {p.online?.enabled && <>
+                <Checkbox label="Feature on the home page" checked={Boolean(p.online?.featured)} onChange={(v) => set('online', { ...p.online, featured: v })} />
+                <Field label="Description for shoppers"><textarea className="input min-h-20" maxLength={2000} value={p.online?.description ?? ''} onChange={(e) => set('online', { ...p.online, description: e.target.value })} /></Field>
+                <p className="text-xs text-ink-500">Shown with the retail price, the photos below and the stock of the shop warehouse.</p>
+              </>}
+            </div>
+          </Card>
+        )}
         <Card title="Prices" className="lg:col-span-2">
           <div className="grid gap-3 sm:grid-cols-4">
             <Field label="Cost (per base unit)"><MoneyInput value={p.costCents} onChange={(v) => set('costCents', v ?? 0)} /></Field>

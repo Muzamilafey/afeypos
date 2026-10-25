@@ -53,6 +53,7 @@ const settingsSchema = z.object({
       tagline: z.string().max(120),
       creditReminders: z.object({ enabled: z.boolean(), overdueDays: z.number().int().min(1).max(180) }).partial(),
       staffLogin: z.object({ cardRequiresPin: z.boolean() }).partial(),
+      store: z.object({ enabled: z.boolean(), branchId: objectId.nullable(), warehouseId: objectId.nullable(), pickup: z.boolean(), delivery: z.boolean(), deliveryAreas: z.array(z.object({ name: z.string().trim().min(1).max(60), feeCents: z.number().int().min(0) })).max(50), deliveryFeeCents: z.number().int().min(0), freeDeliveryAboveCents: z.number().int().min(0), minOrderCents: z.number().int().min(0), payOnDelivery: z.boolean(), mpesa: z.boolean(), notifyPhone: z.string().max(20), contactPhone: z.string().max(20), announcement: z.string().max(200), hours: z.string().max(120) }).partial(),
       crm: z.object({ tiers: z.array(z.object({ name: z.string().trim().min(1).max(30), minSpendCents: z.number().int().min(0) })).min(1).max(8), birthdayGreeting: z.object({ enabled: z.boolean(), channel: z.enum(['sms', 'email']), offer: z.string().max(200) }).partial() }).partial(),
       returns: z.object({ windowDays: z.number().int().min(0).max(365), approvalAboveCents: z.number().int().min(0), restockByDefault: z.boolean() }).partial(),
     })

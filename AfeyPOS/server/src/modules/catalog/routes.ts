@@ -35,6 +35,7 @@ const productSchema = z.object({
   brandId: objectId.nullish(),
   description: z.string().max(2000).optional(),
   images: z.array(z.string().url().or(z.string().regex(/^\/api\/v1\/files\/[a-f0-9]{32}\.(png|jpg|webp)$/))).max(10).optional(),
+  online: z.object({ enabled: z.boolean(), description: z.string().max(2000).optional(), featured: z.boolean().optional() }).partial().optional(),
   baseUnit: z.string().trim().min(1).max(20).default('pc'),
   units: z.array(unitSchema).max(20).default([]),
   barcodes: z.array(z.object({ code: z.string().trim().min(3).max(64), unitCode: z.string().trim().min(1).max(20) })).max(50).default([]),

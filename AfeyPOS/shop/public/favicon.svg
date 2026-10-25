@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="170 290 1230 1090" role="img" aria-label="Afey">
+  <circle cx="849" cy="835" r="523" fill="#3c3b39"/>
+  <path fill="#fff" fill-rule="evenodd" d="M438 463H566L810 1071H662L617 950H386L340 1071H192ZM501 651L433 828H570Z"/>
+  <g stroke-linecap="butt" fill="none">
+    <path d="M782 1047V745Q782 680 845 680H860M720 839H860" stroke="#3c3b39" stroke-width="47"/>
+    <path d="M782 1047V745Q782 680 845 680H860M720 839H860" stroke="#fff" stroke-width="34"/>
+  </g>
+  <path d="M1115 933A99 99 0 1 0 1102 982" stroke="#fff" stroke-width="34" fill="none"/>
+  <rect x="935" y="917" width="198" height="31" fill="#fff"/>
+  <path fill="#fff" d="M1337 822H1375L1222 1175H1179ZM1160 822H1200L1272 972L1252 1012Z"/>
+</svg>

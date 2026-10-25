@@ -32,6 +32,7 @@ import { staffCardRoutes } from './modules/staff/cards.js';
 import { hrRoutes } from './modules/hr/routes.js';
 import { accountingRoutes } from './modules/accounting/routes.js';
 import { crmRoutes } from './modules/crm/routes.js';
+import { onlineOrderRoutes, storefrontRoutes } from './modules/store/routes.js';
 import { backupRoutes } from './modules/backups/routes.js';
 import { syncSettingsRoutes } from './modules/sync/routes.js';
 import { hqSyncRoutes } from './modules/sync/hq.js';
@@ -79,6 +80,8 @@ export function createApp() {
       crossOriginOpenerPolicy: e.COOKIE_SECURE,
     }),
   );
+  // The online shop is a separate website on its own domain: its public API takes any origin, without cookies.
+  app.use('/api/v1/store', cors({ origin: true, credentials: false }));
   const origins = e.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
   app.use(
     cors({
@@ -131,13 +134,15 @@ export function createApp() {
   tenant.use('/hr', requireModule('hr'));
   tenant.use('/accounting', requireModule('accounting'));
   tenant.use('/crm', requireModule('crm'));
+  tenant.use('/online-orders', requireModule('onlineStore'));
   tenant.use(branchReadOnly);
   tenant.use('/sync', hqSyncRoutes);
   tenant.use(biometricBridgeRoutes);
+  tenant.use('/store', storefrontRoutes);
   tenant.use('/auth', recoveryRoutes);
   tenant.use('/auth', authRoutes);
   tenant.use(authenticate);
-  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, backupRoutes, fileRoutes]) {
+  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, onlineOrderRoutes, backupRoutes, fileRoutes]) {
     tenant.use(r);
   }
   v1.use(tenant);
@@ -145,6 +150,17 @@ export function createApp() {
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Endpoint not found' } });
   });
+
+  // The online shop website, when this server also hosts it (its own domain name, same server).
+  const shopHosts = e.SHOP_HOSTNAMES.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+  if (e.SHOP_DIST_DIR && shopHosts.length && fs.existsSync(e.SHOP_DIST_DIR)) {
+    const shopDist = path.resolve(e.SHOP_DIST_DIR);
+    const shopStatic = express.static(shopDist, { index: false, maxAge: '1h' });
+    app.use((req, res, next) => {
+      if (!shopHosts.includes(req.hostname.toLowerCase()) || req.path.startsWith('/api') || req.path.startsWith('/socket.io')) return next();
+      shopStatic(req, res, () => (req.method === 'GET' ? res.sendFile(path.join(shopDist, 'index.html')) : next()));
+    });
+  }
 
   // Local installations serve the built web app from the same server.
   if (e.WEB_DIST_DIR && fs.existsSync(e.WEB_DIST_DIR)) {

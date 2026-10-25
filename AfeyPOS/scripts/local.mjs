@@ -5,7 +5,7 @@
 // 3. Uses the MongoDB in server/.env if it is a reachable replica set; otherwise starts a private
 //    single-node replica set in ./data/mongo on port 27018 (data is kept between runs). If `mongod` is
 //    not installed, a MongoDB binary is downloaded once by mongodb-memory-server.
-// 4. Starts the API (PORT in server/.env, default 4000) and the web app (http://localhost:5173).
+// 4. Starts the API (PORT in server/.env, default 4000), the web app (http://localhost:5173) and the online shop (http://localhost:5174).
 // Ctrl+C stops everything, including the database this script started.
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -126,8 +126,9 @@ const env = { ...process.env, MONGODB_URI: mongoUri };
 const procs = [
   spawn('npm', ['run', 'dev', '-w', '@afeypos/server'], { cwd: root, stdio: 'inherit', shell: isWin, env, detached: !isWin }),
   spawn('npm', ['run', 'dev', '-w', '@afeypos/web'], { cwd: root, stdio: 'inherit', shell: isWin, env, detached: !isWin }),
+  spawn('npm', ['run', 'dev', '-w', '@afeypos/shop'], { cwd: root, stdio: 'inherit', shell: isWin, env, detached: !isWin }),
 ];
-setTimeout(() => log(`API on port ${apiPort}. Open http://localhost:5173 in your browser (first visit: set up your business). Ctrl+C to stop.`), 4000);
+setTimeout(() => log(`API on port ${apiPort}. Open http://localhost:5173 in your browser (first visit: set up your business). Online shop: http://localhost:5174 (open it under Settings → Online shop). Ctrl+C to stop.`), 4000);
 
 // Children run in their own process groups (non-Windows) so npm's grandchildren (vite, tsx) stop too.
 const kill = (p) => {

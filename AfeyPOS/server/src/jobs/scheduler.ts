@@ -15,7 +15,10 @@ export async function scheduleRecurring(now = new Date()) {
   await enqueue('tenants.dailyTasks', {}, { tenantId: null, dedupeKey: `daily-tasks:${minute.slice(0, 13)}` });
   if (e.DEPLOYMENT_MODE !== 'branch') {
     // Keep the ledger current (every 10 minutes).
-    for (const t of await Tenant.find({ status: 'active' }, { _id: 1 }).lean()) await runInTenant(t._id, () => enqueue('accounting.post', {}, { dedupeKey: `acct:${t._id}:${minute.slice(0, 15)}` }));
+    for (const t of await Tenant.find({ status: 'active' }, { _id: 1 }).lean()) {
+      await runInTenant(t._id, () => enqueue('accounting.post', {}, { dedupeKey: `acct:${t._id}:${minute.slice(0, 15)}` }));
+      await runInTenant(t._id, () => enqueue('store.expireUnpaid', {}, { dedupeKey: `store-expire:${t._id}:${minute.slice(0, 15)}` }));
+    }
   }
   if (e.BACKUP_INTERVAL_HOURS > 0) {
     const bucket = Math.floor(now.getTime() / (e.BACKUP_INTERVAL_HOURS * 3600_000));

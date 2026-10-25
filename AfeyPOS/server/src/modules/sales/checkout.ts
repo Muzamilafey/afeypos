@@ -3,7 +3,7 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 import { allocateProportionally, calculateTax, lineAmount, percentOf, PRICE_LISTS, roundQty, type Permission, type PriceListKey } from '@afeypos/shared';
 import {
-  CashMovement, Customer, LedgerEntry, PaymentIntent, Product, Promotion, Sale, SalesDocument, SerialItem, Shift, Till, User, Branch,
+  OnlineOrder, CashMovement, Customer, LedgerEntry, PaymentIntent, Product, Promotion, Sale, SalesDocument, SerialItem, Shift, Till, User, Branch,
 } from '../../models/index.js';
 import { withTransaction } from '../../db/connection.js';
 import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
@@ -58,6 +58,8 @@ export const checkoutSchema = z.object({
   ageVerified: z.boolean().optional(),
   overrideToken: z.string().optional(),
   salesDocumentId: objectId.optional(),
+  /** Completing an online order: the prices the customer was given are honoured. */
+  onlineOrderId: objectId.optional(),
   notes: z.string().max(500).optional(),
 });
 
@@ -104,6 +106,11 @@ export async function checkout(req: Request, input: CheckoutInput) {
 }
 
 async function checkoutTx(req: Request, input: CheckoutInput) {
+  const promised = new Map<string, number>();
+  if (input.onlineOrderId) {
+    const order = await OnlineOrder.findById(input.onlineOrderId, { lines: 1 }).lean();
+    for (const l of order?.lines ?? []) promised.set(String(l.productId), l.unitPriceCents!);
+  }
   const tenant = req.tenant!;
   const settings = tenant.settings!;
   const caps = req.capabilities!;
@@ -155,7 +162,9 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     }
     const quote = await quotePrice({ product, unitCode: unit.code, qty: lineQty, priceList, customerId: customer?._id, branchId: till.branchId, couponCode: input.couponCode });
     let unitPrice = quote.unitPriceCents;
-    if (l.unitPriceCents !== undefined && l.unitPriceCents !== unitPrice) {
+    if (l.unitPriceCents !== undefined && l.unitPriceCents !== unitPrice && promised.get(String(product._id)) === l.unitPriceCents) {
+      unitPrice = l.unitPriceCents;
+    } else if (l.unitPriceCents !== undefined && l.unitPriceCents !== unitPrice) {
       await authz.require('sales.price.override', `price change on ${product.name}`);
       unitPrice = l.unitPriceCents;
     }

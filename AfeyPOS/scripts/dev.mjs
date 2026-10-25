@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 const procs = [
   spawn('npm', ['run', 'dev', '-w', '@afeypos/server'], { stdio: 'inherit', shell: process.platform === 'win32' }),
   spawn('npm', ['run', 'dev', '-w', '@afeypos/web'], { stdio: 'inherit', shell: process.platform === 'win32' }),
+  spawn('npm', ['run', 'dev', '-w', '@afeypos/shop'], { stdio: 'inherit', shell: process.platform === 'win32' }),
 ];
 const stop = () => procs.forEach((p) => p.kill('SIGTERM'));
 process.on('SIGINT', stop);
