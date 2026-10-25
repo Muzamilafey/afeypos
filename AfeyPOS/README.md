@@ -58,10 +58,10 @@ Open http://localhost:5173. In local mode you are asked to set up the business o
 - [Architecture](docs/ARCHITECTURE.md): modules, multi-tenancy, business profiles, data model
 - [Database](docs/DATABASE.md): replica set, transactions, indexes, migrations
 - [Windows installation](docs/INSTALL-WINDOWS.md) for shop owners
-- [Cloud deployment, DNS and HTTPS](docs/DEPLOYMENT-CLOUD.md)
+- [Head-office server online, DNS, HTTPS and branch servers](docs/DEPLOYMENT-HQ.md)
 - [M-Pesa (Daraja)](docs/MPESA.md), [Payment gateways](docs/PAYMENTS.md) (Paystack, Flutterwave, pawaPay, Airtel Money, Kopo Kopo, Hubtel, iPay, ZenoPay, Africa's Talking), [SMS and email](docs/NOTIFICATIONS.md)
 - [Hardware](docs/HARDWARE.md), [Fingerprint readers](docs/BIOMETRICS.md)
 - [Backups and recovery](docs/BACKUP.md), [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Security](docs/SECURITY.md), [Reports and definitions](docs/REPORTS.md), [Hybrid sync](docs/SYNC.md)
+- [Security](docs/SECURITY.md), [Reports and definitions](docs/REPORTS.md), [Branch ↔ head-office sync](docs/SYNC.md)
 - [API overview](docs/API.md), [Testing and results](docs/TESTING.md)
 - [Feature matrix](docs/FEATURE-MATRIX.md): what is implemented, tested, partial or unverified

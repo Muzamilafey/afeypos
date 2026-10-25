@@ -14,6 +14,7 @@ import { roundQty } from '@afeypos/shared';
 import { Product, SerialItem, StockBatch, StockLevel, StockMovement, type ProductDoc } from '../../models/index.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
 import { enqueue } from '../../jobs/queue.js';
+import { assertWarehouseOwned } from '../sync/ownership.js';
 
 export type MovementType = 'opening' | 'purchase_receipt' | 'sale' | 'sale_return' | 'supplier_return' | 'adjustment' | 'damage' | 'wastage' | 'expiry' | 'transfer_out' | 'transfer_in' | 'stocktake' | 'sync';
 
@@ -62,6 +63,7 @@ const SERIAL_OUT_STATUS: Partial<Record<MovementType, string>> = {
 };
 
 export async function applyMovement(input: MovementInput): Promise<MovementResult | null> {
+  await assertWarehouseOwned(input.warehouseId);
   const product = input.product ?? (await Product.findById(input.productId));
   if (!product) throw notFound('Product');
   if (product.type !== 'stock' || !product.trackStock) return null;
@@ -125,7 +127,7 @@ export async function applyMovement(input: MovementInput): Promise<MovementResul
     if (!allowNegative) filter.qty = { $gte: absQty };
     level = await StockLevel.findOneAndUpdate(
       filter,
-      [{ $set: { qty: { $round: [{ $subtract: [{ $ifNull: ['$qty', 0] }, absQty] }, 3] }, reserved: { $ifNull: ['$reserved', 0] }, inTransit: { $ifNull: ['$inTransit', 0] }, avgCostCents: { $ifNull: ['$avgCostCents', product.costCents ?? 0] }, lastMovementAt: now } }],
+      [{ $set: { qty: { $round: [{ $subtract: [{ $ifNull: ['$qty', 0] }, absQty] }, 3] }, reserved: { $ifNull: ['$reserved', 0] }, inTransit: { $ifNull: ['$inTransit', 0] }, avgCostCents: { $ifNull: ['$avgCostCents', product.costCents ?? 0] }, lastMovementAt: now, ...stamp(now) } }],
       { new: true, upsert: allowNegative },
     );
     if (!level) {
@@ -139,6 +141,7 @@ export async function applyMovement(input: MovementInput): Promise<MovementResul
       reserved: { $ifNull: ['$reserved', 0] },
       inTransit: { $ifNull: ['$inTransit', 0] },
       lastMovementAt: now,
+      ...stamp(now),
     };
     if (cost !== undefined && cost !== null) {
       set.avgCostCents = {
@@ -184,7 +187,7 @@ async function allocateBatchesOut(product: ProductDoc, input: MovementInput, abs
   if (input.batchNo) {
     const b = await StockBatch.findOneAndUpdate(
       { productId: product._id, warehouseId: input.warehouseId, batchNo: input.batchNo, qty: { $gte: absQty } },
-      [{ $set: { qty: { $round: [{ $subtract: ['$qty', absQty] }, 3] } } }],
+      [{ $set: { qty: { $round: [{ $subtract: ['$qty', absQty] }, 3] }, updatedAt: new Date() } }],
       { new: true },
     );
     if (!b) throw new AppError(422, 'INSUFFICIENT_BATCH', `Batch ${input.batchNo} of ${product.name} does not have ${absQty} available`);
@@ -200,7 +203,7 @@ async function allocateBatchesOut(product: ProductDoc, input: MovementInput, abs
   for (const b of candidates) {
     if (remaining <= 0) break;
     const take = roundQty(Math.min(b.qty, remaining));
-    const r = await StockBatch.updateOne({ _id: b._id, qty: { $gte: take } }, [{ $set: { qty: { $round: [{ $subtract: ['$qty', take] }, 3] } } }]);
+    const r = await StockBatch.updateOne({ _id: b._id, qty: { $gte: take } }, [{ $set: { qty: { $round: [{ $subtract: ['$qty', take] }, 3] }, updatedAt: new Date() } }]);
     if (r.modifiedCount !== 1) continue;
     allocations.push({ batchNo: b.batchNo, expiryDate: b.expiryDate, qty: take });
     remaining = roundQty(remaining - take);
@@ -213,17 +216,24 @@ async function allocateBatchesOut(product: ProductDoc, input: MovementInput, abs
 }
 
 export async function adjustInTransit(productId: Types.ObjectId, warehouseId: Types.ObjectId, delta: number) {
+  await assertWarehouseOwned(warehouseId);
   await StockLevel.findOneAndUpdate(
     { productId, warehouseId },
-    [{ $set: { inTransit: { $round: [{ $add: [{ $ifNull: ['$inTransit', 0] }, delta] }, 3] }, qty: { $ifNull: ['$qty', 0] }, reserved: { $ifNull: ['$reserved', 0] }, avgCostCents: { $ifNull: ['$avgCostCents', 0] } } }],
+    [{ $set: { inTransit: { $round: [{ $add: [{ $ifNull: ['$inTransit', 0] }, delta] }, 3] }, qty: { $ifNull: ['$qty', 0] }, reserved: { $ifNull: ['$reserved', 0] }, avgCostCents: { $ifNull: ['$avgCostCents', 0] }, ...stamp(new Date()) } }],
     { upsert: true },
   );
 }
 
 export async function adjustReserved(productId: Types.ObjectId, warehouseId: Types.ObjectId, delta: number) {
+  await assertWarehouseOwned(warehouseId);
   await StockLevel.findOneAndUpdate(
     { productId, warehouseId },
-    [{ $set: { reserved: { $max: [0, { $round: [{ $add: [{ $ifNull: ['$reserved', 0] }, delta] }, 3] }] }, qty: { $ifNull: ['$qty', 0] }, inTransit: { $ifNull: ['$inTransit', 0] }, avgCostCents: { $ifNull: ['$avgCostCents', 0] } } }],
+    [{ $set: { reserved: { $max: [0, { $round: [{ $add: [{ $ifNull: ['$reserved', 0] }, delta] }, 3] }] }, qty: { $ifNull: ['$qty', 0] }, inTransit: { $ifNull: ['$inTransit', 0] }, avgCostCents: { $ifNull: ['$avgCostCents', 0] }, ...stamp(new Date()) } }],
     { upsert: true },
   );
+}
+
+/** Pipeline updates bypass Mongoose timestamps; branch sync tracks changes by updatedAt, so set them here. */
+function stamp(now: Date) {
+  return { updatedAt: now, createdAt: { $ifNull: ['$createdAt', now] } };
 }

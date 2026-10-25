@@ -15,6 +15,7 @@ import { AdjustmentsPage, LabelsPage, MovementsPage, StockLevelsPage, Stocktakes
 import { PartiesPage, PartyDetailPage } from './pages/parties/Parties';
 import { AuditPage, ExpensesPage, MpesaPage, OnlinePaymentsPage, PromotionsPage, ReportsPage, RepairsPage } from './pages/Finance';
 import { AccountPage, BusinessSettingsPage, HardwarePage, IntegrationsPage, LocationsPage, UsersPage } from './pages/settings/Settings';
+import { SyncPage } from './pages/settings/Sync';
 
 function Protected({ children }: { children: ReactNode }) {
   const { me, loading } = useAuth();
@@ -70,6 +71,7 @@ export function App() {
         <Route path="settings" element={<Gate perm="settings.manage"><BusinessSettingsPage /></Gate>} />
         <Route path="settings/users" element={<Gate perm="users.manage"><UsersPage /></Gate>} />
         <Route path="settings/locations" element={<Gate perm="branches.manage"><LocationsPage /></Gate>} />
+        <Route path="settings/sync" element={<Gate perm="settings.manage"><SyncPage /></Gate>} />
         <Route path="settings/integrations" element={<Gate perm="integrations.manage"><IntegrationsPage /></Gate>} />
         <Route path="settings/hardware" element={<Gate perm="hardware.manage"><HardwarePage /></Gate>} />
         <Route path="account" element={<AccountPage />} />

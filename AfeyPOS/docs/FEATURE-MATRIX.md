@@ -10,11 +10,14 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Single-business installation (no SaaS tenants, sign-up, subdomains, plans or platform portal) | Tested | One-time setup page; refused once set up |
 | Business types: minimart and supermarket, driving modules, nav, fields, checkout, dashboards | Tested | Installs set up with a retired type run as a supermarket |
 | Owners enable/disable modules later without data loss | Tested | Pharmacy, liquor (age checks), serials etc. remain as optional modules |
-| Deployment roles: standalone, hq (online head office), branch (local DB) | Partial | Roles, config validation and setup rules done; branch ↔ HQ sync is the next phase |
+| Deployment roles: standalone, hq (online head office), branch (local DB) | Tested | |
+| Branch servers with their own database syncing to HQ (bootstrap, up/down/both directions, cursors, newest-wins, tombstones, health dashboard) | Tested | Two real branch processes in `sync.test.ts`; not tested over a real WAN |
+| Separate stock per branch, owned by its server; HQ ↔ branch and branch ↔ branch transfers with in-transit | Tested | |
+| Customer/supplier balances recomputed at HQ from ledgers; branch-prefixed document numbers | Tested | Concurrent offline credit at two branches can exceed a limit until sync |
 | Selling during internet outages (standalone / branch) | Implemented | No internet dependency except integrations |
 | Windows installer, upgrade, backup, restore, uninstall, status scripts | Not verified | Not executed on Windows |
 | Fail-closed data scoping (requests, jobs, files, sockets, callbacks) | Tested | |
-| HQ DNS/HTTPS | Not verified | Documented (Caddy/Nginx) |
+| HQ DNS/HTTPS | Not verified | Documented (DEPLOYMENT-HQ.md) |
 
 ## Inventory
 

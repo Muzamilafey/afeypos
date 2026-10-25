@@ -11,6 +11,7 @@ import { audit } from '../../lib/audit.js';
 import { applyMovement } from '../inventory/stock.js';
 import { quotePrice } from './pricing.js';
 import { parseCsv, toCsv } from '../../lib/csv.js';
+import { recordTombstone } from '../sync/hq.js';
 
 const router = Router();
 
@@ -234,7 +235,9 @@ router.put('/customer-prices', requirePermission('prices.manage'), requireModule
   res.json({ data: r });
 });
 router.delete('/customer-prices/:id', requirePermission('prices.manage'), requireModule('customerPricing'), async (req, res) => {
-  await CustomerPrice.deleteOne({ _id: idParam(req.params.id) });
+  const id = idParam(req.params.id);
+  await CustomerPrice.deleteOne({ _id: id });
+  await recordTombstone(CustomerPrice.collection.collectionName, id);
   res.json({ ok: true });
 });
 

@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { env } from '../config/env.js';
-import { PaymentIntent, Tenant } from '../models/index.js';
+import { PaymentIntent } from '../models/index.js';
 import { enqueue, registerJob } from './queue.js';
 import { runAsPlatform, runInTenant } from '../lib/context.js';
 import { logger } from '../lib/logger.js';
@@ -13,10 +13,6 @@ export async function scheduleRecurring(now = new Date()) {
   const minute = now.toISOString().slice(0, 16);
   await enqueue('mpesa.sweep', {}, { tenantId: null, dedupeKey: `mpesa.sweep:${minute.slice(0, 15)}` });
   await enqueue('tenants.dailyTasks', {}, { tenantId: null, dedupeKey: `daily-tasks:${minute.slice(0, 13)}` });
-  if (e.SYNC_ENABLED && e.DEPLOYMENT_MODE === 'branch') {
-    const tenant = await Tenant.findOne().sort({ createdAt: 1 }).lean();
-    if (tenant) await enqueue('sync.push', {}, { tenantId: tenant._id, dedupeKey: `sync.push:${minute}` });
-  }
   if (e.BACKUP_INTERVAL_HOURS > 0) {
     const bucket = Math.floor(now.getTime() / (e.BACKUP_INTERVAL_HOURS * 3600_000));
     await enqueue('backup.scheduled', {}, { tenantId: null, dedupeKey: `backup:${bucket}`, maxAttempts: 3 });

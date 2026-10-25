@@ -15,6 +15,7 @@ import { requirePermission, signShortToken } from '../../http/auth.js';
 import { decrypt, encrypt, hmacSha256, randomToken, safeEqual } from '../../lib/crypto.js';
 import { forbidden, notFound, unauthorized } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
+import { recordTombstone } from '../sync/hq.js';
 
 const router = Router();
 
@@ -59,7 +60,9 @@ router.post('/biometrics/enroll', requirePermission('biometrics.enroll'), async 
 });
 
 router.delete('/biometrics/templates/:userId', requirePermission('biometrics.enroll'), async (req, res) => {
+  const doomed = await BiometricTemplate.find({ userId: idParam(req.params.userId) }, { _id: 1 }).lean();
   const r = await BiometricTemplate.deleteMany({ userId: idParam(req.params.userId) });
+  for (const d of doomed) await recordTombstone(BiometricTemplate.collection.collectionName, d._id);
   await audit(req, { action: 'biometrics.templates_deleted', entity: 'User', entityId: req.params.userId, details: { count: r.deletedCount } });
   res.json({ ok: true, deleted: r.deletedCount });
 });

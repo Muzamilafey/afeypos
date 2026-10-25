@@ -223,7 +223,7 @@ export function LocationsPage() {
     <div className="max-w-5xl">
       <PageHeader title="Branches, stores & tills" actions={<><Button variant="secondary" onClick={() => { setF({}); setModal('branch'); }}>Add branch</Button><Button variant="secondary" onClick={() => { setF({ branchId: branches[0]?._id }); setModal('warehouse'); }}>Add store</Button><Button onClick={() => { setF({ branchId: branches[0]?._id, warehouseId: warehouses[0]?._id }); setModal('till'); }}>Add till</Button></>} />
       <div className="space-y-4">{branches.map((b) => (
-        <Card key={b._id} title={`${b.name} (${b.code})`}>
+        <Card key={b._id} title={`${b.name} (${b.code})`} actions={b.hasServer ? <Badge tone="blue">own server</Badge> : undefined}>
           <div className="grid gap-4 sm:grid-cols-2">
             <div><div className="label">Stock locations</div>{warehouses.filter((w) => w.branchId === b._id).map((w) => <div key={w._id} className="text-sm">{w.name} {w.isDefault && <Badge>default</Badge>}</div>)}</div>
             <div><div className="label">Tills</div>{tills.filter((t) => t.branchId === b._id).map((t) => <div key={t._id} className="flex items-center gap-2 text-sm">{t.name} ({t.code}) {!t.active && <Badge tone="red">inactive</Badge>}</div>)}</div>

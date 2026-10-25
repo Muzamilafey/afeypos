@@ -15,7 +15,6 @@ import { adjustReserved, applyMovement } from '../inventory/stock.js';
 import { quotePrice } from '../catalog/pricing.js';
 import { resolveUnit } from '../catalog/units.js';
 import { consumeOverride } from '../auth/routes.js';
-import { recordOutbox } from '../sync/outbox.js';
 
 export const PAYMENT_METHODS = ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'gateway', 'other'] as const;
 
@@ -382,6 +381,5 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     details: { number, totalCents, branch: branch?.code, overrides: authz.overrides.map((o) => o.action) },
     supervisorId: authz.overrides[0]?.supervisorId,
   });
-  await recordOutbox('sale', saleId, `sale:${input.clientRequestId}`, sale.toObject());
   return sale;
 }

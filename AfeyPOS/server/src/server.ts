@@ -7,6 +7,7 @@ import { attachRealtime, closeRealtime } from './realtime/socket.js';
 import { startWorker, stopWorker } from './jobs/queue.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { bootstrap } from './bootstrap.js';
+import { startBranchSync, stopBranchSync } from './modules/sync/branch.js';
 
 async function main() {
   const e = loadEnv();
@@ -19,12 +20,14 @@ async function main() {
     startWorker();
     startScheduler();
   }
+  startBranchSync();
   server.listen(e.PORT, e.HOST, () => logger.info({ port: e.PORT, host: e.HOST, mode: e.DEPLOYMENT_MODE }, 'Afey POS server listening'));
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down');
     stopScheduler();
     stopWorker();
+    stopBranchSync();
     closeRealtime();
     server.close();
     await disconnectDatabase();

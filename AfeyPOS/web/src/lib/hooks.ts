@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 
 export interface Locations {
-  branches: { _id: string; name: string; code: string; active: boolean }[];
+  branches: { _id: string; name: string; code: string; active: boolean; hasServer?: boolean }[];
   warehouses: { _id: string; name: string; code: string; branchId: string; isDefault: boolean }[];
   tills: { _id: string; name: string; code: string; branchId: string; warehouseId: string; active: boolean }[];
 }

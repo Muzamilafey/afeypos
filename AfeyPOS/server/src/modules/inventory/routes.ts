@@ -15,6 +15,7 @@ import { emitToTenant } from '../../realtime/socket.js';
 import { notify } from '../notifications/service.js';
 import { Tenant, User } from '../../models/index.js';
 import { runAsPlatform } from '../../lib/context.js';
+import { ownsWarehouse } from '../sync/ownership.js';
 
 const router = Router();
 
@@ -166,7 +167,8 @@ async function dispatchTransfer(req: any, tr: InstanceType<typeof StockTransfer>
   for (const l of tr.lines) {
     const mv = await applyMovement({ productId: l.productId, warehouseId: tr.fromWarehouseId, qty: -l.qty!, type: 'transfer_out', ref: { type: 'StockTransfer', id: tr._id, number: tr.number }, userId: req.auth.userId });
     l.unitCostCents = mv?.unitCostCents ?? 0;
-    await adjustInTransit(l.productId, tr.toWarehouseId, l.qty!);
+    // A destination on another server counts the goods as in transit when the transfer reaches it by sync.
+    if (await ownsWarehouse(tr.toWarehouseId)) await adjustInTransit(l.productId, tr.toWarehouseId, l.qty!);
   }
   tr.status = 'in_transit';
   tr.dispatchedBy = req.auth.userId;

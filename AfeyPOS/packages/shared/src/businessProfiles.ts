@@ -333,6 +333,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'settings', label: 'Settings', path: '/settings', icon: 'settings', permission: 'settings.manage', group: 'admin' },
   { key: 'users', label: 'Users', path: '/settings/users', icon: 'user', permission: 'users.manage', group: 'admin' },
   { key: 'locations', label: 'Branches & tills', path: '/settings/locations', icon: 'map', permission: 'branches.manage', group: 'admin' },
+  { key: 'sync', label: 'Branch sync', path: '/settings/sync', icon: 'refresh', module: 'multiBranch', permission: 'settings.manage', group: 'admin' },
   { key: 'integrations', label: 'Integrations', path: '/settings/integrations', icon: 'plug', permission: 'integrations.manage', group: 'admin' },
   { key: 'hardware', label: 'Hardware', path: '/settings/hardware', icon: 'printer', module: 'hardware', permission: 'hardware.manage', group: 'admin' },
 ];

@@ -9,6 +9,20 @@ const branchSchema = new Schema(
     phone: String,
     active: { type: Boolean, default: true },
     mpesaConfigId: { type: ObjectId, ref: 'IntegrationConfig' },
+    /**
+     * Set at head office when the branch runs its own server (own database, syncs with HQ). Stock in its
+     * warehouses can then only change on that server.
+     */
+    hasServer: { type: Boolean, default: false },
+    syncTokenHash: { type: String, select: false },
+    sync: {
+      lastSeenAt: Date,
+      lastPushAt: Date,
+      lastPullAt: Date,
+      pendingUp: Number,
+      lastError: String,
+      serverVersion: String,
+    },
   },
   { timestamps: true },
 );

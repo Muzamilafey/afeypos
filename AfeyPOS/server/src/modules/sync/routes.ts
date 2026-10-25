@@ -1,126 +1,95 @@
-/**
- * Optional hybrid synchronisation (local installation -> cloud tenant).
- *
- * Design: the local server is the authority for its own sales and stock. Every sale is written to a
- * durable outbox in the same transaction (stable ObjectIds + idempotency key). A background job pushes
- * pending entries; the cloud ingests each key exactly once (SyncInbox unique index). Stock in the cloud
- * is updated by applying movement *deltas*, never by overwriting quantities. Anything that cannot be
- * applied (unknown product, etc.) is recorded as a conflict for review instead of being guessed.
- */
+/** Settings screens for branch sync: tokens and branch health at head office; status and "sync now" on a branch. */
 import { Router } from 'express';
 import { z } from 'zod';
-import { Types } from 'mongoose';
-import { Product, Sale, SyncInbox, SyncOutbox, Tenant } from '../../models/index.js';
-import { parse } from '../../http/validate.js';
-import { requirePermission } from '../../http/auth.js';
-import { randomToken, safeEqual, sha256 } from '../../lib/crypto.js';
-import { unauthorized, forbidden } from '../../lib/errors.js';
-import { withTransaction } from '../../db/connection.js';
 import { env } from '../../config/env.js';
-import { runAsPlatform } from '../../lib/context.js';
-import { registerJob } from '../../jobs/queue.js';
-import { applyMovement } from '../inventory/stock.js';
-import { logger } from '../../lib/logger.js';
+import { Branch, SyncConflict, SyncCursor } from '../../models/index.js';
+import { idParam, parse } from '../../http/validate.js';
+import { requirePermission } from '../../http/auth.js';
+import { AppError, forbidden, notFound } from '../../lib/errors.js';
+import { randomToken, sha256 } from '../../lib/crypto.js';
 import { audit } from '../../lib/audit.js';
+import { invalidateOwnership } from './ownership.js';
+import { keyFingerprint } from './hq.js';
+import { resetCursors, syncOnce, syncState } from './branch.js';
 
-const itemSchema = z.object({ idempotencyKey: z.string().min(4).max(200), entity: z.enum(['sale', 'stock_movement', 'customer_payment']), payload: z.record(z.string(), z.any()) });
-
-export const syncIngestRoutes = Router();
-
-syncIngestRoutes.post('/ingest', async (req, res) => {
-  const tenant = req.tenant!;
-  const header = req.get('authorization') ?? '';
-  const token = header.startsWith('Sync ') ? header.slice(5) : '';
-  const t = await runAsPlatform(() => Tenant.findById(tenant._id).lean());
-  if (!t?.sync?.enabled || !t.sync.tokenHash || !token || !safeEqual(sha256(token), t.sync.tokenHash)) throw unauthorized('Invalid sync credentials');
-  const { items } = parse(z.object({ items: z.array(itemSchema).min(1).max(200) }), req.body);
-  const results = [];
-  for (const item of items) results.push({ idempotencyKey: item.idempotencyKey, ...(await ingestOne(item)) });
-  res.json({ data: results });
-});
-
-async function ingestOne(item: z.infer<typeof itemSchema>): Promise<{ outcome: 'applied' | 'duplicate' | 'conflict'; message?: string }> {
-  if (await SyncInbox.exists({ idempotencyKey: item.idempotencyKey })) return { outcome: 'duplicate' };
-  try {
-    return await withTransaction(async () => {
-      if (item.entity !== 'sale') {
-        await SyncInbox.create([{ idempotencyKey: item.idempotencyKey, entity: item.entity, outcome: 'conflict', message: 'Entity type not yet supported for ingest' }]);
-        return { outcome: 'conflict' as const, message: 'unsupported entity' };
-      }
-      const p = item.payload as any;
-      if (await Sale.exists({ $or: [{ _id: p._id }, { clientRequestId: p.clientRequestId }] })) {
-        await SyncInbox.create([{ idempotencyKey: item.idempotencyKey, entity: 'sale', outcome: 'duplicate' }]);
-        return { outcome: 'duplicate' as const };
-      }
-      const productIds = (p.lines ?? []).map((l: any) => l.productId);
-      const known = await Product.countDocuments({ _id: { $in: productIds } });
-      if (known !== new Set(productIds.map(String)).size) {
-        await SyncInbox.create([{ idempotencyKey: item.idempotencyKey, entity: 'sale', outcome: 'conflict', message: 'Sale references products unknown to the cloud' }]);
-        return { outcome: 'conflict' as const, message: 'unknown products' };
-      }
-      const { tenantId: _t, __v, createdAt: _c, updatedAt: _u, ...rest } = p;
-      const [sale] = await Sale.create([{ ...rest, _id: new Types.ObjectId(p._id), source: 'sync', sourceRef: item.idempotencyKey }]);
-      for (const l of sale.lines) {
-        // Mirror stock: apply the delta; the local server already enforced availability.
-        await applyMovement({ productId: l.productId, warehouseId: sale.warehouseId, qty: -(l.baseQty ?? 0), type: 'sync', ref: { type: 'Sale', id: sale._id, number: sale.number }, serials: l.serials ?? undefined, allowNegative: true, reason: 'Synced from local installation' });
-      }
-      await SyncInbox.create([{ idempotencyKey: item.idempotencyKey, entity: 'sale', outcome: 'applied' }]);
-      return { outcome: 'applied' as const };
-    });
-  } catch (err: any) {
-    if (err?.code === 11000) return { outcome: 'duplicate' };
-    logger.warn({ err: err?.message, key: item.idempotencyKey }, 'sync ingest conflict');
-    try {
-      await SyncInbox.create({ idempotencyKey: item.idempotencyKey, entity: item.entity, outcome: 'conflict', message: String(err?.message).slice(0, 300) });
-    } catch {
-      /* already recorded */
-    }
-    return { outcome: 'conflict', message: err?.message };
-  }
-}
-
-/** Tenant settings: enable sync and issue a sync token (shown once). Cloud side. */
 export const syncSettingsRoutes = Router();
-syncSettingsRoutes.post('/settings/sync/token', requirePermission('settings.manage'), async (req, res) => {
-  if (!req.auth!.roles.includes('tenant_owner')) throw forbidden('Only the owner can issue sync credentials');
+
+const ownerOnly = (req: any) => {
+  if (!req.auth!.roles.includes('tenant_owner') && !req.auth!.roles.includes('business_admin')) throw forbidden('Only owners and administrators can manage branch servers');
+};
+
+/** HQ: give a branch its own server. The token is shown once. */
+syncSettingsRoutes.post('/settings/branches/:id/sync-token', requirePermission('branches.manage'), async (req, res) => {
+  ownerOnly(req);
+  if (env().DEPLOYMENT_MODE !== 'hq') throw new AppError(409, 'NOT_HQ', 'Branch servers connect to a head-office server (DEPLOYMENT_MODE=hq)');
   const token = randomToken(32);
-  await runAsPlatform(() => Tenant.updateOne({ _id: req.tenant!._id }, { $set: { 'sync.tokenHash': sha256(token), 'sync.enabled': true } }));
-  await audit(req, { action: 'sync.token_issued' });
-  res.json({ data: { token, ingestUrl: `${env().API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/sync/ingest` } });
+  const b = await Branch.findOneAndUpdate({ _id: idParam(req.params.id) }, { $set: { hasServer: true, syncTokenHash: sha256(token) } }, { new: true });
+  if (!b) throw notFound('Branch');
+  invalidateOwnership();
+  await audit(req, { action: 'sync.branch_token_issued', entity: 'Branch', entityId: b._id, details: { code: b.code } });
+  res.json({
+    data: {
+      token,
+      env: { DEPLOYMENT_MODE: 'branch', BRANCH_CODE: b.code, SYNC_ENABLED: 'true', SYNC_HQ_URL: env().API_PUBLIC_URL.replace(/\/$/, ''), SYNC_TOKEN: token },
+      keyFingerprint: keyFingerprint(),
+      note: 'Copy these into the branch server .env together with the same ENCRYPTION_KEY as head office, then start it on an empty database.',
+    },
+  });
 });
+
+/** HQ: take the branch back to being run from head office (its server can no longer sync). */
+syncSettingsRoutes.delete('/settings/branches/:id/sync-token', requirePermission('branches.manage'), async (req, res) => {
+  ownerOnly(req);
+  const b = await Branch.findOneAndUpdate({ _id: idParam(req.params.id) }, { $set: { hasServer: false }, $unset: { syncTokenHash: 1 } }, { new: true });
+  if (!b) throw notFound('Branch');
+  invalidateOwnership();
+  await audit(req, { action: 'sync.branch_token_revoked', entity: 'Branch', entityId: b._id, details: { code: b.code } });
+  res.json({ data: { id: b._id, hasServer: false } });
+});
+
 syncSettingsRoutes.get('/settings/sync/status', requirePermission('settings.manage'), async (_req, res) => {
-  const counts = await SyncOutbox.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]);
-  const inbox = await SyncInbox.aggregate([{ $group: { _id: '$outcome', n: { $sum: 1 } } }]);
-  const conflicts = await SyncOutbox.find({ status: { $in: ['conflict', 'failed'] } }).sort({ updatedAt: -1 }).limit(50).lean();
-  res.json({ data: { enabled: env().SYNC_ENABLED, outbox: counts, inbox, conflicts } });
-});
-
-/** Local side: pushes pending outbox entries. Network errors leave entries pending for the next run. */
-registerJob('sync.push', async () => {
   const e = env();
-  if (!e.SYNC_ENABLED || !e.SYNC_CLOUD_URL || !e.SYNC_TOKEN) return;
-  const pending = await SyncOutbox.find({ status: { $in: ['pending', 'failed'] }, attempts: { $lt: 20 } }).sort({ createdAt: 1 }).limit(100);
-  if (!pending.length) return;
-  let resp: Response;
-  try {
-    resp = await fetch(`${e.SYNC_CLOUD_URL.replace(/\/$/, '')}/api/v1/sync/ingest`, {
-      method: 'POST',
-      headers: { Authorization: `Sync ${e.SYNC_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: pending.map((p) => ({ idempotencyKey: p.idempotencyKey, entity: p.entity, payload: p.payload })) }),
-      signal: AbortSignal.timeout(20000),
+  const conflicts = await SyncConflict.find({ resolved: false }).sort({ at: -1 }).limit(50).lean();
+  if (e.DEPLOYMENT_MODE === 'hq') {
+    const branches = await Branch.find({}).sort({ code: 1 }).lean();
+    const now = Date.now();
+    res.json({
+      data: {
+        role: 'hq',
+        keyFingerprint: keyFingerprint(),
+        branches: branches.map((b) => ({
+          id: b._id, code: b.code, name: b.name, hasServer: Boolean(b.hasServer), sync: b.sync ?? {},
+          online: Boolean(b.sync?.lastSeenAt && now - new Date(b.sync.lastSeenAt).getTime() < 2 * 60_000),
+        })),
+        conflicts,
+      },
     });
-  } catch (err: any) {
-    await SyncOutbox.updateMany({ _id: { $in: pending.map((p) => p._id) } }, { $inc: { attempts: 1 }, $set: { lastError: `offline: ${err?.message}` } });
     return;
   }
-  if (!resp.ok) {
-    await SyncOutbox.updateMany({ _id: { $in: pending.map((p) => p._id) } }, { $inc: { attempts: 1 }, $set: { status: 'failed', lastError: `HTTP ${resp.status}` } });
+  if (e.DEPLOYMENT_MODE === 'branch') {
+    const cursors = await SyncCursor.find({}).sort({ key: 1 }).lean();
+    res.json({ data: { role: 'branch', branchCode: e.BRANCH_CODE, hqUrl: e.SYNC_HQ_URL || e.SYNC_CLOUD_URL, enabled: e.SYNC_ENABLED, ...syncState(), cursors, conflicts } });
     return;
   }
-  const { data } = (await resp.json()) as { data: { idempotencyKey: string; outcome: string; message?: string }[] };
-  for (const r of data) {
-    await SyncOutbox.updateOne({ idempotencyKey: r.idempotencyKey }, { $set: { status: r.outcome === 'conflict' ? 'conflict' : 'sent', sentAt: new Date(), lastError: r.message }, $inc: { attempts: 1 } });
-  }
+  res.json({ data: { role: 'standalone' } });
 });
 
-export { ingestOne };
+/** Branch: sync now. */
+syncSettingsRoutes.post('/settings/sync/run', requirePermission('settings.manage'), async (_req, res) => {
+  if (env().DEPLOYMENT_MODE !== 'branch') throw new AppError(409, 'NOT_BRANCH', 'Only branch servers sync with head office');
+  res.json({ data: await syncOnce() });
+});
+
+/** Branch: resend or re-download everything (safe: records are applied newest-wins). */
+syncSettingsRoutes.post('/settings/sync/resync', requirePermission('settings.manage'), async (req, res) => {
+  ownerOnly(req);
+  const { scope } = parse(z.object({ scope: z.enum(['all', 'up', 'down']).default('all') }), req.body ?? {});
+  await resetCursors(scope);
+  await audit(req, { action: 'sync.resync', details: { scope } });
+  res.json({ data: { ok: true } });
+});
+
+syncSettingsRoutes.post('/settings/sync/conflicts/:id/resolve', requirePermission('settings.manage'), async (req, res) => {
+  await SyncConflict.updateOne({ _id: idParam(req.params.id) }, { $set: { resolved: true } });
+  res.json({ data: { ok: true } });
+});

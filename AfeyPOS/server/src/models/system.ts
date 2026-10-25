@@ -161,29 +161,38 @@ const attendanceSchema = new Schema(
 attendanceSchema.index({ tenantId: 1, userId: 1, at: -1 });
 export const AttendanceRecord = tenantModel('AttendanceRecord', attendanceSchema);
 
-const syncOutboxSchema = new Schema(
-  {
-    entity: { type: String, enum: ['sale', 'stock_movement', 'customer_payment'], required: true },
-    entityId: { type: ObjectId, required: true },
-    idempotencyKey: { type: String, required: true },
-    payload: Schema.Types.Mixed,
-    status: { type: String, enum: ['pending', 'sent', 'conflict', 'failed'], default: 'pending' },
-    attempts: { type: Number, default: 0 },
-    lastError: String,
-    sentAt: Date,
-  },
-  { timestamps: true },
-);
-syncOutboxSchema.index({ tenantId: 1, idempotencyKey: 1 }, { unique: true });
-syncOutboxSchema.index({ tenantId: 1, status: 1, createdAt: 1 });
-export const SyncOutbox = tenantModel('SyncOutbox', syncOutboxSchema);
+// ---------------- branch <-> head office sync bookkeeping (not business data, not synced) ----------------
 
-const syncInboxSchema = new Schema(
-  { idempotencyKey: { type: String, required: true }, entity: String, outcome: { type: String, enum: ['applied', 'duplicate', 'conflict'] }, message: String, receivedAt: { type: Date, default: () => new Date() } },
+/** Branch server: replication cursor per direction and collection ("up:sales", "down:products"). */
+const syncCursorSchema = new Schema(
+  { key: { type: String, required: true, unique: true }, t: { type: Date, default: () => new Date(0) }, id: { type: ObjectId, default: null }, updatedAt: Date },
   { timestamps: false },
 );
-syncInboxSchema.index({ tenantId: 1, idempotencyKey: 1 }, { unique: true });
-export const SyncInbox = tenantModel('SyncInbox', syncInboxSchema);
+export const SyncCursor = model('SyncCursor', syncCursorSchema);
+
+/** Records that could not be applied (ownership, unique-index clashes...) for an administrator to review. */
+const syncConflictSchema = new Schema(
+  {
+    side: { type: String, enum: ['hq', 'branch'], required: true },
+    branchCode: String,
+    collectionName: { type: String, required: true },
+    docId: ObjectId,
+    reason: { type: String, required: true },
+    resolved: { type: Boolean, default: false },
+    at: { type: Date, default: () => new Date() },
+  },
+  { timestamps: false },
+);
+syncConflictSchema.index({ resolved: 1, at: -1 });
+export const SyncConflict = model('SyncConflict', syncConflictSchema);
+
+/** Head office: deletions of replicated records, so branches delete them too. */
+const syncTombstoneSchema = new Schema(
+  { collectionName: { type: String, required: true }, docId: { type: ObjectId, required: true }, at: { type: Date, default: () => new Date() } },
+  { timestamps: false },
+);
+syncTombstoneSchema.index({ at: 1, _id: 1 });
+export const SyncTombstone = model('SyncTombstone', syncTombstoneSchema);
 
 const backupRecordSchema = new Schema(
   {

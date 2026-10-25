@@ -24,7 +24,8 @@
   - `db/`: connection with replica-set check, `withTransaction`, and the **tenant plugin**.
   - `http/`: business resolution, authentication, RBAC (`requirePermission`), module gates (`requireModule`), idempotency keys, error mapping.
   - `modules/*`: auth, tenants (setup and capabilities), catalog, inventory, sales (checkout, returns, shifts, documents), parties (customers/suppliers/ledger), purchasing, payments (M-Pesa, gateways), notifications, reports, settings, hardware, biometrics, backups, files, sync.
-  - `jobs/`: MongoDB-backed durable job queue, scheduler, per-tenant daily tasks.
+  - `jobs/`: MongoDB-backed durable job queue, scheduler, daily tasks.
+  - `modules/sync/`: branch ↔ head-office replication (see SYNC.md): specs of what syncs, HQ endpoints, the branch engine, stock ownership.
   - `integrations/`: Daraja client + simulator, SMS providers, SMTP.
   - `realtime/`: Socket.IO with per-business rooms.
 
