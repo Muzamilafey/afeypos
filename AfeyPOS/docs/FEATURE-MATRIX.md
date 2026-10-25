@@ -115,6 +115,17 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Salary payment by M-Pesa B2C (payouts approved and sent by a second person, payslips marked paid on Safaricom's result) | Tested with the simulator |
 | Leave (accrual, balance, approval), salary advances (approval, payment, recovery), attendance from card/fingerprint clocking | Tested |
 
+## Accounting and CRM
+
+| Feature | Status |
+|---|---|
+| Chart of accounts (Kenyan retail), automatic double-entry posting of sales, voids, returns, GRNs, supplier returns, payments, expenses, stock write-offs, opening balances, payroll, salary and advance payments, till cash in/out | Tested: books reconcile to stock valuation, receivables, payables, profit and tax reports on a full cycle |
+| Profit & loss, balance sheet, trial balance, VAT, general ledger, journals, CSV | Tested |
+| Manual journals, reversal, lock date, rebuild | Tested |
+| CRM insights (12-month tiers, recency/frequency segments, favourites), overview, at-risk list, birthdays | Tested |
+| Activities and follow-ups, tags, marketing consent and opt-out | Tested |
+| SMS/email campaigns to opted-in segments, birthday greetings | Tested with the console SMS provider |
+
 ## Reports, security, reliability
 
 | Feature | Status |

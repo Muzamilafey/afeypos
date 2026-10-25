@@ -6,18 +6,19 @@ import { useAuth } from '../../lib/auth';
 import { useList } from '../../lib/hooks';
 import { date, dateTime, money } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
-import { Button, Card, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, StatusBadge, useToast } from '../../components/ui';
+import { Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, StatusBadge, useToast } from '../../components/ui';
+import { CustomerCrmPanel } from '../crm/CRM';
 import { Icon } from '../../components/icons';
 
 function PartyForm({ kind, initial, onSaved, onClose }: { kind: 'customer' | 'supplier'; initial?: any; onSaved: () => void; onClose: () => void }) {
   const { me, can } = useAuth();
-  const [f, setF] = useState<any>(initial ?? { name: '', phone: '', email: '', taxPin: '', address: '', kind: 'retail', priceList: 'retail', creditLimitCents: 0, paymentTermsDays: 30 });
+  const [f, setF] = useState<any>(initial ? { ...initial, dateOfBirth: initial.dateOfBirth?.slice(0, 10) ?? '', tagsText: (initial.tags ?? []).join(', ') } : { name: '', phone: '', email: '', taxPin: '', address: '', kind: 'retail', priceList: 'retail', creditLimitCents: 0, paymentTermsDays: 30 });
   const [error, setError] = useState<unknown>(null);
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const save = async () => {
     try {
       const body: any = { name: f.name, phone: f.phone || undefined, email: f.email || undefined, taxPin: f.taxPin || undefined, address: f.address || undefined, paymentTermsDays: Number(f.paymentTermsDays) };
-      if (kind === 'customer') Object.assign(body, { kind: f.kind === 'walk_in' ? 'retail' : f.kind, priceList: f.priceList, creditLimitCents: f.creditLimitCents });
+      if (kind === 'customer') Object.assign(body, { kind: f.kind === 'walk_in' ? 'retail' : f.kind, priceList: f.priceList, creditLimitCents: f.creditLimitCents, dateOfBirth: f.dateOfBirth || undefined, tags: String(f.tagsText ?? '').split(',').map((x) => x.trim()).filter(Boolean), marketingOptIn: Boolean(f.marketingOptIn) });
       else body.contactPerson = f.contactPerson || undefined;
       const path = kind === 'customer' ? '/customers' : '/suppliers';
       if (initial?._id) await api(`${path}/${initial._id}`, { method: 'PATCH', body });
@@ -38,6 +39,9 @@ function PartyForm({ kind, initial, onSaved, onClose }: { kind: 'customer' | 'su
           <>
             <Field label="Customer type"><Select value={f.kind} onChange={set('kind')} options={['retail', 'wholesale', 'contractor', 'corporate'].map((x) => ({ value: x, label: x }))} /></Field>
             <Field label="Price list"><Select value={f.priceList} onChange={set('priceList')} options={me!.capabilities.priceLists.map((x) => ({ value: x, label: x }))} /></Field>
+            <Field label="Date of birth (for birthday greetings)"><Input type="date" value={f.dateOfBirth ?? ''} onChange={set('dateOfBirth')} /></Field>
+            <Field label="Tags" hint="Comma separated, e.g. hotel, estate A"><Input value={f.tagsText ?? ''} onChange={set('tagsText')} /></Field>
+            <div className="sm:col-span-2"><Checkbox label="Agrees to receive offers by SMS / email (ask the customer)" checked={Boolean(f.marketingOptIn)} onChange={(v) => setF({ ...f, marketingOptIn: v })} /></div>
             {me!.capabilities.modules.includes('customerCredit') && <Field label="Credit limit" hint={can('credit.approve') ? undefined : 'Requires credit approval permission'}><MoneyInput value={f.creditLimitCents} onChange={(v) => setF({ ...f, creditLimitCents: v ?? 0 })} disabled={!can('credit.approve')} /></Field>}
           </>
         )}
@@ -111,6 +115,7 @@ export function PartyDetailPage({ kind }: { kind: 'customer' | 'supplier' }) {
           <div className="grid grid-cols-5 gap-2 text-sm">{[['Current', ageing.current], ['1-30', ageing.d1_30], ['31-60', ageing.d31_60], ['61-90', ageing.d61_90], ['90+', ageing.d90plus]].map(([l, v]) => <div key={l as string}><div className="label">{l}</div>{money(v as number)}</div>)}</div>
         </Card>
       )}
+      {kind === 'customer' && has('crm') && <CustomerCrmPanel customerId={p._id} customer={p} />}
       <Card title="Account history" className="mt-4">
         <table className="min-w-full text-sm"><thead><tr><th className="th">Date</th><th className="th">Type</th><th className="th">Document</th><th className="th">Due</th><th className="th num">Amount</th><th className="th num">Balance</th></tr></thead>
           <tbody>{entries.map((e: any) => <tr key={e._id}><td className="td">{dateTime(e.at)}</td><td className="td">{e.kind.replace('_', ' ')}</td><td className="td">{e.ref?.number} {e.reference && !String(e.reference).startsWith('req:') ? e.reference : ''}</td><td className="td">{e.dueDate ? date(e.dueDate) : ''}</td><td className="td num">{money(e.amountCents)}</td><td className="td num">{money(e.balanceAfterCents)}</td></tr>)}</tbody></table>

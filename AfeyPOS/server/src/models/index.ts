@@ -9,3 +9,5 @@ export * from './sales.js';
 export * from './payments.js';
 export * from './system.js';
 export * from './hr.js';
+export * from './accounting.js';
+export * from './crm.js';

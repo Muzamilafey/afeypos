@@ -53,6 +53,7 @@ const settingsSchema = z.object({
       tagline: z.string().max(120),
       creditReminders: z.object({ enabled: z.boolean(), overdueDays: z.number().int().min(1).max(180) }).partial(),
       staffLogin: z.object({ cardRequiresPin: z.boolean() }).partial(),
+      crm: z.object({ tiers: z.array(z.object({ name: z.string().trim().min(1).max(30), minSpendCents: z.number().int().min(0) })).min(1).max(8), birthdayGreeting: z.object({ enabled: z.boolean(), channel: z.enum(['sms', 'email']), offer: z.string().max(200) }).partial() }).partial(),
       returns: z.object({ windowDays: z.number().int().min(0).max(365), approvalAboveCents: z.number().int().min(0), restockByDefault: z.boolean() }).partial(),
     })
     .partial(),

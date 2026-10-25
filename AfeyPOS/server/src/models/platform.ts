@@ -36,6 +36,13 @@ const tenantSettingsSchema = new Schema(
     dailyReportEmails: { type: [String], default: [] },
     creditReminders: { enabled: { type: Boolean, default: false }, overdueDays: { type: Number, default: 7 } },
     /** Staff sign-in with an employee card: require the PIN as well (recommended; a barcode can be copied). */
+    /** CRM: spend tiers over the last 12 months and the birthday greeting. */
+    crm: {
+      tiers: { type: [{ name: String, minSpendCents: Number, _id: false }], default: () => [{ name: 'Bronze', minSpendCents: 0 }, { name: 'Silver', minSpendCents: 2_000_000 }, { name: 'Gold', minSpendCents: 10_000_000 }, { name: 'Platinum', minSpendCents: 30_000_000 }] },
+      birthdayGreeting: { enabled: { type: Boolean, default: false }, channel: { type: String, enum: ['sms', 'email'], default: 'sms' }, offer: String },
+    },
+    /** Books closed up to this local date (YYYY-MM-DD): manual journals before it are refused. */
+    accounting: { lockDate: String },
     staffLogin: { cardRequiresPin: { type: Boolean, default: true } },
     /** Returns policy: older sales or bigger refunds need someone with returns.approve. */
     returns: {

@@ -11,6 +11,8 @@ import { SaleDetailPage, SalesPage, ShiftsPage } from './pages/sales/Sales';
 import { ReturnsPage } from './pages/sales/Returns';
 import { AttendancePage, EmployeeDetailPage, EmployeesPage, LeavePage, PayrollPage, PayrollRunPage } from './pages/hr/HR';
 import { PayoutsPage } from './pages/Payouts';
+import { AccountingPage, LedgerPage } from './pages/accounting/Accounting';
+import { CrmPage } from './pages/crm/CRM';
 import { PurchasingPage } from './pages/sales/Purchasing';
 import { DocumentsPage } from './pages/sales/Documents';
 import { ProductEditPage, ProductsPage } from './pages/inventory/Products';
@@ -72,6 +74,9 @@ export function App() {
         <Route path="expenses" element={<Gate perm="expenses.manage"><ExpensesPage /></Gate>} />
         <Route path="payments/mpesa" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaPage /></Gate>} />
         <Route path="payments/online" element={<Gate perm="payments.reconcile" module="payments"><OnlinePaymentsPage /></Gate>} />
+        <Route path="accounting" element={<Gate perm="accounting.read" module="accounting"><AccountingPage /></Gate>} />
+        <Route path="accounting/ledger/:code" element={<Gate perm="accounting.read" module="accounting"><LedgerPage /></Gate>} />
+        <Route path="crm" element={<Gate perm="customers.read" module="crm"><CrmPage /></Gate>} />
         <Route path="payments/payouts" element={<Gate perm="payouts.request" module="mpesa"><PayoutsPage /></Gate>} />
         <Route path="hr/employees" element={<Gate perm="hr.manage" module="hr"><EmployeesPage /></Gate>} />
         <Route path="hr/employees/:id" element={<Gate perm="hr.manage" module="hr"><EmployeeDetailPage /></Gate>} />

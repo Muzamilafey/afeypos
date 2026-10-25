@@ -174,3 +174,23 @@ describe('payroll', () => {
     expect((await t.client.post(`/hr/payroll/${runId}/cancel`, {})).body.error.code).toBe('PAYROLL_PAID');
   });
 });
+
+describe('payroll in the books', () => {
+  it('accrues salaries and statutory liabilities and clears net pay when salaries are paid', async () => {
+    await t.client.post('/accounting/post', {});
+    const tb = (await t.client.get('/accounting/trial-balance')).body;
+    expect(tb.balanced).toBe(true);
+    const accounts = (await t.client.get('/accounting/accounts')).body.data;
+    const b = (code: string) => accounts.find((a: any) => a.code === code)?.balanceCents ?? 0;
+    const run = (await t.client.get('/hr/payroll')).body.data.find((r: any) => r.period === PERIOD);
+    expect(b('6000')).toBe(run.totals.grossCents);
+    expect(b('2200')).toBe(run.totals.payeCents);
+    expect(b('2210')).toBe(run.totals.nssfCents + run.totals.nssfEmployerCents);
+    expect(b('2220')).toBe(run.totals.shifCents);
+    // Advance paid (10,000) less recovered (6,000).
+    expect(b('1400')).toBe(400_000);
+    // Everything paid; M-Pesa pays whole shillings, so only the cents remain owed.
+    expect(b('2250')).toBeGreaterThanOrEqual(0);
+    expect(b('2250')).toBeLessThan(100);
+  });
+});

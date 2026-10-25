@@ -20,10 +20,20 @@ const customerSchema = new Schema(
     salesRepId: { type: ObjectId, ref: 'User' },
     notes: String,
     active: { type: Boolean, default: true },
+    /** CRM: free tags ("hotel", "estate A"), who looks after the account, how they found us. */
+    tags: { type: [String], default: [] },
+    accountManagerId: ObjectId,
+    gender: { type: String, enum: ['female', 'male', 'other', null], default: null },
+    source: String,
+    /** Consent to marketing messages (Kenya Data Protection Act); receipts and statements do not need it. */
+    marketingOptIn: { type: Boolean, default: false },
+    marketingOptInAt: Date,
+    marketingOptOutAt: Date,
   },
   { timestamps: true },
 );
 customerSchema.index({ tenantId: 1, code: 1 }, { unique: true });
+customerSchema.index({ tenantId: 1, tags: 1 });
 customerSchema.index({ tenantId: 1, phone: 1 });
 customerSchema.index({ tenantId: 1, name: 'text', phone: 'text', email: 'text' });
 export const Customer = tenantModel('Customer', customerSchema);

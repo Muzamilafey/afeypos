@@ -11,7 +11,7 @@
  */
 import { Types, type Model } from 'mongoose';
 import {
-  AttendanceRecord, AuditLog, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
+  AttendanceRecord, AuditLog, CustomerActivity, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
   IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
   SalesDocument, SerialItem, Shift, StockAdjustment, StockBatch, StockLevel, StockMovement, Stocktake, StockTransfer, Supplier,
   SupplierReturn, Tenant, Till, User, Warehouse,
@@ -65,6 +65,7 @@ export const SYNC_SPECS: SyncSpec[] = [
   },
   { model: PurchaseOrder, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
   { model: BiometricTemplate, dir: 'both', field: 'updatedAt' },
+  { model: CustomerActivity, dir: 'both', field: 'updatedAt' },
 
   // ---- branch -> HQ ----
   { model: Shift, dir: 'up', field: 'updatedAt', owner: inBranch },

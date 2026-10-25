@@ -96,7 +96,9 @@ export async function processReturn(req: Request, saleId: Types.ObjectId, input:
       }
       line.returnedQty = roundQty((line.returnedQty ?? 0) + q);
       refund += refundCents;
-      lines.push({ lineId: line._id, productId: line.productId, name: line.name, qty: q, baseQty, refundCents, netCents: proportion(line.netCents ?? 0, q, line.qty ?? 1), taxCents: proportion(line.taxCents ?? 0, q, line.qty ?? 1), costCents: l.restock ? costCents : 0, restocked: l.restock, serials });
+      // Net is the refund less its tax, so net + tax always equals what is refunded.
+      const taxCents = proportion(line.taxCents ?? 0, q, line.qty ?? 1);
+      lines.push({ lineId: line._id, productId: line.productId, name: line.name, qty: q, baseQty, refundCents, netCents: refundCents - taxCents, taxCents, costCents: l.restock ? costCents : 0, restocked: l.restock, serials });
     }
 
     const approvalReasons = returnPolicy(req.tenant!.settings ?? undefined, sale.completedAt ?? sale.createdAt, refund);

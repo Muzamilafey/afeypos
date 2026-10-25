@@ -340,6 +340,8 @@ export const NAVIGATION: NavItem[] = [
   { key: 'payroll', label: 'Payroll', path: '/hr/payroll', icon: 'wallet', module: 'hr', permission: 'payroll.manage', group: 'people' },
   { key: 'leave', label: 'Leave & advances', path: '/hr/leave', icon: 'clock', module: 'hr', permission: 'hr.manage', group: 'people' },
   { key: 'attendance', label: 'Attendance', path: '/hr/attendance', icon: 'clipboard', module: 'hr', permission: 'hr.manage', group: 'people' },
+  { key: 'crm', label: 'CRM & campaigns', path: '/crm', icon: 'users', module: 'crm', permission: 'customers.read', group: 'parties' },
+  { key: 'accounting', label: 'Accounts', path: '/accounting', icon: 'doc', module: 'accounting', permission: 'accounting.read', group: 'finance' },
   { key: 'reports', label: 'Reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'finance' },
   { key: 'expenses', label: 'Expenses', path: '/expenses', icon: 'wallet', module: 'expenses', permission: 'expenses.manage', group: 'finance' },
   { key: 'mpesa', label: 'M-Pesa', path: '/payments/mpesa', icon: 'phone', module: 'mpesa', permission: 'payments.reconcile', group: 'finance' },

@@ -31,6 +31,11 @@ const customerSchema = z.object({
   salesRepId: objectId.nullish(),
   notes: z.string().max(1000).optional(),
   active: z.boolean().default(true),
+  tags: z.array(z.string().trim().toLowerCase().min(1).max(40)).max(20).optional(),
+  accountManagerId: objectId.nullish(),
+  gender: z.enum(['female', 'male', 'other']).nullish(),
+  source: z.string().trim().max(60).optional(),
+  marketingOptIn: z.boolean().optional(),
 });
 
 /** Ageing buckets of open debit entries relative to due date. */
@@ -58,7 +63,7 @@ export async function ageing(partyType: 'customer' | 'supplier', partyId?: Types
 
 // ---- customers ----
 router.get('/customers', requirePermission('customers.read'), requireModule('customers'), async (req, res) => {
-  const q = parse(pagination.extend({ withBalance: z.enum(['true']).optional(), kind: z.string().optional() }), req.query);
+  const q = parse(pagination.extend({ withBalance: z.enum(['true']).optional(), kind: z.string().optional(), tag: z.string().optional() }), req.query);
   const filter: Record<string, unknown> = {};
   if (q.q) {
     const rx = new RegExp(escapeRegex(q.q), 'i');
@@ -66,6 +71,7 @@ router.get('/customers', requirePermission('customers.read'), requireModule('cus
   }
   if (q.withBalance) filter.balanceCents = { $gt: 0 };
   if (q.kind) filter.kind = q.kind;
+  if (q.tag) filter.tags = q.tag.toLowerCase();
   const [data, total] = await Promise.all([Customer.find(filter).sort({ name: 1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), Customer.countDocuments(filter)]);
   res.json({ data, total, page: q.page, limit: q.limit });
 });
@@ -74,7 +80,7 @@ router.post('/customers', requirePermission('customers.manage'), requireModule('
   const body = parse(customerSchema, req.body);
   if (body.creditLimitCents > 0 && !req.auth!.permissions.has('credit.approve')) throw badRequest('Setting a credit limit requires credit approval permission');
   const code = body.code || (await nextNumber('customer', 'C', 5));
-  const c = await Customer.create({ ...body, code, email: body.email || undefined });
+  const c = await Customer.create({ ...body, code, email: body.email || undefined, ...(body.marketingOptIn ? { marketingOptInAt: new Date() } : {}) });
   await audit(req, { action: 'customer.created', entity: 'Customer', entityId: c._id });
   res.status(201).json({ data: c });
 });
@@ -97,7 +103,8 @@ router.patch('/customers/:id', requirePermission('customers.manage'), requireMod
   if (body.creditLimitCents !== undefined && body.creditLimitCents !== before.creditLimitCents && !req.auth!.permissions.has('credit.approve')) {
     throw badRequest('Changing a credit limit requires credit approval permission');
   }
-  const c = await Customer.findOneAndUpdate({ _id: id }, { $set: body }, { new: true });
+  const consent = body.marketingOptIn === true && !before.marketingOptIn ? { marketingOptInAt: new Date() } : body.marketingOptIn === false && before.marketingOptIn ? { marketingOptOutAt: new Date() } : {};
+  const c = await Customer.findOneAndUpdate({ _id: id }, { $set: { ...body, ...consent } }, { new: true });
   await audit(req, { action: 'customer.updated', entity: 'Customer', entityId: id, details: body.creditLimitCents !== undefined ? { creditLimitBefore: before.creditLimitCents, creditLimitAfter: body.creditLimitCents } : undefined });
   res.json({ data: c });
 });

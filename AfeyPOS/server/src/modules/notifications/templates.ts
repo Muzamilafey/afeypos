@@ -37,6 +37,14 @@ export const DEFAULT_TEMPLATES: Record<string, TemplateDef> = {
   scheduled_report: {
     email: { subject: '{{business}} - {{reportName}} ({{period}})', body: '{{reportText}}' },
   },
+  campaign: {
+    sms: '{{business}}: {{message}} Reply STOP to opt out.',
+    email: { subject: '{{subject}}', body: 'Hello {{customer}},\n\n{{message}}\n\n{{business}}\nTo stop these messages, reply "unsubscribe".' },
+  },
+  birthday: {
+    sms: 'Happy birthday {{customer}}! {{business}} wishes you a wonderful day. {{offer}}',
+    email: { subject: 'Happy birthday from {{business}}', body: 'Hello {{customer}},\n\nHappy birthday from all of us at {{business}}!\n\n{{offer}}' },
+  },
   test: {
     sms: 'Afey POS test message from {{business}}.',
     email: { subject: 'Afey POS test email', body: 'This is a test email from {{business}}. Your email integration works.' },

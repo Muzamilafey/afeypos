@@ -18,6 +18,7 @@ registerJob('tenants.dailyTasks', async () => {
     const hour = localHour(tz);
     await runInTenant(t._id, async () => {
       if (hour === 21 && t.settings?.dailyReportEmails?.length) await enqueue('reports.dailySummary', { day }, { dedupeKey: `daily-report:${t._id}:${day}` });
+      if (hour === 9 && t.settings?.crm?.birthdayGreeting?.enabled) await enqueue('crm.birthdays', { day, tenantId: String(t._id) }, { dedupeKey: `birthdays:${t._id}:${day}` });
       if (hour === 9 && t.settings?.creditReminders?.enabled) await enqueue('customers.creditReminders', { day }, { dedupeKey: `credit-reminders:${t._id}:${day}` });
     });
   }
