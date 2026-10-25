@@ -41,7 +41,7 @@ describe('crypto', () => {
     resetEnv();
     expect(() => loadEnv({ ...process.env, ENCRYPTION_KEY: 'c2hvcnQ=' })).toThrow(/32 bytes/);
     expect(() => loadEnv({ ...process.env, JWT_ACCESS_SECRET: 'short' })).toThrow(/JWT_ACCESS_SECRET/);
-    expect(() => loadEnv({ ...process.env, NODE_ENV: 'production', ALLOW_TENANT_HEADER: 'true' })).toThrow(/ALLOW_TENANT_HEADER/);
+    expect(() => loadEnv({ ...process.env, NODE_ENV: 'production', JWT_ACCESS_SECRET: 'change-me-to-a-long-random-secret-at-least-32-chars' })).toThrow(/placeholder/);
     resetEnv();
     loadEnv();
   });

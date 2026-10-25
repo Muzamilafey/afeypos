@@ -13,12 +13,11 @@ export async function scheduleRecurring(now = new Date()) {
   const minute = now.toISOString().slice(0, 16);
   await enqueue('mpesa.sweep', {}, { tenantId: null, dedupeKey: `mpesa.sweep:${minute.slice(0, 15)}` });
   await enqueue('tenants.dailyTasks', {}, { tenantId: null, dedupeKey: `daily-tasks:${minute.slice(0, 13)}` });
-  if (e.SYNC_ENABLED && e.DEPLOYMENT_MODE === 'local') {
+  if (e.SYNC_ENABLED && e.DEPLOYMENT_MODE === 'branch') {
     const tenant = await Tenant.findOne().sort({ createdAt: 1 }).lean();
     if (tenant) await enqueue('sync.push', {}, { tenantId: tenant._id, dedupeKey: `sync.push:${minute}` });
   }
-  if (e.DEPLOYMENT_MODE === 'cloud') await enqueue('tenants.billingCheck', {}, { tenantId: null, dedupeKey: `billing:${minute.slice(0, 13)}` });
-  if (e.DEPLOYMENT_MODE === 'local' && e.BACKUP_INTERVAL_HOURS > 0) {
+  if (e.BACKUP_INTERVAL_HOURS > 0) {
     const bucket = Math.floor(now.getTime() / (e.BACKUP_INTERVAL_HOURS * 3600_000));
     await enqueue('backup.scheduled', {}, { tenantId: null, dedupeKey: `backup:${bucket}`, maxAttempts: 3 });
   }
@@ -32,18 +31,6 @@ registerJob('mpesa.sweep', async () => {
     const job = (i.provider ?? 'mpesa') === 'mpesa' ? 'mpesa.checkIntent' : 'payments.checkIntent';
     await runInTenant(i.tenantId as Types.ObjectId, () => enqueue(job, { intentId: String(i._id), final: true }, { dedupeKey: `${job}:${i._id}:sweep` }));
   }
-});
-
-registerJob('tenants.billingCheck', async () => {
-  const now = new Date();
-  const trialExpired = await Tenant.updateMany({ status: 'trial', trialEndsAt: { $lt: now } }, { $set: { status: 'past_due' } });
-  const grace = new Date(now.getTime() - 7 * 86400_000);
-  const overdue = await Tenant.updateMany(
-    { status: 'past_due', $or: [{ currentPeriodEnd: { $lt: grace } }, { currentPeriodEnd: null, trialEndsAt: { $lt: grace } }] },
-    { $set: { status: 'suspended', suspendedReason: 'Subscription overdue' } },
-  );
-  const renewed = await Tenant.updateMany({ status: 'past_due', currentPeriodEnd: { $gt: now } }, { $set: { status: 'active' } });
-  if (trialExpired.modifiedCount || overdue.modifiedCount) logger.info({ trialExpired: trialExpired.modifiedCount, suspended: overdue.modifiedCount, renewed: renewed.modifiedCount }, 'billing check');
 });
 
 registerJob('backup.scheduled', async () => {

@@ -8,8 +8,8 @@ export class ApiError extends Error {
   }
 }
 
-type Scope = 'tenant' | 'platform';
-const tokens: Record<Scope, string | null> = { tenant: null, platform: null };
+type Scope = 'tenant';
+const tokens: Record<Scope, string | null> = { tenant: null };
 const refreshing: Partial<Record<Scope, Promise<boolean>>> = {};
 let onSessionExpired: ((scope: Scope) => void) | null = null;
 
@@ -23,14 +23,10 @@ export function onExpired(fn: (scope: Scope) => void) {
   onSessionExpired = fn;
 }
 
-/** Development helper: lets the Vite dev server target a cloud tenant (server must allow the X-Tenant header). */
-const devTenant = import.meta.env.VITE_DEV_TENANT as string | undefined;
-
 function headers(extra: Record<string, string> = {}, scope: Scope): Record<string, string> {
   const h: Record<string, string> = { Accept: 'application/json', ...extra };
   const t = tokens[scope];
   if (t) h.Authorization = `Bearer ${t}`;
-  if (devTenant) h['X-Tenant'] = devTenant;
   return h;
 }
 
@@ -38,7 +34,7 @@ async function refresh(scope: Scope): Promise<boolean> {
   if (!refreshing[scope]) {
     refreshing[scope] = (async () => {
       try {
-        const res = await fetch(scope === 'tenant' ? '/api/v1/auth/refresh' : '/api/v1/platform/auth/refresh', { method: 'POST', credentials: 'include', headers: headers({}, scope) });
+        const res = await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include', headers: headers({}, scope) });
         if (!res.ok) return false;
         const body = await res.json();
         tokens[scope] = body.accessToken;
@@ -64,7 +60,7 @@ export interface RequestOptions {
 
 export async function api<T = any>(path: string, opts: RequestOptions = {}): Promise<T> {
   const scope = opts.scope ?? 'tenant';
-  const base = scope === 'platform' ? '/api/v1/platform' : '/api/v1';
+  const base = '/api/v1';
   const qs = opts.query
     ? '?' + new URLSearchParams(Object.entries(opts.query).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => [k, String(v)])).toString()
     : '';

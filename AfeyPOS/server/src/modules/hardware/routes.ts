@@ -56,8 +56,8 @@ export function sendRaw(host: string, port: number, data: Buffer, timeoutMs = 50
 }
 
 function assertNetworkPrintingAllowed(host: string) {
-  // In the cloud, servers must not connect to arbitrary hosts on behalf of tenants (SSRF); print via the browser or the local bridge.
-  if (env().DEPLOYMENT_MODE === 'cloud') throw new AppError(400, 'USE_BRIDGE', 'Cloud installations print through the browser or the Afey device bridge on the till PC');
+  // The online HQ server must not connect to hosts on its own network on users' behalf (SSRF); print via the browser or the till's bridge.
+  if (env().DEPLOYMENT_MODE === 'hq') throw new AppError(400, 'USE_BRIDGE', 'The head-office server prints through the browser or the Afey device bridge on the till PC');
   if (!/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|localhost$)/.test(host)) throw badRequest('Network printers must be on the local network');
 }
 

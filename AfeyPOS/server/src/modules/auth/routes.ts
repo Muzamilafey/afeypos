@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import { navigationFor, type Permission } from '@afeypos/shared';
 import { Session, User, IdempotencyRecord } from '../../models/index.js';
 import { parse, idParam } from '../../http/validate.js';
-import { authenticate, denySupportWrites, signShortToken, verifyShortToken } from '../../http/auth.js';
+import { authenticate, signShortToken, verifyShortToken } from '../../http/auth.js';
 import { decrypt, encrypt, generateTotpSecret, hashPassword, verifyPassword, verifyTotp } from '../../lib/crypto.js';
 import { AppError, badRequest, forbidden, notFound, unauthorized } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
@@ -67,7 +67,7 @@ router.post('/pin-login', authLimiter, async (req, res) => {
 });
 
 router.post('/refresh', async (req, res) => {
-  const s = await rotateRefresh(req.cookies?.[REFRESH_COOKIE], 'tenant', req.tenant!._id);
+  const s = await rotateRefresh(req.cookies?.[REFRESH_COOKIE], req.tenant!._id);
   setRefreshCookie(res, REFRESH_COOKIE, s.refreshToken);
   res.json({ accessToken: s.accessToken, expiresIn: s.expiresIn });
 });
@@ -123,14 +123,14 @@ router.get('/me', async (req, res) => {
   const a = req.auth!;
   const t = req.tenant!;
   const caps = req.capabilities!;
-  let user: Record<string, unknown> = { id: a.userId, name: a.name, email: a.email, roles: a.roles, branchIds: a.branchIds, kind: a.kind };
-  if (a.kind === 'tenant') {
-    const u = await User.findById(a.userId).lean();
-    user = { ...user, twoFactorEnabled: Boolean(u?.twoFactor?.enabled), emailVerified: Boolean(u?.emailVerifiedAt), hasPin: Boolean(u?.pinHash), phone: u?.phone };
-  }
+  const u = await User.findById(a.userId).lean();
+  const user = {
+    id: a.userId, name: a.name, email: a.email, roles: a.roles, branchIds: a.branchIds, kind: a.kind,
+    twoFactorEnabled: Boolean(u?.twoFactor?.enabled), emailVerified: Boolean(u?.emailVerifiedAt), hasPin: Boolean(u?.pinHash), phone: u?.phone,
+  };
   res.json({
     user,
-    tenant: { id: t._id, name: t.name, slug: t.slug, businessType: t.businessType, status: t.status, planCode: t.planCode, trialEndsAt: t.trialEndsAt, settings: t.settings, enabledModules: t.enabledModules, disabledModules: t.disabledModules },
+    tenant: { id: t._id, name: t.name, slug: t.slug, businessType: caps.businessType, status: t.status, settings: t.settings, enabledModules: t.enabledModules, disabledModules: t.disabledModules },
     deploymentMode: env().DEPLOYMENT_MODE,
     capabilities: caps,
     permissions: [...a.permissions],
@@ -138,7 +138,6 @@ router.get('/me', async (req, res) => {
   });
 });
 
-router.use(denySupportWrites);
 
 router.get('/sessions', async (req, res) => {
   const rows = await Session.find({ userId: req.auth!.userId, tenantId: req.tenant!._id, revokedAt: null, expiresAt: { $gt: new Date() } }).sort({ lastUsedAt: -1 }).lean();
@@ -219,7 +218,7 @@ router.post('/email/resend', async (req, res) => {
     return;
   }
   const token = await createAuthToken('email_verify', 'tenant', u._id, req.tenant!._id, 24 * 60);
-  await notify({ channel: 'email', to: u.email, templateKey: 'email_verify', data: { name: u.name, link: `${tenantAppUrl(req.tenant!.slug)}/verify-email?token=${token}` } });
+  await notify({ channel: 'email', to: u.email, templateKey: 'email_verify', data: { name: u.name, link: `${appUrl()}/verify-email?token=${token}` } });
   res.json({ ok: true });
 });
 
@@ -233,7 +232,7 @@ recoveryRoutes.post('/password/forgot', authLimiter, async (req, res) => {
   const u = await User.findOne({ email: body.email, status: 'active' });
   if (u) {
     const token = await createAuthToken('password_reset', 'tenant', u._id, req.tenant!._id, 30);
-    await notify({ channel: 'email', to: u.email, templateKey: 'password_reset', data: { name: u.name, link: `${tenantAppUrl(req.tenant!.slug)}/reset-password?token=${token}` } });
+    await notify({ channel: 'email', to: u.email, templateKey: 'password_reset', data: { name: u.name, link: `${appUrl()}/reset-password?token=${token}` } });
     await audit(req, { action: 'auth.password_reset_requested', entity: 'User', entityId: u._id });
   }
   // Same response whether or not the account exists.
@@ -261,12 +260,9 @@ recoveryRoutes.post('/email/verify', async (req, res) => {
   res.json({ ok: true });
 });
 
-export function tenantAppUrl(slug: string): string {
-  const e = env();
-  if (e.DEPLOYMENT_MODE === 'local') return e.PUBLIC_APP_URL;
-  const u = new URL(e.PUBLIC_APP_URL);
-  if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') return e.PUBLIC_APP_URL;
-  return `${u.protocol}//${slug}.${e.BASE_DOMAIN}`;
+/** Address of the web app, used in emailed links. */
+export function appUrl(): string {
+  return env().PUBLIC_APP_URL.replace(/\/$/, '');
 }
 
 /** Validates a manager override token for a permission and consumes it (single use). */

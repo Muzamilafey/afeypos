@@ -96,7 +96,7 @@ export function BusinessSettingsPage() {
       )}
       {tab === 'modules' && (
         <Card>
-          <p className="mb-3 text-sm text-ink-500">Your business type sets sensible defaults. Turn modules on or off at any time; data is never deleted. {me!.deploymentMode === 'cloud' && 'Some modules depend on your plan.'}</p>
+          <p className="mb-3 text-sm text-ink-500">Your business type sets sensible defaults. Turn modules on or off at any time; data is never deleted.</p>
           <div className="grid gap-2 sm:grid-cols-2">
             {MODULES.map((m) => (
               <label key={m} className="flex items-start gap-3 rounded-lg border border-ink-200 p-3 dark:border-ink-700">
@@ -132,32 +132,19 @@ function WorkstationSettings() {
 function DataSettings() {
   const { me } = useAuth();
   const toast = useToast();
-  const qc = useQueryClient();
   const backups = useQuery({ queryKey: ['backups'], queryFn: () => api<{ data: any[] }>('/backups').then((r) => r.data) });
-  const grants = useQuery({ queryKey: ['support-grants'], queryFn: () => api<{ data: any[] }>('/settings/support-access').then((r) => r.data) });
   const [busy, setBusy] = useState(false);
-  const decide = (id: string, d: string) => api(`/settings/support-access/${id}/${d}`, { body: {} }).then(() => qc.invalidateQueries({ queryKey: ['support-grants'] })).catch(toast.error);
   return (
     <div className="space-y-4">
-      <Card title={me!.deploymentMode === 'local' ? 'Backups of this installation' : 'Export your data'} actions={<Button size="sm" loading={busy} onClick={async () => { setBusy(true); try { await api('/backups', { body: {} }); backups.refetch(); toast.success('Backup created'); } catch (e) { toast.error(e); } finally { setBusy(false); } }}>Back up now</Button>}>
+      <Card title="Backups of this installation" actions={<Button size="sm" loading={busy} onClick={async () => { setBusy(true); try { await api('/backups', { body: {} }); backups.refetch(); toast.success('Backup created'); } catch (e) { toast.error(e); } finally { setBusy(false); } }}>Back up now</Button>}>
         <DataTable rows={backups.data} loading={backups.isLoading} empty="No backups yet" columns={[
           { key: 'd', header: 'Started', render: (r: any) => dateTime(r.startedAt) }, { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
           { key: 'n', header: 'Records', className: 'num', render: (r: any) => r.documents ?? '' }, { key: 'z', header: 'Size', className: 'num', render: (r: any) => (r.sizeBytes ? `${(r.sizeBytes / 1024 / 1024).toFixed(2)} MB` : '') },
           { key: 'h', header: 'SHA-256', render: (r: any) => <code className="text-[10px]">{r.sha256?.slice(0, 16)}</code> },
           { key: 'a', header: '', render: (r: any) => r.status === 'completed' && <Button size="sm" variant="secondary" onClick={() => download(`/backups/${r._id}/download`, `afeypos-backup-${r._id}.ndjson.gz`)}>Download</Button> },
         ]} />
-        {me!.deploymentMode === 'local' && <p className="mt-2 text-xs text-ink-500">Automatic backups run on the schedule set in the server configuration. Copy backups to an external drive or cloud storage regularly. See docs/BACKUP.md for restoring.</p>}
+        <p className="mt-2 text-xs text-ink-500">Automatic backups run on the schedule set in the server configuration{me!.deploymentMode === 'branch' ? '; this branch also syncs to head office' : ''}. Copy backups to an external drive or cloud storage regularly. See docs/BACKUP.md for restoring.</p>
       </Card>
-      {me!.deploymentMode === 'cloud' && (
-        <Card title="Afey support access requests">
-          <p className="mb-2 text-sm text-ink-500">Support staff can only see your data after you approve a time-limited, read-only request. Every access is recorded in your audit trail.</p>
-          <DataTable rows={grants.data} empty="No requests" columns={[
-            { key: 'd', header: 'Requested', render: (r: any) => dateTime(r.createdAt) }, { key: 'r', header: 'Reason', render: (r: any) => r.reason }, { key: 'm', header: 'Duration', render: (r: any) => `${r.durationMinutes} min` },
-            { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
-            { key: 'a', header: '', render: (r: any) => r.status === 'pending' ? <div className="flex gap-1"><Button size="sm" onClick={() => decide(r._id, 'approve')}>Approve</Button><Button size="sm" variant="secondary" onClick={() => decide(r._id, 'reject')}>Reject</Button></div> : r.status === 'approved' ? <Button size="sm" variant="danger" onClick={() => decide(r._id, 'revoke')}>Revoke</Button> : null },
-          ]} />
-        </Card>
-      )}
     </div>
   );
 }

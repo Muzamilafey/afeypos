@@ -1,7 +1,5 @@
 import type { Request } from 'express';
-import { AuditLog, PlatformAuditLog } from '../models/index.js';
-import { currentContext } from './context.js';
-import { logger } from './logger.js';
+import { AuditLog } from '../models/index.js';
 
 export interface AuditInput {
   action: string;
@@ -18,19 +16,9 @@ export async function audit(req: Request | null, input: AuditInput): Promise<voi
     action: input.action,
     entity: input.entity,
     entityId: input.entityId ? String(input.entityId) : undefined,
-    actor: a ? { kind: a.kind === 'tenant' ? 'user' : a.kind, id: a.userId, name: a.name } : { kind: 'system', name: 'system' },
+    actor: a ? { kind: 'user', id: a.userId, name: a.name } : { kind: 'system', name: 'system' },
     supervisorId: input.supervisorId,
-    supportGrantId: a?.supportGrantId,
     ip: req?.ip,
     details: input.details,
   });
-}
-
-export async function platformAudit(req: Request | null, action: string, details: Record<string, unknown> = {}, tenantId?: unknown) {
-  const a = req?.auth;
-  try {
-    await PlatformAuditLog.create({ action, tenantId, actor: a ? { kind: a.kind, id: a.userId, name: a.name } : { kind: 'system' }, ip: req?.ip, details });
-  } catch (err) {
-    logger.error({ err, action, requestId: currentContext()?.requestId }, 'failed to write platform audit log');
-  }
 }

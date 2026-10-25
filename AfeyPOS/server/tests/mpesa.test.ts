@@ -9,7 +9,6 @@ import { Job } from '../src/models/index.js';
 
 let ctx: Ctx;
 let t: Awaited<ReturnType<typeof registerTenant>>;
-let other: Awaited<ReturnType<typeof registerTenant>>;
 let till: string;
 let wh: string;
 let callbackBase: string;
@@ -17,14 +16,13 @@ let callbackBase: string;
 beforeAll(async () => {
   ctx = await setupApp();
   t = await registerTenant(ctx.api, 'paysafe', 'minimart');
-  other = await registerTenant(ctx.api, 'otherpay', 'minimart');
   till = t.locations.tills[0]._id;
   wh = t.locations.warehouses[0]._id;
   const cfg = await t.client.post('/settings/integrations', { kind: 'mpesa', provider: 'mock', name: 'Till sim', settings: { shortCode: '174379', type: 'paybill' }, secrets: { consumerKey: 'k', consumerSecret: 's', passkey: 'p' } });
   expect(cfg.status).toBe(201);
   expect(cfg.body.data.secretsSet).toEqual(['consumerKey', 'consumerSecret', 'passkey']);
   expect(JSON.stringify(cfg.body)).not.toContain('"s"');
-  const tenant = await runAsPlatform(() => Tenant.findOne({ slug: 'paysafe' }).lean());
+  const tenant = await runAsPlatform(() => Tenant.findOne().lean());
   callbackBase = `/api/v1/hooks/pay/${tenant!._id}/${tenant!.callbackToken}`;
   await openShift(t.client, till);
 });
@@ -98,15 +96,14 @@ describe('STK push lifecycle', () => {
     expect((await t.client.get(`/payments/intents/${c.id}`)).body.data.status).toBe('cancelled');
   });
 
-  it('ignores callbacks with a wrong secret or for another tenant', async () => {
+  it('ignores callbacks with a wrong secret or an unknown business id', async () => {
     const i = await stk(2000);
     const bad = await callback(buildStkCallback(i.checkoutRequestId, 'm', 0, 20, '254712345678', 'FAKE001'), callbackBase.replace(/[^/]+$/, 'wrongtoken'));
     expect(bad.body.ResultCode).toBe(0);
     expect((await t.client.get(`/payments/intents/${i.id}`)).body.data.status).toBe('pending');
-    const o = await runAsPlatform(() => Tenant.findOne({ slug: 'otherpay' }).lean());
-    await callback(buildStkCallback(i.checkoutRequestId, 'm', 0, 20, '254712345678', 'FAKE002'), `/api/v1/hooks/pay/${o!._id}/${o!.callbackToken}`);
+    const tenant = await runAsPlatform(() => Tenant.findOne().lean());
+    await callback(buildStkCallback(i.checkoutRequestId, 'm', 0, 20, '254712345678', 'FAKE002'), `/api/v1/hooks/pay/${'0'.repeat(24)}/${tenant!.callbackToken}`);
     expect((await t.client.get(`/payments/intents/${i.id}`)).body.data.status).toBe('pending');
-    expect((await other.client.get(`/payments/intents/${i.id}`)).status).toBe(404);
   });
 
   it('expires pending intents through the status-check job when no callback arrives', async () => {

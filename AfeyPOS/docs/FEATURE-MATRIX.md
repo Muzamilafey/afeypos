@@ -2,24 +2,19 @@
 
 Legend: **Tested** = implemented with automated tests · **Implemented** = working code, exercised manually or indirectly, no dedicated test · **Partial** = some of the requirement · **Not verified** = code exists but needs credentials/hardware/OS not available here · **Not implemented**.
 
-## Platform and deployment
+## Edition and deployment
 
 | Feature | Status | Notes |
 |---|---|---|
 | Monorepo: React+Vite+TS web, Node+Express+TS API, MongoDB/Mongoose, Zod, REST /api/v1, Socket.IO | Tested | |
-| Business-type onboarding (11 types) driving modules, nav, fields, checkout, dashboards | Tested | `packages/shared/src/businessProfiles.ts` |
-| Bookshop & stationery: ISBN-10/13 (stored as ISBN-13, auto-added as scannable barcode), author, publisher, edition, year, language, format, condition (new/second-hand), class/grade, subject; search by title/author/publisher/ISBN/grade; school accounts, quotations, invoices, special orders (sales orders), school prices, loyalty | Tested | No school book-list import or bulk "book list → quotation" tool yet |
-| Owners enable/disable modules later without data loss | Tested | |
-| Local single-tenant mode (setup once, LAN tills, one database) | Tested | |
-| Selling during internet outages (local) | Implemented | No internet dependency except integrations |
+| Single-business installation (no SaaS tenants, sign-up, subdomains, plans or platform portal) | Tested | One-time setup page; refused once set up |
+| Business types: minimart and supermarket, driving modules, nav, fields, checkout, dashboards | Tested | Installs set up with a retired type run as a supermarket |
+| Owners enable/disable modules later without data loss | Tested | Pharmacy, liquor (age checks), serials etc. remain as optional modules |
+| Deployment roles: standalone, hq (online head office), branch (local DB) | Partial | Roles, config validation and setup rules done; branch ↔ HQ sync is the next phase |
+| Selling during internet outages (standalone / branch) | Implemented | No internet dependency except integrations |
 | Windows installer, upgrade, backup, restore, uninstall, status scripts | Not verified | Not executed on Windows |
-| Cloud multi-tenant: subdomains, custom domains, registration, provisioning | Tested | |
-| Server-enforced tenant isolation (requests, jobs, files, sockets, callbacks) | Tested | Sockets: implemented, room scoping not separately tested |
-| Plans, entitlements, limits (users/branches/tills/SMS) | Tested | entitlements + SMS quota tested; user/branch/till limits implemented |
-| Trials, past due, suspension, reactivation | Tested | billing job implemented; manual "paid until" (no payment gateway) |
-| Platform portal: tenants, plans, support access, health, jobs, notifications, audit, backups | Tested (API) | UI implemented, not e2e-tested |
-| Cloud DNS/HTTPS | Not verified | Documented (Caddy/Nginx, wildcard DNS-01) |
-| Hybrid sync local → cloud | Partial | Sales outbox + idempotent ingest tested; other entities, cloud→local not implemented |
+| Fail-closed data scoping (requests, jobs, files, sockets, callbacks) | Tested | |
+| HQ DNS/HTTPS | Not verified | Documented (Caddy/Nginx) |
 
 ## Inventory
 

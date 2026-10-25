@@ -10,9 +10,8 @@ const auditSchema = new Schema(
     action: { type: String, required: true },
     entity: String,
     entityId: String,
-    actor: { kind: { type: String, enum: ['user', 'platform', 'support', 'system', 'device'] }, id: ObjectId, name: String },
+    actor: { kind: { type: String, enum: ['user', 'system', 'device', 'sync'] }, id: ObjectId, name: String },
     supervisorId: ObjectId,
-    supportGrantId: ObjectId,
     ip: String,
     details: Schema.Types.Mixed,
     at: { type: Date, default: () => new Date() },
@@ -22,20 +21,6 @@ const auditSchema = new Schema(
 auditSchema.index({ tenantId: 1, at: -1 });
 auditSchema.index({ tenantId: 1, entity: 1, entityId: 1 });
 export const AuditLog = tenantModel('AuditLog', auditSchema);
-
-const platformAuditSchema = new Schema(
-  {
-    action: { type: String, required: true },
-    tenantId: ObjectId,
-    actor: { kind: String, id: ObjectId, name: String },
-    ip: String,
-    details: Schema.Types.Mixed,
-    at: { type: Date, default: () => new Date() },
-  },
-  { timestamps: false },
-);
-platformAuditSchema.index({ at: -1 });
-export const PlatformAuditLog = model('PlatformAuditLog', platformAuditSchema);
 
 const idempotencySchema = new Schema(
   {

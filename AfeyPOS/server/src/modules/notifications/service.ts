@@ -1,14 +1,13 @@
 import { Types } from 'mongoose';
-import { NotificationLog, NotificationTemplate, Tenant } from '../../models/index.js';
+import { NotificationLog, NotificationTemplate } from '../../models/index.js';
 import { enqueue, registerJob } from '../../jobs/queue.js';
-import { currentContext, runAsPlatform } from '../../lib/context.js';
+import { currentContext } from '../../lib/context.js';
 import { env } from '../../config/env.js';
 import { normalizePhone } from '../../lib/phone.js';
 import { createSmsProvider, type SmsProvider } from '../../integrations/sms/index.js';
 import { ConsoleEmailProvider, createEmailProvider, SmtpProvider, type EmailProvider } from '../../integrations/email/index.js';
 import { IntegrationError } from '../../integrations/http.js';
 import { findActiveConfig, openSecrets } from '../integrations/configs.js';
-import { getPlan } from '../tenants/plans.js';
 import { DEFAULT_TEMPLATES, render } from './templates.js';
 
 export interface NotifyInput {
@@ -78,20 +77,6 @@ export async function providerFor(channel: 'sms' | 'email'): Promise<SmsProvider
   return null;
 }
 
-/** Atomically consumes one SMS from the tenant's monthly allowance. */
-async function consumeSmsQuota(tenantId: Types.ObjectId): Promise<boolean> {
-  if (env().DEPLOYMENT_MODE !== 'cloud') return true;
-  const month = new Date().toISOString().slice(0, 7);
-  return runAsPlatform(async () => {
-    const tenant = await Tenant.findById(tenantId).lean();
-    if (!tenant) return false;
-    const limit = (await getPlan(tenant.planCode))?.limits.smsPerMonth ?? 0;
-    await Tenant.updateOne({ _id: tenantId, 'usage.smsMonth': { $ne: month } }, { $set: { 'usage.smsMonth': month, 'usage.smsCount': 0 } });
-    const r = await Tenant.updateOne({ _id: tenantId, 'usage.smsMonth': month, 'usage.smsCount': { $lt: limit } }, { $inc: { 'usage.smsCount': 1 } });
-    return r.modifiedCount === 1;
-  });
-}
-
 // Simple per-tenant rate limiter for outbound messages (per process).
 const buckets = new Map<string, { tokens: number; at: number }>();
 function takeToken(key: string, perMinute = 60): boolean {
@@ -120,12 +105,6 @@ registerJob('notification.send', async ({ logId }: { logId: string }, job) => {
     return;
   }
   if (!takeToken(`${job.tenantId ?? 'platform'}:${log.channel}`)) throw new Error('Rate limited; will retry');
-  if (log.channel === 'sms' && job.tenantId && job.attempts === 1 && !(await consumeSmsQuota(job.tenantId))) {
-    log.status = 'skipped';
-    log.error = 'Monthly SMS allowance exhausted';
-    await log.save();
-    return;
-  }
   try {
     const result =
       log.channel === 'sms'

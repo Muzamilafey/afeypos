@@ -9,7 +9,7 @@ const userSchema = new Schema(
     phone: String,
     passwordHash: { type: String, required: true },
     pinHash: String,
-    roles: { type: [String], enum: ROLES.filter((r) => !r.startsWith('platform_')), required: true },
+    roles: { type: [String], enum: ROLES, required: true },
     /** Branches this user may operate in. Empty = all branches. */
     branchIds: { type: [ObjectId], ref: 'Branch', default: [] },
     status: { type: String, enum: ['active', 'disabled'], default: 'active' },
@@ -30,7 +30,7 @@ export const User = tenantModel('User', userSchema);
 const sessionSchema = new Schema(
   {
     userId: { type: ObjectId, required: true, index: true },
-    userType: { type: String, enum: ['tenant', 'platform', 'support'], required: true },
+    userType: { type: String, enum: ['tenant'], required: true },
     tenantId: { type: ObjectId, index: true },
     refreshHash: { type: String, required: true },
     previousHash: String,
@@ -40,7 +40,6 @@ const sessionSchema = new Schema(
     ip: String,
     userAgent: String,
     lastUsedAt: Date,
-    supportGrantId: ObjectId,
   },
   { timestamps: true },
 );
@@ -51,7 +50,7 @@ const authTokenSchema = new Schema(
   {
     purpose: { type: String, enum: ['password_reset', 'email_verify'], required: true },
     userId: { type: ObjectId, required: true },
-    userType: { type: String, enum: ['tenant', 'platform'], required: true },
+    userType: { type: String, enum: ['tenant'], required: true },
     tenantId: ObjectId,
     tokenHash: { type: String, required: true, unique: true },
     expiresAt: { type: Date, required: true },

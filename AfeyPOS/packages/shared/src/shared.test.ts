@@ -3,7 +3,6 @@ import {
   allocateProportionally, calculateTax, lineAmount, toCents, roundQty,
   ean13CheckDigit, isValidEan13, parseVariableWeightBarcode, DEFAULT_VARIABLE_WEIGHT_CONFIG, normalizeIsbn, isbn13To10,
   resolveCapabilities, BUSINESS_TYPES, BUSINESS_PROFILES, navigationFor, permissionsForRoles, hasPermission,
-  subdomainFromHost, validateSubdomain,
 } from './index.js';
 
 describe('money', () => {
@@ -51,12 +50,14 @@ describe('business profiles', () => {
       expect(BUSINESS_PROFILES[t].modules).toContain('inventory');
     }
   });
-  it('bookshop gets book fields, school accounts and special orders', () => {
-    const c = resolveCapabilities({ businessType: 'bookshop' });
-    expect(c.productFields).toEqual(expect.arrayContaining(['isbn', 'author', 'publisher', 'edition', 'bookCondition', 'gradeLevel']));
-    expect(c.modules).toEqual(expect.arrayContaining(['customerCredit', 'quotations', 'salesOrders', 'invoices', 'loyalty']));
-    expect(c.priceLists).toContain('wholesale');
-    expect(resolveCapabilities({ businessType: 'minimart' }).productFields).not.toContain('isbn');
+  it('supports only minimarts and supermarkets', () => {
+    expect([...BUSINESS_TYPES]).toEqual(['minimart', 'supermarket']);
+    const s = resolveCapabilities({ businessType: 'supermarket' });
+    expect(s.modules).toEqual(expect.arrayContaining(['multiTill', 'multiBranch', 'stockTransfers', 'weighedItems', 'promotions', 'loyalty', 'priceLists']));
+    expect(s.productFields).toEqual(expect.arrayContaining(['department', 'plu', 'soldByWeight', 'expiry']));
+    const m = resolveCapabilities({ businessType: 'minimart' });
+    expect(m.modules).toEqual(expect.arrayContaining(['batchExpiry', 'customerCredit', 'mpesa']));
+    expect(m.modules).not.toContain('weighedItems');
   });
   it('normalises ISBN-10 and ISBN-13 and rejects bad check digits', () => {
     expect(normalizeIsbn('0-306-40615-2')).toBe('9780306406157');
@@ -68,12 +69,11 @@ describe('business profiles', () => {
     expect(isbn13To10('9780306406157')).toBe('0306406152');
     expect(isbn13To10('9780804429573')).toBe('080442957X');
   });
-  it('hardware gets fractional quantities, unit conversions and contractor prices', () => {
-    const c = resolveCapabilities({ businessType: 'hardware' });
-    expect(c.modules).toEqual(expect.arrayContaining(['quotations', 'unitConversions', 'fractionalQuantities', 'deliveryNotes']));
-    expect(c.priceLists).toContain('contractor');
+  it('optional modules switch on their fields and checkout behaviour', () => {
+    const c = resolveCapabilities({ businessType: 'minimart', enabledModules: ['fractionalQuantities', 'ageVerification', 'priceLists'] });
     expect(c.checkout.allowFractionalQty).toBe(true);
-    expect(c.productFields).toContain('dimensions');
+    expect(c.productFields).toContain('ageRestricted');
+    expect(c.priceLists).toContain('contractor');
   });
   it('minimart is touch friendly with expiry tracking and no quotations', () => {
     const c = resolveCapabilities({ businessType: 'minimart' });
@@ -95,32 +95,17 @@ describe('business profiles', () => {
     expect(cashierNav).toContain('pos');
     expect(cashierNav).not.toContain('settings');
     expect(cashierNav).not.toContain('quotations');
-    const hw = navigationFor(resolveCapabilities({ businessType: 'hardware' }), permissionsForRoles(['tenant_owner'])).map((n) => n.key);
-    expect(hw).toContain('quotations');
+    const sm = navigationFor(resolveCapabilities({ businessType: 'supermarket' }), permissionsForRoles(['tenant_owner'])).map((n) => n.key);
+    expect(sm).toContain('quotations');
   });
 });
 
 describe('permissions', () => {
-  it('cashiers cannot adjust stock or approve credit; owners cannot manage platform', () => {
+  it('cashiers cannot adjust stock or approve credit; owners can do everything', () => {
     expect(hasPermission(['cashier'], 'inventory.adjust')).toBe(false);
     expect(hasPermission(['cashier'], 'credit.approve')).toBe(false);
-    expect(hasPermission(['tenant_owner'], 'platform.tenants.manage')).toBe(false);
-    expect(hasPermission(['platform_support'], 'platform.tenants.manage')).toBe(false);
+    expect(hasPermission(['tenant_owner'], 'settings.manage')).toBe(true);
   });
 });
 
-describe('tenancy helpers', () => {
-  it('resolves subdomains', () => {
-    expect(subdomainFromHost('mandera.afeypos.com', 'afeypos.com')).toBe('mandera');
-    expect(subdomainFromHost('Mandera.AfeyPOS.com:443', 'afeypos.com')).toBe('mandera');
-    expect(subdomainFromHost('afeypos.com', 'afeypos.com')).toBeNull();
-    expect(subdomainFromHost('a.b.afeypos.com', 'afeypos.com')).toBeNull();
-    expect(subdomainFromHost('evilafeypos.com', 'afeypos.com')).toBeNull();
-  });
-  it('validates subdomains', () => {
-    expect(validateSubdomain('hardware')).toBeNull();
-    expect(validateSubdomain('admin')).not.toBeNull();
-    expect(validateSubdomain('-bad')).not.toBeNull();
-    expect(validateSubdomain('a')).not.toBeNull();
-  });
-});
+

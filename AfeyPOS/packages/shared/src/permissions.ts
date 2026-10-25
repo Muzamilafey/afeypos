@@ -1,13 +1,7 @@
 /** Central permission catalogue and role definitions. Enforced on the server; the UI only uses it for display. */
 
 export const PERMISSIONS = [
-  // platform (SaaS operator)
-  'platform.tenants.read',
-  'platform.tenants.manage',
-  'platform.plans.manage',
-  'platform.support.access',
-  'platform.system.read',
-  // tenant administration
+  // administration
   'settings.manage',
   'users.manage',
   'branches.manage',
@@ -63,8 +57,6 @@ export const PERMISSIONS = [
 export type Permission = (typeof PERMISSIONS)[number];
 
 export const ROLES = [
-  'platform_owner',
-  'platform_support',
   'tenant_owner',
   'business_admin',
   'branch_manager',
@@ -79,15 +71,12 @@ export const ROLES = [
 
 export type Role = (typeof ROLES)[number];
 
-export const PLATFORM_ROLES: Role[] = ['platform_owner', 'platform_support'];
-export const TENANT_ROLES: Role[] = ROLES.filter((r) => !PLATFORM_ROLES.includes(r));
+/** Roles assignable to staff (all of them; kept under this name for existing imports). */
+export const TENANT_ROLES: Role[] = [...ROLES];
 
-const tenantAll = PERMISSIONS.filter((p) => !p.startsWith('platform.')) as Permission[];
+const tenantAll = [...PERMISSIONS] as Permission[];
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
-  platform_owner: PERMISSIONS.filter((p) => p.startsWith('platform.')) as Permission[],
-  // Support staff can only read tenant metadata and request audited, time-bound access.
-  platform_support: ['platform.tenants.read', 'platform.system.read', 'platform.support.access'],
   tenant_owner: tenantAll,
   business_admin: tenantAll,
   branch_manager: [
@@ -130,8 +119,6 @@ export function hasPermission(roles: readonly Role[], permission: Permission): b
 }
 
 export const ROLE_LABELS: Record<Role, string> = {
-  platform_owner: 'Platform owner',
-  platform_support: 'Platform support',
   tenant_owner: 'Owner',
   business_admin: 'Business administrator',
   branch_manager: 'Branch manager',

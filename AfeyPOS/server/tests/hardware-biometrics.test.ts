@@ -8,13 +8,14 @@ import { runAsPlatform } from '../src/lib/context.js';
 let ctx: Ctx;
 let t: Awaited<ReturnType<typeof registerTenant>>;
 beforeAll(async () => {
-  ctx = await setupApp({ DEPLOYMENT_MODE: 'cloud' });
+  // The online head-office server must not open connections to its own network on users' behalf.
+  ctx = await setupApp({ DEPLOYMENT_MODE: 'hq' });
   t = await registerTenant(ctx.api, 'devices', 'supermarket');
 });
 afterAll(teardown);
 
 describe('hardware', () => {
-  it('blocks server-side network printing in the cloud (SSRF) and generates label code', async () => {
+  it('blocks server-side network printing on the online HQ server (SSRF) and generates label code', async () => {
     const d = await t.client.post('/hardware/devices', { kind: 'receipt_printer', name: 'Till 1 printer', connection: 'network', settings: { host: '10.0.0.50', port: 9100 } });
     expect(d.status).toBe(201);
     const test = await t.client.post(`/hardware/devices/${d.body.data._id}/test`);
@@ -27,7 +28,7 @@ describe('hardware', () => {
 });
 
 describe('local network printing', () => {
-  it('sends ESC/POS to a LAN printer from a local installation', async () => {
+  it('sends ESC/POS to a LAN printer from a shop or branch server', async () => {
     const received: Buffer[] = [];
     const server = net.createServer((s) => s.on('data', (d) => received.push(d)));
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
@@ -42,7 +43,7 @@ describe('local network printing', () => {
 
 describe('biometrics (device bridge protocol)', () => {
   it('enrolls an encrypted template and issues an override only for a signed match', async () => {
-    await t.client.put('/settings/modules', { enabled: ['biometrics'] }).then((r) => expect([200, 402]).toContain(r.status));
+    await t.client.put('/settings/modules', { enabled: ['biometrics'] }).then((r) => expect(r.status).toBe(200));
     // Supermarket on the starter plan is not entitled to biometrics; move to business plan via platform owner.
     const pl = await ctx.api.post('/api/v1/platform/auth/login').send({ email: 'owner@afeypos.test', password: 'PlatformPass123' });
     await ctx.api.patch(`/api/v1/platform/tenants/${t.tenant.id}`).set('Authorization', `Bearer ${pl.body.accessToken}`).send({ planCode: 'business' });

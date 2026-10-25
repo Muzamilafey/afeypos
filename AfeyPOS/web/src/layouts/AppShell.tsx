@@ -8,7 +8,6 @@ import { cx, Badge } from '../components/ui';
 import { applyTheme, getWorkstation, setWorkstation } from '../lib/workstation';
 import { connectRealtime, disconnectRealtime, useRealtime } from '../lib/realtime';
 import { useToast } from '../components/ui';
-import { date } from '../lib/format';
 
 const GROUPS: Record<string, string> = { sell: 'Sell', stock: 'Stock', parties: 'Customers & suppliers', finance: 'Finance', admin: 'Administration' };
 
@@ -65,9 +64,8 @@ export function AppShell() {
         <header className="no-print sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-ink-200 bg-white/90 px-4 backdrop-blur dark:border-ink-800 dark:bg-ink-900/90">
           <button className="rounded p-1.5 hover:bg-ink-100 lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Icon name="menu" /></button>
           <div className="hidden text-sm text-ink-500 sm:block">{BUSINESS_PROFILES[me.tenant.businessType as BusinessType]?.name}</div>
-          {me.tenant.status === 'trial' && <Badge tone="amber">Trial until {date(me.tenant.trialEndsAt)}</Badge>}
-          {me.tenant.status === 'past_due' && <Badge tone="red">Payment overdue</Badge>}
-          {me.user.kind === 'support' && <Badge tone="red">Afey support · read-only</Badge>}
+          {me.deploymentMode === 'branch' && <Badge tone="blue">Branch server</Badge>}
+          {me.deploymentMode === 'hq' && <Badge tone="blue">Head office</Badge>}
           <div className="ml-auto flex items-center gap-2">
             <button onClick={toggleTheme} className="rounded p-1.5 text-ink-500 hover:bg-ink-100 dark:hover:bg-ink-800" aria-label="Toggle dark mode"><Icon name={theme === 'dark' ? 'sun' : 'moon'} /></button>
             <div className="hidden text-right sm:block">

@@ -3,7 +3,7 @@
 ## Overview
 
 ```
- Browser (POS / back office / platform portal)          Till PC
+ Browser (POS / back office)                            Till PC
    │  HTTPS + WebSocket (same origin)                      │ http://127.0.0.1:9123
    ▼                                                       ▼
  Afey POS server (Express 5) ──────────────────────  Afey device bridge
@@ -11,26 +11,26 @@
    ▼                                                        display, fingerprint SDK)
  MongoDB replica set (transactions)
    │
-   └─ outbound: Safaricom Daraja, Talk Sasa / Africa's Talking, SMTP, (optional) cloud sync
+   └─ outbound: Safaricom Daraja, payment gateways, SMS, SMTP, branch ↔ head-office sync
 ```
 
-One codebase serves both deployment models; `DEPLOYMENT_MODE=local|cloud` changes tenant resolution, plan entitlements and a few safety rules (e.g. server-side network printing is only allowed locally).
+**One business per installation.** `DEPLOYMENT_MODE=standalone|hq|branch` decides the server's role: a single shop, the online head office that every branch syncs to, or a branch server with its own database. (The former multi-tenant SaaS mode, with subdomains, plans and a platform portal, has been removed.) A few safety rules depend on the role, e.g. the online HQ server never opens connections to its own network for printing.
 
 ## Packages
 
-- `packages/shared`: business profiles and module catalogue, navigation, permission catalogue and roles, integer-cents money helpers, tax and proportional allocation, EAN-13 and scale-barcode parsing, subdomain rules, default plans. Used by both server and web so totals computed in the browser match the server exactly.
+- `packages/shared`: business profiles and module catalogue, navigation, permission catalogue and roles, integer-cents money helpers, tax and proportional allocation, EAN-13 and scale-barcode parsing, payment-gateway catalogue. Used by both server and web so totals computed in the browser match the server exactly.
 - `server/src`
-  - `config/env.ts`: Zod-validated environment; refuses weak secrets and the dev tenant header in production.
+  - `config/env.ts`: Zod-validated environment; refuses weak or placeholder secrets and unknown roles.
   - `db/`: connection with replica-set check, `withTransaction`, and the **tenant plugin**.
-  - `http/`: tenant resolution, authentication, RBAC (`requirePermission`), module gates (`requireModule`), idempotency keys, error mapping.
-  - `modules/*`: auth, tenants/provisioning, catalog, inventory, sales (checkout, returns, shifts, documents), parties (customers/suppliers/ledger), purchasing, payments (M-Pesa), notifications, reports, settings, hardware, biometrics, backups, files, sync, platform.
+  - `http/`: business resolution, authentication, RBAC (`requirePermission`), module gates (`requireModule`), idempotency keys, error mapping.
+  - `modules/*`: auth, tenants (setup and capabilities), catalog, inventory, sales (checkout, returns, shifts, documents), parties (customers/suppliers/ledger), purchasing, payments (M-Pesa, gateways), notifications, reports, settings, hardware, biometrics, backups, files, sync.
   - `jobs/`: MongoDB-backed durable job queue, scheduler, per-tenant daily tasks.
   - `integrations/`: Daraja client + simulator, SMS providers, SMTP.
-  - `realtime/`: Socket.IO with tenant rooms.
+  - `realtime/`: Socket.IO with per-business rooms.
 
 ## Business profiles and capabilities
 
-Code never branches on the business type. `resolveCapabilities()` (shared) turns a tenant's business type, owner-enabled/disabled modules and plan entitlements into:
+Afey POS supports two business types, **minimart** and **supermarket**. Code never branches on the type. `resolveCapabilities()` (shared) turns the business type and the owner's enabled/disabled modules into:
 
 - `modules` (e.g. `quotations`, `unitConversions`, `batchExpiry`, `serialNumbers`, `ageVerification`),
 - `productFields` shown on the product form,
@@ -39,16 +39,18 @@ Code never branches on the business type. `resolveCapabilities()` (shared) turns
 
 The server enforces modules (`requireModule` and path gates in `app.ts`); the web builds navigation from `navigationFor(capabilities, permissions)` returned by `/auth/me`. Disabling a module hides it and blocks its API; data is kept. `pos` and `inventory` cannot be disabled.
 
-## Multi-tenancy and isolation
+## Data scoping
 
-- Every tenant-owned collection is defined through `tenantModel()`, which installs `tenantPlugin`: an immutable required `tenantId`, injected into every query, update, upsert, aggregate and insert from an `AsyncLocalStorage` request context. A query without tenant context **throws** (`TenantContextError`) instead of returning other tenants' data. Asking for a different tenant's id inside a context also throws. `bulkWrite` is blocked on tenant models.
+An installation holds one business, created by the one-time setup page (`POST /public/register` is refused afterwards). Internally every record still carries that business's id (`tenantId`): it keeps queries fail-closed, makes backups and branch sync self-describing, and rejects sessions from a previous installation of the same server.
+
+- Every business-owned collection is defined through `tenantModel()`, which installs `tenantPlugin`: an immutable required `tenantId`, injected into every query, update, upsert, aggregate and insert from an `AsyncLocalStorage` request context. A query without tenant context **throws** (`TenantContextError`) instead of returning other tenants' data. Asking for a different tenant's id inside a context also throws. `bulkWrite` is blocked on tenant models.
 - Platform code must explicitly enter `runAsPlatform()`; background jobs run inside `runInTenant(job.tenantId)`.
-- The tenant is resolved only from the host (`<slug>.<BASE_DOMAIN>` or a registered custom domain), never from client ids. Access tokens carry the tenant id and session id; a token from tenant A is rejected at tenant B, and the session is checked on every request so revocation is immediate.
+- Every request resolves to the installation's single business, whatever the host name (LAN IP, localhost or the public domain). Access tokens carry the business id and session id, and the session is checked on every request so revocation is immediate.
 - `$lookup` stages add an explicit `tenantId` match on the joined collection.
 - Uploads live under `UPLOAD_DIR/<tenantId>/`; realtime sockets join only their tenant's rooms; M-Pesa callbacks carry the tenant id plus a per-tenant secret token in the path.
 - Compound unique indexes are tenant-prefixed (`tenantId+sku`, `tenantId+number`, `tenantId+barcodes.code`, `tenantId+clientRequestId` ...).
 
-Tests in `server/tests/tenancy.test.ts` cover cross-tenant tokens, IDOR by id, fail-closed queries, scoped aggregates and upserts.
+Tests in `server/tests/scoping.test.ts` cover fail-closed queries, scoped aggregates and upserts, and sessions from an earlier installation.
 
 ## Money and quantities
 
@@ -71,4 +73,4 @@ Jobs (`Job` collection) are claimed with an atomic lock, retried with exponentia
 
 ## Frontend
 
-Single React app with three areas: sign-in/onboarding, tenant app (`AppShell` with business-specific sidebar) and `/platform` portal. Access token in memory, refresh token in an httpOnly SameSite=Strict cookie with rotation. The POS keeps carts (including suspended sales) in localStorage per till, queues barcode scans so fast scanners never lose items, and keeps one stable `clientRequestId` per payment attempt so a retry after a network error can never double-sell.
+Single React app with two areas: sign-in/setup and the business app (`AppShell` with a sidebar built from the enabled modules). Access token in memory, refresh token in an httpOnly SameSite=Strict cookie with rotation. The POS keeps carts (including suspended sales) in localStorage per till, queues barcode scans so fast scanners never lose items, and keeps one stable `clientRequestId` per payment attempt so a retry after a network error can never double-sell.

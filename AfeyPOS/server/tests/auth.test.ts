@@ -10,32 +10,24 @@ beforeAll(async () => {
 });
 afterAll(teardown);
 
-describe('registration & onboarding', () => {
-  it('rejects reserved, invalid and duplicate subdomains', async () => {
-    const base = { businessName: 'Shop X', businessType: 'retail', ownerName: 'Ann', email: 'a@x.test', password: 'Passw0rd!' };
-    expect((await ctx.api.post('/api/v1/public/register').set('Host', BASE).send({ ...base, subdomain: 'admin' })).status).toBe(409);
-    expect((await ctx.api.post('/api/v1/public/register').set('Host', BASE).send({ ...base, subdomain: '-x' })).status).toBe(409);
-    expect((await ctx.api.post('/api/v1/public/register').set('Host', BASE).send({ ...base, subdomain: 'okshop', password: 'short' })).status).toBe(400);
-    await registerTenant(ctx.api, 'dupe');
-    const r = await ctx.api.post('/api/v1/public/register').set('Host', BASE).send({ ...base, subdomain: 'dupe' });
-    expect(r.status).toBe(409);
-    expect(r.body.error.code).toBe('SUBDOMAIN_UNAVAILABLE');
-    const check = await ctx.api.get('/api/v1/public/subdomain-check?slug=dupe').set('Host', BASE);
-    expect(check.body.available).toBe(false);
-  });
-
-  it('provisions branch, warehouse, till, owner, categories and a trial', async () => {
-    const { client, tenant, locations } = await registerTenant(ctx.api, 'hardwareco', 'hardware');
-    expect(tenant.status).toBe('trial');
+describe('installation setup', () => {
+  it('validates the owner password and provisions branch, warehouse, till, owner and categories', async () => {
+    const base = { businessName: 'Shop X', businessType: 'supermarket', ownerName: 'Ann', email: 'a@x.test', password: 'short' };
+    expect((await ctx.api.post('/api/v1/public/register').set('Host', BASE).send(base)).status).toBe(400);
+    expect((await ctx.api.post('/api/v1/public/register').set('Host', BASE).send({ ...base, password: 'Passw0rd!', businessType: 'hardware' })).status).toBe(400);
+    const { client, tenant, locations } = await registerTenant(ctx.api, 'marketco', 'supermarket');
+    expect(tenant.status).toBe('active');
+    expect(tenant.slug).toBe('marketco-shop');
     expect(locations.branches).toHaveLength(1);
     expect(locations.warehouses).toHaveLength(1);
     expect(locations.tills).toHaveLength(1);
     const me = await client.get('/auth/me');
     expect(me.body.user.roles).toEqual(['tenant_owner']);
-    expect(me.body.capabilities.modules).toEqual(expect.arrayContaining(['quotations', 'unitConversions', 'fractionalQuantities']));
-    expect(me.body.navigation.map((n: any) => n.key)).toContain('quotations');
+    expect(me.body.capabilities.modules).toEqual(expect.arrayContaining(['multiTill', 'multiBranch', 'stockTransfers', 'weighedItems', 'promotions', 'loyalty']));
     const cats = await client.get('/categories');
-    expect(cats.body.data.map((c: any) => c.name)).toContain('Cement');
+    expect(cats.body.data.map((c: any) => c.name)).toContain('Fresh produce');
+    const again = await ctx.api.post('/api/v1/public/register').set('Host', BASE).send({ ...base, password: 'Passw0rd!', email: 'b@x.test' });
+    expect(again.body.error.code).toBe('ALREADY_SETUP');
   });
 });
 

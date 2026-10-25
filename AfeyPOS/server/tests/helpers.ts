@@ -20,16 +20,12 @@ export async function setupApp(overrides: Record<string, string> = {}): Promise<
   const uri = inject('mongoUri').replace(/\/\?/, `/${dbName}?`).replace(/\/$/, `/${dbName}`);
   Object.assign(process.env, {
     NODE_ENV: 'test',
-    DEPLOYMENT_MODE: 'cloud',
-    BASE_DOMAIN: BASE,
+    DEPLOYMENT_MODE: 'standalone',
     MONGODB_URI: uri.includes(dbName) ? uri : `${uri.split('?')[0].replace(/\/$/, '')}/${dbName}?${uri.split('?')[1] ?? ''}`,
     JWT_ACCESS_SECRET: 'test-secret-that-is-long-enough-to-pass-validation-0123456789',
     ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
-    ALLOW_TENANT_HEADER: 'false',
     JOBS_ENABLED: 'false',
     SYNC_ENABLED: 'false',
-    PLATFORM_OWNER_EMAIL: 'owner@afeypos.test',
-    PLATFORM_OWNER_PASSWORD: 'PlatformPass123',
     BACKUP_DIR: `/tmp/afeypos-test-backups/${dbName}`,
     ...overrides,
   });
@@ -46,8 +42,9 @@ export async function teardown() {
   await disconnectDatabase();
 }
 
-export function host(slug: string) {
-  return `${slug}.${BASE}`;
+/** Single-business installation: every request reaches the same business whatever the Host header. */
+export function host(_slug: string) {
+  return BASE;
 }
 
 export class Client {
@@ -89,13 +86,44 @@ export class Client {
 
 export const OWNER_PASSWORD = 'OwnerPass123';
 
-export async function registerTenant(api: Api, slug: string, businessType = 'minimart', extra: Record<string, unknown> = {}) {
+/**
+ * Retired business types expressed as the optional modules they used to enable, so feature tests can
+ * still exercise them on a supermarket.
+ */
+const LEGACY_TYPES: Record<string, { type: 'minimart' | 'supermarket'; modules: string[] }> = {
+  retail: { type: 'minimart', modules: [] },
+  wholesale: { type: 'supermarket', modules: ['customerPricing', 'salesReps'] },
+  hardware: { type: 'supermarket', modules: ['customerPricing', 'fractionalQuantities'] },
+  liquor: { type: 'supermarket', modules: ['ageVerification'] },
+  pharmacy: { type: 'supermarket', modules: ['prescriptions'] },
+  electronics: { type: 'supermarket', modules: ['serialNumbers', 'warranty', 'repairs'] },
+};
+
+/** Empties every collection (indexes stay), so a test can set the installation up again. */
+export async function resetInstallation() {
+  const db = mongoose.connection.db!;
+  for (const c of await db.collections()) await c.deleteMany({});
+}
+
+/**
+ * Runs the one-time installation setup. An installation holds one business, so this first clears any
+ * business a previous test in the same file created.
+ */
+export async function registerTenant(api: Api, slug: string, requestedType = 'minimart', extra: Record<string, unknown> = {}, modules: string[] = []) {
+  await resetInstallation();
+  const legacy = LEGACY_TYPES[requestedType];
+  const businessType = legacy?.type ?? requestedType;
   const r = await api.post('/api/v1/public/register').set('Host', BASE).send({
-    businessName: `${slug} shop`, businessType, subdomain: slug, ownerName: 'Owner Person', email: `owner@${slug}.test`, password: OWNER_PASSWORD, phone: '0712345678', ...extra,
+    businessName: `${slug} shop`, businessType, ownerName: 'Owner Person', email: `owner@${slug}.test`, password: OWNER_PASSWORD, phone: '0712345678', ...extra,
   });
   if (r.status !== 201) throw new Error(`register failed ${r.status} ${JSON.stringify(r.body)}`);
   const c = new Client(api, slug);
   await c.login(`owner@${slug}.test`, OWNER_PASSWORD);
+  const enable = [...(legacy?.modules ?? []), ...modules];
+  if (enable.length) {
+    const m = await c.put('/settings/modules', { enabled: enable });
+    if (m.status !== 200) throw new Error(`modules failed ${m.status} ${JSON.stringify(m.body)}`);
+  }
   const loc = await c.get('/settings/locations');
   return { client: c, tenant: r.body.tenant, locations: loc.body.data as { branches: any[]; warehouses: any[]; tills: any[] } };
 }

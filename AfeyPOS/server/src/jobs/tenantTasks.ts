@@ -11,7 +11,7 @@ function localHour(tz: string, at = new Date()) {
 
 /** Hourly fan-out: queues per-tenant daily tasks when it is the right local hour for that tenant. */
 registerJob('tenants.dailyTasks', async () => {
-  const tenants = await runAsPlatform(() => Tenant.find({ status: { $in: ['trial', 'active', 'past_due'] } }, { settings: 1 }).lean());
+  const tenants = await runAsPlatform(() => Tenant.find({ status: 'active' }, { settings: 1 }).lean());
   for (const t of tenants) {
     const tz = t.settings?.timezone ?? 'Africa/Nairobi';
     const day = localDateString(new Date(), tz);

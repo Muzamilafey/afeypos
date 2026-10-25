@@ -2,19 +2,19 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { MODULES, PAYMENT_PROVIDER_INFO, PAYMENT_PROVIDERS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import {
-  AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, SupportGrant, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
+  AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
 } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { requireModule, requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, forbidden, notFound } from '../../lib/errors.js';
-import { audit, platformAudit } from '../../lib/audit.js';
+import { audit } from '../../lib/audit.js';
 import { hashPassword } from '../../lib/crypto.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { nextNumber } from '../../lib/numbering.js';
 import { env } from '../../config/env.js';
 import { revokeAllSessions } from '../auth/service.js';
 import { passwordSchema } from '../tenants/provisioning.js';
-import { capabilitiesFor, getPlan } from '../tenants/plans.js';
+import { capabilitiesFor } from '../tenants/capabilities.js';
 import { openSecrets, presentConfig, sealSecrets } from '../integrations/configs.js';
 import { gatewayCallbackUrl, paymentGatewayFor } from '../payments/gateways.js';
 import { createSmsProvider } from '../../integrations/sms/index.js';
@@ -57,8 +57,7 @@ const settingsSchema = z.object({
 
 router.get('/settings/business', requirePermission('settings.manage'), async (req, res) => {
   const t = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
-  const plan = env().DEPLOYMENT_MODE === 'cloud' ? await getPlan(t!.planCode) : null;
-  res.json({ data: { id: t!._id, name: t!.name, slug: t!.slug, businessType: t!.businessType, status: t!.status, planCode: t!.planCode, plan, trialEndsAt: t!.trialEndsAt, contact: t!.contact, settings: t!.settings, enabledModules: t!.enabledModules, disabledModules: t!.disabledModules, capabilities: req.capabilities, callbackUrls: callbackUrls(t!._id, t!.callbackToken), customDomains: t!.customDomains } });
+  res.json({ data: { id: t!._id, name: t!.name, slug: t!.slug, businessType: req.capabilities!.businessType, status: t!.status, deploymentMode: env().DEPLOYMENT_MODE, contact: t!.contact, settings: t!.settings, enabledModules: t!.enabledModules, disabledModules: t!.disabledModules, capabilities: req.capabilities, callbackUrls: callbackUrls(t!._id, t!.callbackToken) } });
 });
 
 router.patch('/settings/business', requirePermission('settings.manage'), async (req, res) => {
@@ -77,19 +76,14 @@ router.patch('/settings/business', requirePermission('settings.manage'), async (
   res.json({ data: t });
 });
 
-/** Enable or hide modules. Disabling never deletes data; plan entitlements apply in the cloud. */
+/** Enable or hide modules. Disabling never deletes data. */
 router.put('/settings/modules', requirePermission('settings.manage'), async (req, res) => {
   const body = parse(z.object({ enabled: z.array(z.enum(MODULES)).default([]), disabled: z.array(z.enum(MODULES)).default([]) }), req.body);
   if (!req.auth!.roles.includes('tenant_owner') && !req.auth!.roles.includes('business_admin')) throw forbidden('Only owners and administrators can change modules');
   const disabled = body.disabled.filter((m) => m !== 'pos' && m !== 'inventory' && !body.enabled.includes(m));
-  if (env().DEPLOYMENT_MODE === 'cloud') {
-    const plan = await getPlan(req.tenant!.planCode);
-    const notEntitled = plan?.modules ? body.enabled.filter((m) => !plan.modules!.includes(m)) : [];
-    if (notEntitled.length) throw new AppError(402, 'PLAN_UPGRADE_REQUIRED', `Your plan does not include: ${notEntitled.join(', ')}`, { modules: notEntitled });
-  }
   const t = await runAsPlatform(() => Tenant.findByIdAndUpdate(req.tenant!._id, { $set: { enabledModules: body.enabled, disabledModules: disabled } }, { new: true }));
   await audit(req, { action: 'settings.modules_changed', entity: 'Tenant', entityId: req.tenant!._id, details: { enabled: body.enabled, disabled } });
-  res.json({ data: await capabilitiesFor(t!) });
+  res.json({ data: capabilitiesFor(t!) });
 });
 
 // ---------- users ----------
@@ -108,12 +102,6 @@ function present(u: any) {
   return { ...rest, hasPin: Boolean(pinHash), twoFactorEnabled: Boolean(twoFactor?.enabled) };
 }
 
-async function checkUserLimit(req: any) {
-  if (env().DEPLOYMENT_MODE !== 'cloud') return;
-  const plan = await getPlan(req.tenant.planCode);
-  if (plan && (await User.countDocuments({ status: 'active' })) >= plan.limits.users) throw new AppError(402, 'PLAN_LIMIT', `Your plan allows ${plan.limits.users} users`);
-}
-
 router.get('/settings/users', requirePermission('users.manage'), async (_req, res) => {
   res.json({ data: (await User.find({}).sort({ name: 1 }).lean()).map(present) });
 });
@@ -121,7 +109,6 @@ router.get('/settings/users', requirePermission('users.manage'), async (_req, re
 router.post('/settings/users', requirePermission('users.manage'), async (req, res) => {
   const body = parse(userSchema.extend({ password: passwordSchema, pin: z.string().regex(/^\d{4,8}$/).optional() }), req.body);
   if (body.roles.includes('tenant_owner') && !req.auth!.roles.includes('tenant_owner')) throw forbidden('Only owners can create owners');
-  await checkUserLimit(req);
   const u = await User.create({ ...body, passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined });
   await audit(req, { action: 'user.created', entity: 'User', entityId: u._id, details: { roles: body.roles } });
   res.status(201).json({ data: present(u.toObject()) });
@@ -147,13 +134,6 @@ router.patch('/settings/users/:id', requirePermission('users.manage'), async (re
 });
 
 // ---------- branches, warehouses, tills ----------
-async function checkPlanLimit(req: any, kind: 'branches' | 'tills') {
-  if (env().DEPLOYMENT_MODE !== 'cloud') return;
-  const plan = await getPlan(req.tenant.planCode);
-  const count = kind === 'branches' ? await Branch.countDocuments({ active: true }) : await Till.countDocuments({ active: true });
-  if (plan && count >= plan.limits[kind]) throw new AppError(402, 'PLAN_LIMIT', `Your plan allows ${plan.limits[kind]} ${kind}`);
-}
-
 router.get('/settings/locations', async (_req, res) => {
   // Readable by every signed-in user: needed to pick a till/warehouse.
   const [branches, warehouses, tills] = await Promise.all([Branch.find({}).lean(), Warehouse.find({}).lean(), Till.find({}).lean()]);
@@ -163,7 +143,6 @@ router.get('/settings/locations', async (_req, res) => {
 router.post('/settings/branches', requirePermission('branches.manage'), async (req, res) => {
   const body = parse(z.object({ name: z.string().trim().min(2).max(80), code: z.string().trim().min(1).max(10).regex(/^[A-Za-z0-9]+$/), address: z.string().max(200).optional(), phone: z.string().max(30).optional() }), req.body);
   if ((await Branch.countDocuments({})) >= 1 && !req.capabilities!.modules.includes('multiBranch')) throw new AppError(403, 'MODULE_DISABLED', 'Enable the multi-branch module to add branches');
-  await checkPlanLimit(req, 'branches');
   const b = await Branch.create(body);
   const w = await Warehouse.create({ branchId: b._id, name: `${b.name} store`, code: b.code, isDefault: true });
   await audit(req, { action: 'branch.created', entity: 'Branch', entityId: b._id });
@@ -190,7 +169,6 @@ router.post('/settings/tills', requirePermission('branches.manage'), async (req,
   const w = await Warehouse.findOne({ _id: body.warehouseId, branchId: body.branchId });
   if (!w) throw badRequest('Warehouse must belong to the branch');
   if ((await Till.countDocuments({ branchId: body.branchId, active: true })) >= 1 && !req.capabilities!.modules.includes('multiTill')) throw new AppError(403, 'MODULE_DISABLED', 'Enable the multiple tills module to add tills');
-  await checkPlanLimit(req, 'tills');
   const t = await Till.create(body);
   await audit(req, { action: 'till.created', entity: 'Till', entityId: t._id });
   res.status(201).json({ data: t });
@@ -339,29 +317,6 @@ router.get('/settings/notifications/logs', requirePermission('integrations.manag
   if (q.channel) filter.channel = q.channel;
   const [data, total] = await Promise.all([NotificationLog.find(filter).sort({ createdAt: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), NotificationLog.countDocuments(filter)]);
   res.json({ data, total, page: q.page, limit: q.limit });
-});
-
-// ---------- support access approvals ----------
-router.get('/settings/support-access', requirePermission('settings.manage'), async (req, res) => {
-  res.json({ data: await SupportGrant.find({ tenantId: req.tenant!._id }).sort({ createdAt: -1 }).limit(50).lean() });
-});
-router.post('/settings/support-access/:id/:decision', requirePermission('settings.manage'), async (req, res) => {
-  const decision = parse(z.enum(['approve', 'reject', 'revoke']), req.params.decision);
-  if (!req.auth!.roles.includes('tenant_owner')) throw forbidden('Only the owner can grant support access');
-  const id = idParam(req.params.id);
-  const filter = { _id: id, tenantId: req.tenant!._id, status: decision === 'revoke' ? 'approved' : 'pending' };
-  const g = await SupportGrant.findOne(filter);
-  if (!g) throw notFound('Support request');
-  if (decision === 'approve') {
-    g.status = 'approved';
-    g.approvedBy = { kind: 'tenant_user', id: req.auth!.userId } as any;
-    g.approvedAt = new Date();
-    g.expiresAt = new Date(Date.now() + g.durationMinutes * 60_000);
-  } else g.status = decision === 'reject' ? 'rejected' : 'revoked';
-  await g.save();
-  await audit(req, { action: `support_access.${decision}`, entity: 'SupportGrant', entityId: g._id, details: { reason: g.reason } });
-  await platformAudit(req, `support_access.${decision}_by_tenant`, { grantId: String(g._id) }, req.tenant!._id);
-  res.json({ data: g });
 });
 
 // ---------- audit trail ----------

@@ -15,14 +15,13 @@ beforeAll(async () => {
 afterAll(teardown);
 
 describe('uploads', () => {
-  it('stores type-checked files per tenant and never serves them to other tenants', async () => {
+  it('stores type-checked files and requires a signed-in user to read them', async () => {
     const a = await registerTenant(ctx.api, 'filesa');
-    const b = await registerTenant(ctx.api, 'filesb');
     const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]).toString('base64');
     const up = await a.client.post('/files', { base64: png });
     expect(up.status).toBe(201);
     expect((await a.client.get(`/files/${up.body.data.id}`)).status).toBe(200);
-    expect((await b.client.get(`/files/${up.body.data.id}`)).status).toBe(404);
+    expect((await ctx.api.get(`/api/v1/files/${up.body.data.id}`)).status).toBe(401);
     expect((await a.client.post('/files', { base64: Buffer.from('<script>alert(1)</script>').toString('base64') })).status).toBe(400);
     expect((await a.client.get('/files/..%2F..%2Fetc%2Fpasswd')).status).toBe(404);
   });
@@ -80,20 +79,19 @@ describe('scheduled notifications', () => {
 });
 
 describe('business logo on the sign-in page', () => {
-  it('serves the uploaded logo publicly for its own business only', async () => {
+  it('serves the uploaded logo publicly, and nothing before one is set', async () => {
     const a = await registerTenant(ctx.api, 'logoa');
-    await registerTenant(ctx.api, 'logob');
+    expect((await ctx.api.get('/api/v1/public/logo')).status).toBe(404);
+    expect((await ctx.api.get('/api/v1/public/config')).body.tenant.logoUrl).toBeNull();
     const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]).toString('base64');
     const up = await a.client.post('/files', { base64: png });
     expect((await a.client.patch('/settings/business', { settings: { logoFileId: up.body.data.id, tagline: 'Quality building materials' } })).status).toBe(200);
     expect((await a.client.patch('/settings/business', { settings: { logoFileId: '../../etc/passwd' } })).status).toBe(400);
-    const cfg = await ctx.api.get('/api/v1/public/config').set('Host', 'logoa.afeypos.test');
+    const cfg = await ctx.api.get('/api/v1/public/config');
     expect(cfg.body.tenant.logoUrl).toMatch(/^\/api\/v1\/public\/logo\?v=/);
     expect(cfg.body.tenant.tagline).toBe('Quality building materials');
-    const logo = await ctx.api.get('/api/v1/public/logo').set('Host', 'logoa.afeypos.test');
+    const logo = await ctx.api.get('/api/v1/public/logo');
     expect(logo.status).toBe(200);
     expect(logo.headers['content-type']).toContain('image/png');
-    expect((await ctx.api.get('/api/v1/public/logo').set('Host', 'logob.afeypos.test')).status).toBe(404);
-    expect((await ctx.api.get('/api/v1/public/config').set('Host', 'logob.afeypos.test')).body.tenant.logoUrl).toBeNull();
   });
 });

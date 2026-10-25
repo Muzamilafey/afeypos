@@ -10,23 +10,31 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
   HOST: z.string().default('0.0.0.0'),
-  DEPLOYMENT_MODE: z.enum(['local', 'cloud']).default('local'),
+  /**
+   * One business per installation.
+   * standalone: a single shop, one server and database.
+   * hq: the online head-office server; admins work here and every branch syncs to it (also serves the online shop).
+   * branch: the local server in one branch (own database, works offline) that syncs with HQ.
+   * "local" is accepted as an alias of standalone for older .env files.
+   */
+  DEPLOYMENT_MODE: z
+    .string()
+    .default('standalone')
+    .transform((v) => (v === 'local' ? 'standalone' : v))
+    .pipe(z.enum(['standalone', 'hq', 'branch'], { message: 'DEPLOYMENT_MODE must be standalone, hq or branch (multi-tenant "cloud" mode was removed)' })),
+  /** branch role: code of the branch this server runs (as created at HQ, e.g. "MSA-01"). */
+  BRANCH_CODE: z.string().optional(),
   MONGODB_URI: z.string().min(1).default('mongodb://127.0.0.1:27017/afeypos?replicaSet=rs0'),
   MONGODB_REQUIRE_REPLICA_SET: bool(true),
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
   ENCRYPTION_KEY: z.string().min(1, 'ENCRYPTION_KEY is required (32 bytes, base64)'),
-  BASE_DOMAIN: z.string().default('afeypos.com'),
-  PLATFORM_SUBDOMAIN: z.string().default('admin'),
   PUBLIC_APP_URL: z.string().default('http://localhost:5173'),
   API_PUBLIC_URL: z.string().default('http://localhost:4000'),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
-  ALLOW_TENANT_HEADER: bool(false),
   TRUST_PROXY: z.string().default('loopback'),
   COOKIE_SECURE: bool(false),
-  PLATFORM_OWNER_EMAIL: z.string().email().optional().or(z.literal('').transform(() => undefined)),
-  PLATFORM_OWNER_PASSWORD: z.string().optional(),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().default(587),
   SMTP_USER: z.string().optional(),
@@ -40,7 +48,11 @@ const schema = z.object({
   JOBS_ENABLED: bool(true),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   SYNC_ENABLED: bool(false),
+  /** branch role: HQ base URL, e.g. https://hq.myshop.co.ke */
+  SYNC_HQ_URL: z.string().optional(),
+  /** Older name of SYNC_HQ_URL. */
   SYNC_CLOUD_URL: z.string().optional(),
+  /** branch role: the branch's sync token issued by HQ (Settings → Branches). */
   SYNC_TOKEN: z.string().optional(),
   WEB_DIST_DIR: z.string().optional(),
 });
@@ -58,8 +70,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const env = parsed.data;
   const key = Buffer.from(env.ENCRYPTION_KEY, 'base64');
   if (key.length !== 32) throw new Error('ENCRYPTION_KEY must decode (base64) to exactly 32 bytes');
+  if (env.DEPLOYMENT_MODE === 'branch' && env.SYNC_ENABLED && !(env.SYNC_HQ_URL || env.SYNC_CLOUD_URL)) throw new Error('A branch server with SYNC_ENABLED needs SYNC_HQ_URL');
   if (env.NODE_ENV === 'production') {
-    if (env.ALLOW_TENANT_HEADER) throw new Error('ALLOW_TENANT_HEADER must be false in production');
     if (/change-me|placeholder/i.test(env.JWT_ACCESS_SECRET)) throw new Error('Replace the placeholder JWT_ACCESS_SECRET');
   }
   cached = env;

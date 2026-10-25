@@ -18,10 +18,11 @@ describe('smoke', () => {
     expect(r.headers['content-security-policy']).not.toContain('upgrade-insecure-requests');
     expect(r.headers['strict-transport-security']).toBeUndefined();
   });
-  it('registers a tenant and loads /me', async () => {
+  it('sets up the business and loads /me', async () => {
     const { client } = await registerTenant(ctx.api, 'smoke');
     const me = await client.get('/auth/me');
     expect(me.status).toBe(200);
-    expect(me.body.tenant.slug).toBe('smoke');
+    expect(me.body.tenant.slug).toBe('smoke-shop');
+    expect(me.body.deploymentMode).toBe('standalone');
   });
 });

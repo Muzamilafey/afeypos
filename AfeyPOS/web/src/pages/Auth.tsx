@@ -8,8 +8,8 @@ import { Button, ErrorBox, Field, Input, Card, cx, Spinner } from '../components
 import { Icon } from '../components/icons';
 
 interface PublicConfig {
-  deploymentMode: 'local' | 'cloud';
-  baseDomain: string;
+  deploymentMode: 'standalone' | 'hq' | 'branch';
+  branchCode: string | null;
   setupRequired: boolean;
   tenant: { name: string; tagline?: string | null; logoUrl?: string | null } | null;
 }
@@ -26,18 +26,17 @@ function BusinessMark({ cfg, className }: { cfg?: PublicConfig; className: strin
   return <Logo className={cx('object-contain', className)} />;
 }
 
-type AuthTab = 'signin' | 'signup';
+type AuthTab = 'signin';
 
 const tabClass = (active: boolean) =>
   cx('border-b-2 pb-2 text-lg font-semibold transition', active ? 'border-brand-600 text-brand-700 dark:border-brand-100 dark:text-white' : 'border-transparent text-ink-300 hover:text-ink-500');
 
 /**
- * Split auth card over the wallpaper: the form on the left (with Sign in / Sign up tabs) and a
- * charcoal panel on the right showing the business logo, name and tagline.
+ * Split auth card over the wallpaper: the form on the left and a charcoal panel on the right showing
+ * the business logo, name and tagline.
  */
 function Shell({ title, subtitle, children, wide, tab }: { title: string; subtitle?: string; children: ReactNode; wide?: boolean; tab?: AuthTab }) {
   const cfg = usePublicConfig().data;
-  const canSignUp = cfg?.deploymentMode === 'cloud';
   const businessName = cfg?.tenant?.name ?? 'Afey POS';
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink-950 p-4 sm:p-8">
@@ -60,7 +59,6 @@ function Shell({ title, subtitle, children, wide, tab }: { title: string; subtit
           {tab ? (
             <nav className="mb-6 flex gap-8" aria-label="Account">
               <Link to="/login" aria-current={tab === 'signin' ? 'page' : undefined} className={tabClass(tab === 'signin')}>Sign in</Link>
-              {canSignUp && <Link to="/register" aria-current={tab === 'signup' ? 'page' : undefined} className={tabClass(tab === 'signup')}>Sign up</Link>}
             </nav>
           ) : (
             <h1 className="mb-1 text-xl font-semibold">{title}</h1>
@@ -137,15 +135,6 @@ export function LoginPage() {
     }
   };
 
-  if (cfg.data && cfg.data.deploymentMode === 'cloud' && !cfg.data.tenant) {
-    return (
-      <Shell title="Point of sale for every kind of shop" tab="signin">
-        <p className="mb-6 text-sm text-ink-600 dark:text-ink-300">Open your business address (for example <strong>yourshop.{cfg.data.baseDomain}</strong>) to sign in, or create a new business.</p>
-        <Link to="/register"><Button size="lg" className="w-full rounded-full">Create a business</Button></Link>
-      </Shell>
-    );
-  }
-
   const pin = mode === 'pin';
   return (
     <Shell title="Sign in" tab="signin">
@@ -197,33 +186,30 @@ export function LoginPage() {
   );
 }
 
-export function RegisterPage({ setup }: { setup?: boolean }) {
+/** One-time installation setup: business type, business details and the owner account. */
+export function SetupPage() {
   const cfg = usePublicConfig();
   const qc = useQueryClient();
+  const nav = useNavigate();
   const types = useQuery({ queryKey: ['business-types'], queryFn: () => api<{ data: { type: string; name: string; description: string; modules: string[] }[] }>('/public/business-types') });
-  const plans = useQuery({ queryKey: ['plans'], queryFn: () => api<{ data: { code: string; name: string; priceMonthlyCents: number; trialDays: number }[] }>('/public/plans'), enabled: !setup });
-  const [form, setForm] = useState({ businessName: '', businessType: '', subdomain: '', ownerName: '', email: '', password: '', phone: '', planCode: 'starter' });
-  const [slugStatus, setSlugStatus] = useState<{ available: boolean; reason?: string } | null>(null);
+  const [form, setForm] = useState({ businessName: '', businessType: 'supermarket', ownerName: '', email: '', password: '', phone: '', taxPin: '' });
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<{ url: string } | null>(null);
-  const cloud = cfg.data?.deploymentMode === 'cloud';
+  const [done, setDone] = useState(false);
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   useEffect(() => {
-    if (!cloud || form.subdomain.length < 3) return setSlugStatus(null);
-    const t = setTimeout(() => api('/public/subdomain-check', { query: { slug: form.subdomain } }).then(setSlugStatus).catch(() => undefined), 300);
-    return () => clearTimeout(t);
-  }, [form.subdomain, cloud]);
+    if (cfg.data && !cfg.data.setupRequired && !done) nav('/login', { replace: true });
+  }, [cfg.data, done, nav]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ url: string }>('/public/register', { body: { ...form, subdomain: cloud ? form.subdomain : undefined, phone: form.phone || undefined } });
+      await api('/public/register', { body: { ...form, phone: form.phone || undefined, taxPin: form.taxPin || undefined } });
+      setDone(true);
       await qc.invalidateQueries({ queryKey: ['public-config'] });
-      setDone(r);
     } catch (err) {
       setError(err);
     } finally {
@@ -235,16 +221,24 @@ export function RegisterPage({ setup }: { setup?: boolean }) {
     return (
       <Shell title="Your business is ready" subtitle="Your owner account, first branch and till are set up.">
         <p className="mb-6 text-sm">Sign in with the email and password you just created.</p>
-        {cloud ? <a href={`${done.url}/login`}><Button size="lg" className="w-full rounded-full">Go to {done.url.replace(/^https?:\/\//, '')}</Button></a> : <Link to="/login"><Button size="lg" className="w-full rounded-full">Sign in</Button></Link>}
+        <Link to="/login"><Button size="lg" className="w-full rounded-full">Sign in</Button></Link>
+      </Shell>
+    );
+  }
+
+  if (cfg.data?.deploymentMode === 'branch') {
+    return (
+      <Shell title="Connect this branch to head office" subtitle="Branch servers are not set up from scratch.">
+        <p className="text-sm text-ink-600 dark:text-ink-300">Create the branch at head office (Settings → Branches), copy its sync token into this server's <code>server/.env</code> as <code>SYNC_TOKEN</code>, set <code>SYNC_HQ_URL</code> and <code>BRANCH_CODE</code>, then restart. The business, staff and products download automatically.</p>
       </Shell>
     );
   }
 
   return (
-    <Shell title={setup ? 'Set up this installation' : 'Create your business'} subtitle={setup ? 'Choose your business type and create the owner account.' : undefined} wide tab={setup ? undefined : 'signup'}>
+    <Shell title="Set up this installation" subtitle="One business per installation. Choose its type and create the owner account." wide>
       <form onSubmit={submit} className="space-y-6">
         <div>
-          <div className="label">What kind of business is this?</div>
+          <div className="label">What kind of shop is this?</div>
           {types.isLoading && <div className="flex items-center gap-2 py-4 text-sm text-ink-500"><Spinner className="h-4 w-4" />Loading business types…</div>}
           {types.isError && (
             <div className="space-y-2 py-2">
@@ -252,7 +246,7 @@ export function RegisterPage({ setup }: { setup?: boolean }) {
               <Button type="button" variant="secondary" size="sm" onClick={() => types.refetch()}>Retry</Button>
             </div>
           )}
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2">
             {types.data?.data.map((t) => (
               <button type="button" key={t.type} onClick={() => setForm((f) => ({ ...f, businessType: t.type }))} aria-pressed={form.businessType === t.type}
                 className={cx('rounded-xl border p-3 text-left transition', form.businessType === t.type ? 'border-brand-600 bg-brand-50 ring-1 ring-brand-600 dark:border-brand-200 dark:bg-white/10 dark:ring-brand-200' : 'border-ink-200 hover:border-ink-400 dark:border-ink-700')}>
@@ -261,27 +255,19 @@ export function RegisterPage({ setup }: { setup?: boolean }) {
               </button>
             ))}
           </div>
-          <p className="mt-2 text-xs text-ink-500">Afey POS configures menus, product fields, checkout and reports for this type. You can enable more modules later.</p>
+          <p className="mt-2 text-xs text-ink-500">This sets menus, product fields, checkout and reports. You can turn modules on or off later in Settings.</p>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Business name"><Input required value={form.businessName} onChange={set('businessName')} /></Field>
-          {cloud && (
-            <Field label="Business address" error={slugStatus && !slugStatus.available ? slugStatus.reason : undefined} hint={slugStatus?.available ? 'Available' : undefined}>
-              <div className="flex items-center gap-1"><Input required value={form.subdomain} onChange={(e) => setForm((f) => ({ ...f, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }))} placeholder="yourshop" /><span className="whitespace-nowrap text-sm text-ink-500">.{cfg.data?.baseDomain}</span></div>
-            </Field>
-          )}
+          <Field label="KRA PIN (optional)" hint="Printed on receipts and used for eTIMS"><Input value={form.taxPin} onChange={(e) => setForm((f) => ({ ...f, taxPin: e.target.value.toUpperCase() }))} placeholder="P051234567X" /></Field>
           <Field label="Your name"><Input required value={form.ownerName} onChange={set('ownerName')} /></Field>
           <Field label="Phone"><Input value={form.phone} onChange={set('phone')} placeholder="0712 345 678" /></Field>
           <Field label="Email"><Input type="email" required value={form.email} onChange={set('email')} /></Field>
           <Field label="Password" hint="At least 8 characters with letters and numbers"><Input type="password" required minLength={8} value={form.password} onChange={set('password')} /></Field>
-          {cloud && plans.data && (
-            <Field label="Plan"><select className="input" value={form.planCode} onChange={set('planCode')}>{plans.data.data.map((p) => <option key={p.code} value={p.code}>{p.name} · {p.trialDays}-day free trial</option>)}</select></Field>
-          )}
         </div>
         <ErrorBox error={error} />
-        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-          {!setup ? <Link to="/login" className="text-sm text-brand-700 hover:underline dark:text-brand-200">I already have an account</Link> : <span />}
-          <Button type="submit" size="lg" className="rounded-full px-10" loading={busy} disabled={!form.businessType}>{setup ? 'Finish setup' : 'Create business'}</Button>
+        <div className="flex justify-end">
+          <Button type="submit" size="lg" className="rounded-full px-10" loading={busy} disabled={!form.businessType}>Finish setup</Button>
         </div>
       </form>
     </Shell>

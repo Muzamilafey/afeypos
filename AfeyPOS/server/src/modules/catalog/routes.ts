@@ -79,26 +79,10 @@ function normalizeProduct(p: ProductInput, caps: { productFields: readonly strin
   if (p.trackSerials && !caps.modules.includes('serialNumbers')) throw badRequest('Enable the serial numbers module first');
   if (p.trackBatches && !caps.modules.includes('batchExpiry')) throw badRequest('Enable the batches & expiry module first');
   const attributes = Object.fromEntries(Object.entries(p.attributes).filter(([k]) => (PRODUCT_FIELDS as readonly string[]).includes(k) || k.startsWith('custom_')));
-  if (attributes.isbn !== undefined && attributes.isbn !== '') {
-    // Books are stored with the ISBN-13, the number printed as the cover barcode.
-    const isbn = normalizeIsbn(String(attributes.isbn));
-    if (!isbn) throw badRequest('Enter a valid ISBN-10 or ISBN-13 (check the digits)');
-    attributes.isbn = isbn;
-  } else delete attributes.isbn;
   const trackStock = p.type === 'stock' ? p.trackStock : false;
   return { ...p, units, attributes, trackStock };
 }
 
-/**
- * Makes a book's ISBN scannable by adding it as a barcode, unless another product already uses it
- * (e.g. a second-hand copy of the same title); that product stays findable by ISBN search.
- */
-async function withIsbnBarcode<T extends { barcodes: { code: string; unitCode: string }[]; baseUnit: string; attributes: Record<string, unknown> }>(data: T, productId?: unknown): Promise<T> {
-  const isbn = data.attributes.isbn as string | undefined;
-  if (!isbn || data.barcodes.some((b) => b.code === isbn)) return data;
-  if (await Product.exists({ 'barcodes.code': isbn, ...(productId ? { _id: { $ne: productId } } : {}) })) return data;
-  return { ...data, barcodes: [...data.barcodes, { code: isbn, unitCode: data.baseUnit }] };
-}
 
 // ---- categories & brands ----
 router.get('/categories', requirePermission('products.read'), async (_req, res) => {
@@ -132,7 +116,7 @@ router.get('/products', requirePermission('products.read'), async (req, res) => 
   if (q.q) {
     const rx = new RegExp(escapeRegex(q.q), 'i');
     const isbn = normalizeIsbn(q.q);
-    filter.$or = [{ name: rx }, { sku: rx }, { 'barcodes.code': q.q }, { plu: q.q }, { 'attributes.author': rx }, { 'attributes.publisher': rx }, { 'attributes.gradeLevel': rx }, { 'attributes.subject': rx }, ...(isbn ? [{ 'barcodes.code': isbn }, { 'attributes.isbn': isbn }] : [])];
+    filter.$or = [{ name: rx }, { sku: rx }, { 'barcodes.code': q.q }, { plu: q.q }, { 'attributes.department': rx }, ...(isbn ? [{ 'barcodes.code': isbn }] : [])];
   }
   const [rows, total] = await Promise.all([
     Product.find(filter).sort({ name: 1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(),
@@ -201,7 +185,7 @@ router.post('/products/:id/quote', requirePermission('products.read'), async (re
 router.post('/products', requirePermission('products.manage'), async (req, res) => {
   const input = parse(createSchema, req.body);
   const { openingStock, ...rest } = input;
-  const data = await withIsbnBarcode(normalizeProduct(rest, req.capabilities!));
+  const data = normalizeProduct(rest, req.capabilities!);
   const product = await withTransaction(async () => {
     const [p] = await Product.create([data]);
     for (const os of openingStock ?? []) {
@@ -220,7 +204,7 @@ router.put('/products/:id', requirePermission('products.manage'), async (req, re
   const before = await Product.findById(id).lean();
   if (!before) throw notFound('Product');
   if (JSON.stringify(before.prices) !== JSON.stringify(input.prices) && !req.auth!.permissions.has('prices.manage')) throw badRequest('You need the prices.manage permission to change prices');
-  const data = await withIsbnBarcode(normalizeProduct(input, req.capabilities!), id);
+  const data = normalizeProduct(input, req.capabilities!);
   if (before.trackSerials !== data.trackSerials || before.trackBatches !== data.trackBatches) {
     const hasStock = await StockLevel.exists({ productId: id, qty: { $ne: 0 } });
     if (hasStock) throw badRequest('Batch/serial tracking can only be changed when the product has no stock');

@@ -10,10 +10,8 @@ import './http/types.js';
 import { env } from './config/env.js';
 import { errorHandler } from './http/errorHandler.js';
 import { requireTenant } from './http/tenant.js';
-import { authenticate, denySupportWrites, requireAnyModule, requireModule } from './http/auth.js';
+import { authenticate, requireAnyModule, requireModule } from './http/auth.js';
 import { dbStatus, pingDatabase } from './db/connection.js';
-import { audit } from './lib/audit.js';
-import { runAsPlatform } from './lib/context.js';
 import { publicRoutes } from './modules/public/routes.js';
 import { authRoutes, recoveryRoutes } from './modules/auth/routes.js';
 import { salesRoutes } from './modules/sales/routes.js';
@@ -29,7 +27,6 @@ import { reportRoutes } from './modules/reports/routes.js';
 import { hardwareRoutes } from './modules/hardware/routes.js';
 import { biometricBridgeRoutes, biometricRoutes } from './modules/biometrics/routes.js';
 import { backupRoutes } from './modules/backups/routes.js';
-import { platformRoutes } from './modules/platform/routes.js';
 import { syncIngestRoutes, syncSettingsRoutes } from './modules/sync/routes.js';
 import { fileRoutes } from './modules/files/routes.js';
 import './modules/notifications/service.js';
@@ -80,9 +77,7 @@ export function createApp() {
       origin(origin, cb) {
         if (!origin) return cb(null, true);
         try {
-          const host = new URL(origin).hostname;
-          const ok = origins.includes(origin) || host === e.BASE_DOMAIN || host.endsWith('.' + e.BASE_DOMAIN);
-          cb(null, ok);
+          cb(null, origins.includes(new URL(origin).origin));
         } catch {
           cb(null, false);
         }
@@ -110,7 +105,6 @@ export function createApp() {
   v1.use('/public', publicRoutes);
   // Neutral path: Safaricom rejects callback URLs containing words such as "mpesa".
   v1.use('/hooks/pay', mpesaCallbackRoutes, gatewayCallbackRoutes);
-  v1.use('/platform', (req, _res, next) => runAsPlatform(() => next()), platformRoutes);
 
   const tenant = Router();
   tenant.use(requireTenant);
@@ -128,11 +122,6 @@ export function createApp() {
   tenant.use('/auth', recoveryRoutes);
   tenant.use('/auth', authRoutes);
   tenant.use(authenticate);
-  tenant.use(async (req, _res, next) => {
-    if (req.auth?.kind === 'support') await audit(req, { action: 'support.access', details: { method: req.method, path: req.path } });
-    next();
-  });
-  tenant.use(denySupportWrites);
   for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, gatewayRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, backupRoutes, fileRoutes]) {
     tenant.use(r);
   }

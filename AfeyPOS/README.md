@@ -1,17 +1,18 @@
 # Afey POS
 
-Afey POS is a point of sale and business management system for shops, wholesalers, hardware stores, minimarts, supermarkets, electronics shops, boutiques, pharmacies, liquor stores, bookshops and multi-branch chains, in Kenya and elsewhere.
+Afey POS is a point of sale and retail management system for **minimarts and supermarkets** in Kenya. Each installation belongs to **one business**; there is no multi-tenant SaaS mode.
 
-It runs two ways:
+It runs in one of three roles (`DEPLOYMENT_MODE` in `server/.env`):
 
-- **Local installation**: one business on its own Windows (or Linux) server. Several tills on the shop network share one database, and the shop keeps selling when the internet is down.
-- **Cloud SaaS**: many businesses on one platform, each at its own subdomain (`mandera.afeypos.com`), with isolated data, plans, trials and a platform-owner portal.
+- **standalone**: a single shop on its own Windows (or Linux) server. Several tills on the shop network share one database, and the shop keeps selling when the internet is down.
+- **hq**: the business's online head-office server. Owners and admins work here, every branch syncs to it, and it serves the online shop.
+- **branch**: the local server in one branch, with its own database so the branch keeps selling offline, syncing to HQ when connected.
 
 | Part | Path | Stack |
 |---|---|---|
 | Shared business rules (profiles, permissions, money, barcodes) | `packages/shared` | TypeScript |
 | API server | `server` | Node.js 22, Express 5, Mongoose 8, Zod, Socket.IO |
-| Web app (POS, back office, platform portal) | `web` | React 18, Vite 6, Tailwind CSS, TanStack Query |
+| Web app (POS and back office) | `web` | React 18, Vite 6, Tailwind CSS, TanStack Query |
 | Device bridge for the till PC | `bridge` | Node.js, no native dependencies |
 | Windows installer scripts | `installer/windows` | PowerShell |
 

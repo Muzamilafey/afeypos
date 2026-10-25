@@ -25,7 +25,7 @@ Scheduled: daily sales summary email at 21:00 local time (Settings → Sales & t
 - **Duplicate prevention**: dedupe keys (e.g. one receipt per sale per recipient, one reminder per customer per week).
 - **Rate limiting**: per-tenant token bucket (60 messages/minute per process).
 - **Usage limits**: in the cloud each SMS consumes the plan's monthly allowance; once exhausted messages are `skipped` with a reason.
-- **Delivery logs**: Settings → Integrations shows test results; `GET /settings/notifications/logs` lists every message and status. The platform portal sees failed-message metadata only (no bodies).
+- **Delivery logs**: Settings → Integrations shows test results; `GET /settings/notifications/logs` lists every message and status.
 - **Test connection**: *Test* verifies SMTP and sends a test SMS/email to the address you enter.
 
 ## Verification status

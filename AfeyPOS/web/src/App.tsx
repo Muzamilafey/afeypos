@@ -4,7 +4,7 @@ import type { ModuleKey, Permission } from '@afeypos/shared';
 import { useAuth } from './lib/auth';
 import { AppShell } from './layouts/AppShell';
 import { Loading, EmptyState } from './components/ui';
-import { ForgotPasswordPage, LoginPage, RegisterPage, ResetPasswordPage, VerifyEmailPage } from './pages/Auth';
+import { ForgotPasswordPage, LoginPage, SetupPage, ResetPasswordPage, VerifyEmailPage } from './pages/Auth';
 import { DashboardPage } from './pages/Dashboard';
 import { POSPage } from './pages/POS';
 import { SaleDetailPage, SalesPage, ShiftsPage } from './pages/sales/Sales';
@@ -15,7 +15,6 @@ import { AdjustmentsPage, LabelsPage, MovementsPage, StockLevelsPage, Stocktakes
 import { PartiesPage, PartyDetailPage } from './pages/parties/Parties';
 import { AuditPage, ExpensesPage, MpesaPage, OnlinePaymentsPage, PromotionsPage, ReportsPage, RepairsPage } from './pages/Finance';
 import { AccountPage, BusinessSettingsPage, HardwarePage, IntegrationsPage, LocationsPage, UsersPage } from './pages/settings/Settings';
-import { PlatformAudit, PlatformJobs, PlatformLayout, PlatformOverview, PlatformPlans, PlatformSupport, PlatformTenantDetail, PlatformTenants } from './pages/platform/Platform';
 
 function Protected({ children }: { children: ReactNode }) {
   const { me, loading } = useAuth();
@@ -36,20 +35,11 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
-      <Route path="/setup" element={<RegisterPage setup />} />
+      <Route path="/register" element={<Navigate to="/setup" replace />} />
+      <Route path="/setup" element={<SetupPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/verify-email" element={<VerifyEmailPage />} />
-      <Route path="/platform" element={<PlatformLayout />}>
-        <Route index element={<PlatformOverview />} />
-        <Route path="tenants" element={<PlatformTenants />} />
-        <Route path="tenants/:id" element={<PlatformTenantDetail />} />
-        <Route path="plans" element={<PlatformPlans />} />
-        <Route path="support" element={<PlatformSupport />} />
-        <Route path="jobs" element={<PlatformJobs />} />
-        <Route path="audit" element={<PlatformAudit />} />
-      </Route>
       <Route element={<Protected><AppShell /></Protected>}>
         <Route index element={<DashboardPage />} />
         <Route path="pos" element={<Gate perm="sales.create" module="pos"><POSPage /></Gate>} />

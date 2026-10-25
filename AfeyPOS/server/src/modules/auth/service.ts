@@ -1,13 +1,12 @@
 import type { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
-import { AuthToken, PlatformUser, Session, User } from '../../models/index.js';
+import { AuthToken, Session, User } from '../../models/index.js';
 import { randomToken, safeEqual, sha256, verifyPassword } from '../../lib/crypto.js';
 import { AppError, unauthorized } from '../../lib/errors.js';
 import { signAccessToken } from '../../http/auth.js';
 
 export const REFRESH_COOKIE = 'afey_rt';
-export const PLATFORM_REFRESH_COOKIE = 'afey_prt';
 const MAX_FAILED = 5;
 const LOCK_MINUTES = 15;
 
@@ -19,11 +18,10 @@ export interface IssuedSession {
 }
 
 export async function issueSession(opts: {
-  userType: 'tenant' | 'platform' | 'support';
+  userType: 'tenant';
   userId: Types.ObjectId;
   tenantId?: Types.ObjectId;
   req: Request;
-  supportGrantId?: Types.ObjectId;
   expiresAt?: Date;
 }): Promise<IssuedSession> {
   const secret = randomToken(32);
@@ -38,7 +36,6 @@ export async function issueSession(opts: {
     ip: opts.req.ip,
     userAgent: opts.req.get('user-agent')?.slice(0, 300),
     lastUsedAt: new Date(),
-    supportGrantId: opts.supportGrantId,
   });
   const accessToken = signAccessToken({ sub: String(opts.userId), typ: opts.userType, tid: opts.tenantId ? String(opts.tenantId) : undefined, sid: String(sessionId) });
   return { accessToken, refreshToken: `${sessionId}.${secret}`, sessionId, expiresIn: env().JWT_ACCESS_TTL_SECONDS };
@@ -48,14 +45,13 @@ export async function issueSession(opts: {
  * Rotates a refresh token. Presenting an already-rotated token (outside a short grace window for
  * concurrent tabs) is treated as theft and revokes the whole session.
  */
-export async function rotateRefresh(raw: string | undefined, expectType: 'tenant' | 'platform', tenantId?: Types.ObjectId): Promise<IssuedSession> {
+export async function rotateRefresh(raw: string | undefined, tenantId?: Types.ObjectId): Promise<IssuedSession> {
   if (!raw || !raw.includes('.')) throw unauthorized('No refresh session');
   const [sid, secret] = raw.split('.');
   if (!Types.ObjectId.isValid(sid)) throw unauthorized('No refresh session');
   const session = await Session.findById(sid);
   if (!session || session.revokedAt || session.expiresAt < new Date()) throw unauthorized('Session expired');
-  if (expectType === 'tenant' && (session.userType === 'platform' || String(session.tenantId) !== String(tenantId))) throw unauthorized('Session expired');
-  if (expectType === 'platform' && session.userType !== 'platform') throw unauthorized('Session expired');
+  if (session.userType !== 'tenant' || String(session.tenantId) !== String(tenantId)) throw unauthorized('Session expired');
   const hash = sha256(secret);
   if (!safeEqual(hash, session.refreshHash)) {
     if (session.previousHash && safeEqual(hash, session.previousHash)) {
@@ -105,7 +101,7 @@ type Credentialed = { _id: Types.ObjectId; passwordHash: string; failedLogins: n
 
 /** Verifies a password with lockout. Generic error messages prevent account enumeration. */
 export async function checkCredentials<T extends Credentialed>(
-  model: typeof User | typeof PlatformUser,
+  model: typeof User,
   user: T | null,
   password: string,
 ): Promise<T> {
@@ -127,7 +123,7 @@ export async function checkCredentials<T extends Credentialed>(
   return user;
 }
 
-export async function createAuthToken(purpose: 'password_reset' | 'email_verify', userType: 'tenant' | 'platform', userId: Types.ObjectId, tenantId?: Types.ObjectId, minutes = 30) {
+export async function createAuthToken(purpose: 'password_reset' | 'email_verify', userType: 'tenant', userId: Types.ObjectId, tenantId?: Types.ObjectId, minutes = 30) {
   const token = randomToken(32);
   await AuthToken.create({ purpose, userType, userId, tenantId, tokenHash: sha256(token), expiresAt: new Date(Date.now() + minutes * 60_000) });
   return token;

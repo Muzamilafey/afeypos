@@ -260,7 +260,6 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
               {results.data.map((p) => (
                 <button key={p._id} onClick={() => { addProduct(p); searchRef.current?.focus(); }} className={cx('card text-left transition hover:border-brand-500', big ? 'p-4' : 'p-3')}>
                   <div className="line-clamp-2 font-medium">{p.name}</div>
-                  {p.attributes?.author && <div className="truncate text-xs text-ink-500">{[p.attributes.author, p.attributes.edition, p.attributes.bookCondition && p.attributes.bookCondition !== 'New' ? p.attributes.bookCondition : null].filter(Boolean).join(' · ')}</div>}
                   <div className="mt-1 flex items-center justify-between text-sm">
                     <span className="text-ink-500">{p.sku}</span>
                     <span className="font-semibold">{money(p.prices?.[cart.priceList] ?? p.prices?.retail)}</span>

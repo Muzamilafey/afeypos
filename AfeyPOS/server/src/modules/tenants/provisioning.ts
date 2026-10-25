@@ -1,12 +1,11 @@
 import { z } from 'zod';
-import { BUSINESS_PROFILES, BUSINESS_TYPES, normalizeSubdomain, validateSubdomain } from '@afeypos/shared';
+import { BUSINESS_PROFILES, BUSINESS_TYPES } from '@afeypos/shared';
 import { Branch, Category, Customer, Tenant, Till, User, Warehouse } from '../../models/index.js';
 import { env } from '../../config/env.js';
 import { hashPassword, randomToken } from '../../lib/crypto.js';
-import { badRequest, conflict } from '../../lib/errors.js';
+import { AppError, conflict } from '../../lib/errors.js';
 import { runInTenant } from '../../lib/context.js';
 import { withTransaction } from '../../db/connection.js';
-import { getPlan } from './plans.js';
 
 export const passwordSchema = z
   .string()
@@ -16,8 +15,7 @@ export const passwordSchema = z
 
 export const registrationSchema = z.object({
   businessName: z.string().trim().min(2).max(120),
-  businessType: z.enum(BUSINESS_TYPES),
-  subdomain: z.string().trim().toLowerCase().optional(),
+  businessType: z.enum(BUSINESS_TYPES).default('supermarket'),
   ownerName: z.string().trim().min(2).max(120),
   email: z.string().trim().toLowerCase().email(),
   password: passwordSchema,
@@ -25,36 +23,25 @@ export const registrationSchema = z.object({
   country: z.string().length(2).default('KE'),
   currency: z.string().length(3).default('KES'),
   timezone: z.string().default('Africa/Nairobi'),
-  planCode: z.string().default('starter'),
+  taxPin: z.string().trim().toUpperCase().regex(/^[AP]\d{9}[A-Z]$/, 'KRA PIN looks like P051234567X').optional().or(z.literal('').transform(() => undefined)),
 });
 
 export type RegistrationInput = z.infer<typeof registrationSchema>;
 
-export async function isSubdomainAvailable(slug: string): Promise<{ available: boolean; reason?: string }> {
-  const err = validateSubdomain(slug);
-  if (err) return { available: false, reason: err };
-  const exists = await Tenant.exists({ slug: normalizeSubdomain(slug) });
-  return exists ? { available: false, reason: 'This address is already taken' } : { available: true };
+/** URL-safe identifier derived from the business name (used in M-Pesa account references and file names). */
+export function slugFor(name: string): string {
+  return name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'business';
 }
 
 /**
- * Creates a tenant with a default branch, warehouse, till, owner account, suggested categories
- * and a walk-in customer, all in one transaction.
+ * One-time setup of the installation's business: default branch, warehouse, till, owner account,
+ * suggested categories and a walk-in customer, all in one transaction.
  */
 export async function provisionTenant(input: RegistrationInput) {
   const e = env();
-  let slug: string;
-  if (e.DEPLOYMENT_MODE === 'local') {
-    if (await Tenant.exists({})) throw conflict('This installation is already set up', 'ALREADY_SETUP');
-    slug = normalizeSubdomain(input.subdomain || 'local');
-  } else {
-    if (!input.subdomain) throw badRequest('Choose a subdomain for your business');
-    slug = normalizeSubdomain(input.subdomain);
-    const avail = await isSubdomainAvailable(slug);
-    if (!avail.available) throw conflict(avail.reason!, 'SUBDOMAIN_UNAVAILABLE');
-  }
-  const plan = e.DEPLOYMENT_MODE === 'cloud' ? await getPlan(input.planCode) : null;
-  if (e.DEPLOYMENT_MODE === 'cloud' && !plan) throw badRequest('Unknown plan');
+  if (e.DEPLOYMENT_MODE === 'branch') throw new AppError(409, 'BRANCH_JOINS_HQ', 'Branch servers are set up by connecting to head office, not by creating a new business');
+  if (await Tenant.exists({})) throw conflict('This installation is already set up', 'ALREADY_SETUP');
+  const slug = slugFor(input.businessName);
   const passwordHash = await hashPassword(input.password);
   const profile = BUSINESS_PROFILES[input.businessType];
 
@@ -64,11 +51,9 @@ export async function provisionTenant(input: RegistrationInput) {
         name: input.businessName,
         slug,
         businessType: input.businessType,
-        status: e.DEPLOYMENT_MODE === 'cloud' ? 'trial' : 'active',
-        planCode: e.DEPLOYMENT_MODE === 'cloud' ? plan!.code : 'local',
-        trialEndsAt: plan ? new Date(Date.now() + plan.trialDays * 86400_000) : undefined,
+        status: 'active',
         contact: { email: input.email, phone: input.phone },
-        settings: { currency: input.currency, country: input.country, timezone: input.timezone },
+        settings: { currency: input.currency, country: input.country, timezone: input.timezone, taxPin: input.taxPin },
         callbackToken: randomToken(24),
       },
     ]);

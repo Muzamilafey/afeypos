@@ -3,7 +3,7 @@ import type { Permission, Role, Capabilities } from '@afeypos/shared';
 import type { TenantDoc } from '../models/index.js';
 
 export interface AuthInfo {
-  kind: 'tenant' | 'platform' | 'support';
+  kind: 'tenant';
   userId: Types.ObjectId;
   name: string;
   email: string;
@@ -12,7 +12,6 @@ export interface AuthInfo {
   sessionId: Types.ObjectId;
   tenantId?: Types.ObjectId;
   branchIds: Types.ObjectId[];
-  supportGrantId?: Types.ObjectId;
 }
 
 declare global {

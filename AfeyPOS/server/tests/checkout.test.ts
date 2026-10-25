@@ -26,9 +26,11 @@ const stock = async (productId: string) => (await t.client.get(`/inventory/level
 
 describe('checkout', () => {
   it('requires an open shift on the till', async () => {
-    const { client, locations } = await registerTenant(ctx.api, 'noshift');
-    const p = await createProduct(client, { openingStock: [{ warehouseId: locations.warehouses[0]._id, qty: 5 }] });
-    const r = await client.post('/sales', { clientRequestId: rid(), tillId: locations.tills[0]._id, lines: [{ productId: p._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 10000 }] });
+    // A second till in the same branch has no open shift.
+    const t2 = await t.client.post('/settings/tills', { branchId: t.locations.branches[0]._id, warehouseId: wh, name: 'Till 2', code: 'T2' });
+    expect(t2.status).toBe(201);
+    const p = await createProduct(t.client, { openingStock: [{ warehouseId: wh, qty: 5 }] });
+    const r = await t.client.post('/sales', { clientRequestId: rid(), tillId: t2.body.data._id, lines: [{ productId: p._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 10000 }] });
     expect(r.body.error.code).toBe('SHIFT_REQUIRED');
   });
 

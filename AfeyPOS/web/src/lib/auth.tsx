@@ -5,8 +5,8 @@ import { configureFormat } from './format';
 
 export interface Me {
   user: { id: string; name: string; email: string; roles: string[]; branchIds: string[]; kind: string; twoFactorEnabled?: boolean; hasPin?: boolean; emailVerified?: boolean };
-  tenant: { id: string; name: string; slug: string; businessType: string; status: string; planCode: string; trialEndsAt?: string; settings: any; enabledModules: ModuleKey[]; disabledModules: ModuleKey[] };
-  deploymentMode: 'local' | 'cloud';
+  tenant: { id: string; name: string; slug: string; businessType: string; status: string; settings: any; enabledModules: ModuleKey[]; disabledModules: ModuleKey[] };
+  deploymentMode: 'standalone' | 'hq' | 'branch';
   capabilities: Capabilities;
   permissions: Permission[];
   navigation: NavItem[];
