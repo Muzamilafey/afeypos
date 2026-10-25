@@ -8,6 +8,7 @@ export function presentIntent(i: PaymentIntentDoc | Record<string, any>) {
     phone: i.phone, payerName: i.payerName, receiptNumber: i.receiptNumber, resultCode: i.resultCode, resultDesc: i.resultDesc, accountReference: i.accountReference,
     allocatedTo: i.allocatedTo, allocatedCents: i.allocatedCents, createdAt: i.createdAt, completedAt: i.completedAt, checkoutRequestId: i.checkoutRequestId,
     reference: i.reference, checkoutUrl: i.status === 'pending' ? i.checkoutUrl : undefined, channel: i.channel, configId: i.configId,
+    awaiting: i.awaiting, shortCode: i.shortCode,
   };
 }
 

@@ -122,6 +122,21 @@ async function tombstones() {
   if (r.next) await saveCursor('down:tombstones', r.next, null);
 }
 
+/** M-Pesa callbacks for this branch's requests arrive at HQ (public address) and are processed here. */
+async function mpesaRelay(tenantId: Types.ObjectId) {
+  const c = await cursor('down:mpesa-relay');
+  const since = c.t.getTime() > 0 ? c.t : new Date(Date.now() - 24 * 3600_000);
+  const r = await hq<{ docs: { kind: string; payload: any; at: Date }[]; next: Date | null }>(`/mpesa-relay?t=${since.toISOString()}`);
+  const { handleStkCallback, handleStatusResult } = await import('../payments/mpesa.js');
+  const { handleB2CResult } = await import('../payments/payouts.js');
+  for (const ev of r.docs) {
+    if (ev.kind === 'stk_callback') await handleStkCallback(tenantId, ev.payload, 'hq-relay');
+    else if (ev.kind === 'txn_status') await handleStatusResult(tenantId, ev.payload, 'hq-relay');
+    else if (ev.kind === 'b2c_result') await handleB2CResult(tenantId, ev.payload, 'hq-relay');
+  }
+  if (r.next) await saveCursor('down:mpesa-relay', r.next, null);
+}
+
 async function pendingUp(tenantId: Types.ObjectId) {
   let n = 0;
   for (const spec of upSpecs()) {
@@ -169,6 +184,7 @@ async function runRound(): Promise<SyncRunReport> {
       for (const spec of downSpecs().filter((s) => s.dir === 'both')) await pull(spec, report);
       for (const m of STOCK_REPLICA_MODELS) await pull(specFor(m.collection.collectionName)!, report, { key: `replica:${m.collection.collectionName}` });
       await tombstones();
+      await mpesaRelay(tenantId);
       await hq('/report', { method: 'POST', body: { pendingUp: await pendingUp(tenantId), lastError: '', version: process.env.npm_package_version ?? '' } }).catch(() => undefined);
     });
     report.ok = true;

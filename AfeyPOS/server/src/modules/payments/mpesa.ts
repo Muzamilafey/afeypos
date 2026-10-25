@@ -22,8 +22,9 @@ import { runInTenant } from '../../lib/context.js';
 import { logger } from '../../lib/logger.js';
 import { emitToTenant } from '../../realtime/socket.js';
 import { enqueue, registerJob } from '../../jobs/queue.js';
-import { DarajaClient, MockMpesaGateway, parseDarajaDate, parseStkCallback, stkResultToStatus, type MpesaGateway } from '../../integrations/mpesa/daraja.js';
+import { DarajaClient, MockMpesaGateway, parseAsyncResult, parseDarajaDate, parseStkCallback, splitParty, stkResultToStatus, type MpesaGateway } from '../../integrations/mpesa/daraja.js';
 import { findActiveConfig, openSecrets } from '../integrations/configs.js';
+import { handleB2CResult } from './payouts.js';
 import { finalizeIntent, presentIntent } from './intents.js';
 import { verifyGatewayIntent } from './gateways.js';
 
@@ -34,15 +35,28 @@ export function gatewayFor(cfg: InstanceType<typeof IntegrationConfig>): MpesaGa
   }
   const s = cfg.settings ?? {};
   const secrets = openSecrets(cfg);
-  return new DarajaClient({ environment: cfg.environment as 'sandbox' | 'production', consumerKey: secrets.consumerKey, consumerSecret: secrets.consumerSecret, passkey: secrets.passkey, shortCode: s.shortCode, type: s.type ?? 'paybill', tillNumber: s.tillNumber });
+  return new DarajaClient({
+    environment: cfg.environment as 'sandbox' | 'production', consumerKey: secrets.consumerKey, consumerSecret: secrets.consumerSecret, passkey: secrets.passkey,
+    shortCode: s.shortCode, type: s.type === 'till' ? 'till' : 'paybill', tillNumber: s.tillNumber,
+    initiatorName: s.initiatorName, securityCredential: secrets.securityCredential, b2cShortCode: s.b2cShortCode,
+  });
 }
 
+/**
+ * Public addresses Safaricom calls back. Branch servers are not reachable from the internet, so their
+ * callbacks go to head office, which relays them during sync.
+ */
 export function callbackUrls(tenantId: Types.ObjectId, token: string) {
-  const base = env().API_PUBLIC_URL.replace(/\/$/, '');
+  const e = env();
+  const base = (e.DEPLOYMENT_MODE === 'branch' ? e.SYNC_HQ_URL || e.SYNC_CLOUD_URL || e.API_PUBLIC_URL : e.API_PUBLIC_URL).replace(/\/$/, '');
+  const root = `${base}/api/v1/hooks/pay/${tenantId}/${token}`;
   return {
-    stk: `${base}/api/v1/hooks/pay/${tenantId}/${token}/stk`,
-    c2bConfirmation: `${base}/api/v1/hooks/pay/${tenantId}/${token}/c2b/confirmation`,
-    c2bValidation: `${base}/api/v1/hooks/pay/${tenantId}/${token}/c2b/validation`,
+    stk: `${root}/stk`,
+    c2bConfirmation: `${root}/c2b/confirmation`,
+    c2bValidation: `${root}/c2b/validation`,
+    statusResult: `${root}/status/result`,
+    b2cResult: `${root}/b2c/result`,
+    timeout: `${root}/timeout`,
   };
 }
 
@@ -182,6 +196,123 @@ export function buildStkCallback(checkoutRequestId: string, merchantRequestId: s
   };
 }
 
+/** How customers pay this till without a prompt: Paybill number + account, or Buy Goods till number. */
+function payTo(cfg: InstanceType<typeof IntegrationConfig>) {
+  const till = cfg.settings?.type === 'till';
+  return { type: till ? 'till' : 'paybill', number: String(till ? (cfg.settings?.tillNumber ?? cfg.settings?.shortCode) : cfg.settings?.shortCode) };
+}
+
+/**
+ * The till waits for the customer to pay the Paybill/Till themselves. Paybill: we give an account number
+ * to type, so the payment matches this sale exactly. Buy Goods: matched by amount (see handleC2B).
+ */
+router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({ clientRequestId: z.string().min(8).max(100), amountCents: positiveCents.refine((v) => v >= 100 && v % 100 === 0, 'M-Pesa amounts must be whole shillings'), tillId: objectId }), req.body);
+  const existing = await PaymentIntent.findOne({ clientRequestId: body.clientRequestId }).lean();
+  if (existing) {
+    res.json({ data: presentIntent(existing), replay: true });
+    return;
+  }
+  const till = await Till.findById(body.tillId).lean();
+  if (!till) throw notFound('Till');
+  const cfg = await findActiveConfig('mpesa', till.branchId);
+  if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+  const to = payTo(cfg);
+  // Short and easy to type on a phone: till code + 4 digits, unique among waiting payments.
+  let account = '';
+  for (let n = 0; n < 20 && !account; n++) {
+    const candidate = `${till.code}${Math.floor(1000 + Math.random() * 9000)}`.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+    if (!(await PaymentIntent.exists({ awaiting: 'expected', status: 'pending', accountReference: candidate }))) account = candidate;
+  }
+  const [intent] = await PaymentIntent.create([{
+    source: 'c2b', awaiting: 'expected', status: 'pending', clientRequestId: body.clientRequestId, amountCents: body.amountCents,
+    accountReference: to.type === 'paybill' ? account : undefined, shortCode: to.number, branchId: till.branchId, tillId: till._id, configId: cfg._id, initiatedBy: req.auth!.userId,
+  }]);
+  // Waiting payments that never arrive expire like prompts do.
+  const timeout = Math.max(600, req.tenant!.settings?.stkPendingTimeoutSeconds ?? 0);
+  await enqueue('mpesa.expireExpected', { intentId: String(intent._id) }, { runAt: new Date(Date.now() + timeout * 1000), dedupeKey: `mpesa-expect:${intent._id}` });
+  res.status(201).json({ data: { ...presentIntent(intent), payTo: to } });
+});
+
+registerJob('mpesa.expireExpected', async ({ intentId }: { intentId: string }) => {
+  const i = await PaymentIntent.findById(intentId);
+  if (i?.status === 'pending' && i.awaiting === 'expected') await finalizeIntent(i, { status: 'expired', resultDesc: 'No payment received to the Paybill/Till in time' });
+});
+
+/**
+ * Cashier enters the M-Pesa code from the customer's SMS. Found and unused: ready to apply. Not found yet:
+ * if the business set up an initiator, Safaricom's Transaction Status API is asked (answer arrives by callback).
+ */
+router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({ receipt: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{8,12}$/, 'M-Pesa codes are 8-12 letters and digits, e.g. SJK3AB12CD'), tillId: objectId.optional(), clientRequestId: z.string().min(8).max(100) }), req.body);
+  const found = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: body.receipt }).lean();
+  if (found) {
+    const free = (found.paidAmountCents ?? 0) - (found.allocatedCents ?? 0);
+    if (found.status !== 'succeeded') throw unprocessable(`M-Pesa ${body.receipt} is ${found.status}`, 'MPESA_NOT_AVAILABLE');
+    if (free <= 0) throw unprocessable(`M-Pesa ${body.receipt} was already used${found.allocatedTo?.number ? ` for ${found.allocatedTo.number}` : ''}`, 'MPESA_ALREADY_USED');
+    res.json({ data: presentIntent(found), found: true });
+    return;
+  }
+  const pendingCheck = await PaymentIntent.findOne({ awaiting: 'verify', accountReference: body.receipt, status: 'pending' }).lean();
+  if (pendingCheck) {
+    res.json({ data: presentIntent(pendingCheck), found: false, verifying: true });
+    return;
+  }
+  const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
+  const cfg = await findActiveConfig('mpesa', till?.branchId);
+  if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+  if (cfg.provider !== 'mock' && (!cfg.settings?.initiatorName || !openSecrets(cfg).securityCredential)) {
+    throw new AppError(404, 'MPESA_RECEIPT_NOT_FOUND', `${body.receipt} has not reached the system yet. Check the code, wait a minute, or set up the M-Pesa initiator to verify codes with Safaricom.`);
+  }
+  const tenant = req.tenant!;
+  const urls = callbackUrls(tenant._id, tenant.callbackToken);
+  const originatorConversationId = `AFY-${new Types.ObjectId().toHexString()}`;
+  const [intent] = await PaymentIntent.create([{
+    source: 'c2b', awaiting: 'verify', status: 'pending', clientRequestId: body.clientRequestId, amountCents: 0, accountReference: body.receipt,
+    originatorConversationId, branchId: till?.branchId, tillId: till?._id, configId: cfg._id, initiatedBy: req.auth!.userId,
+  }]);
+  try {
+    const r = await gatewayFor(cfg).transactionStatus({ transactionId: body.receipt, originatorConversationId, resultUrl: urls.statusResult, timeoutUrl: urls.timeout });
+    if (r.ResponseCode !== '0') throw new Error(r.ResponseDescription ?? r.errorMessage ?? 'rejected');
+    await PaymentIntent.updateOne({ _id: intent._id }, { $set: { conversationId: r.ConversationID } });
+  } catch (err: any) {
+    await finalizeIntent(intent, { status: 'failed', resultDesc: `Could not ask M-Pesa: ${err?.message}` });
+    throw new AppError(502, 'MPESA_UNAVAILABLE', `Could not ask M-Pesa about ${body.receipt}: ${err?.message}`);
+  }
+  await enqueue('mpesa.expireExpected', { intentId: String(intent._id) }, { runAt: new Date(Date.now() + 5 * 60_000), dedupeKey: `mpesa-verify:${intent._id}` });
+  await audit(req, { action: 'mpesa.receipt_verification', entity: 'PaymentIntent', entityId: intent._id, details: { receipt: body.receipt } });
+  res.status(202).json({ data: presentIntent(intent), found: false, verifying: true });
+});
+
+/** Development only: simulate a customer paying the Paybill/Till (C2B confirmation) on a simulator config. */
+router.post('/payments/mpesa/simulate-c2b', requirePermission('sales.create'), async (req, res) => {
+  if (env().NODE_ENV === 'production') throw forbidden('Simulation is disabled in production');
+  const body = parse(z.object({ amountCents: positiveCents, account: z.string().max(20).optional(), phone: z.string().default('254712345678'), receipt: z.string().optional(), tillId: objectId.optional() }), req.body);
+  const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
+  const cfg = await findActiveConfig('mpesa', till?.branchId);
+  if (cfg?.provider !== 'mock') throw forbidden('Only the M-Pesa simulator can simulate payments');
+  const to = payTo(cfg);
+  const receipt = body.receipt ?? `SIM${Date.now().toString(36).toUpperCase()}`.slice(0, 10);
+  await handleC2B(req.tenant!._id, { TransactionType: to.type === 'till' ? 'Buy Goods' : 'Pay Bill', TransID: receipt, TransTime: '20261025120000', TransAmount: String(body.amountCents / 100), BusinessShortCode: to.number, BillRefNumber: body.account ?? '', MSISDN: body.phone, FirstName: 'SIMULATED', LastName: 'CUSTOMER' }, 'simulator');
+  res.json({ data: presentIntent((await PaymentIntent.findOne({ receiptNumber: receipt.toUpperCase() }).lean())!) });
+});
+
+/** Development only: simulate Safaricom's Transaction Status answer for a pending receipt check. */
+router.post('/payments/mpesa/simulate-status/:id', requirePermission('sales.create'), async (req, res) => {
+  if (env().NODE_ENV === 'production') throw forbidden('Simulation is disabled in production');
+  const body = parse(z.object({ amountCents: positiveCents, completed: z.boolean().default(true) }), req.body);
+  const i = await PaymentIntent.findById(idParam(req.params.id));
+  if (!i?.originatorConversationId) throw notFound('Receipt check');
+  await handleStatusResult(req.tenant!._id, {
+    Result: {
+      ResultType: 0, ResultCode: body.completed ? 0 : 2001, ResultDesc: body.completed ? 'The service request is processed successfully.' : 'The initiator information is invalid.',
+      OriginatorConversationID: i.originatorConversationId, ConversationID: i.conversationId, TransactionID: 'SIMSTATUS',
+      ResultParameters: { ResultParameter: [{ Key: 'ReceiptNo', Value: i.accountReference }, { Key: 'Amount', Value: body.amountCents / 100 }, { Key: 'TransactionStatus', Value: 'Completed' }, { Key: 'DebitPartyName', Value: '254712345678 - SIMULATED CUSTOMER' }] },
+    },
+  }, 'simulator');
+  res.json({ data: presentIntent((await PaymentIntent.findById(i._id).lean())!) });
+});
+
 export const mpesaRoutes = router;
 
 // ---------------- callbacks (public, tenant resolved from path + secret) ----------------
@@ -274,10 +405,15 @@ registerJob('mpesa.checkIntent', async ({ intentId, final }: { intentId: string;
   await queryAndApply(i, Boolean(final));
 });
 
+/**
+ * A customer paid the Paybill/Till directly. If a till is waiting for it (Paybill: same account number;
+ * Buy Goods: exactly one waiting sale with the same amount in the last 30 minutes) that sale's intent is
+ * completed; otherwise the payment is recorded as unallocated for the cashier to pick.
+ */
 async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: string) {
   return runInTenant(tenantId, async () => {
     const event = await MpesaEvent.create({ kind: 'c2b_confirmation', payload, ip });
-    const transId = String(payload?.TransID ?? '').trim();
+    const transId = String(payload?.TransID ?? '').trim().toUpperCase();
     const amount = Number(payload?.TransAmount);
     if (!transId || !Number.isFinite(amount) || amount <= 0) {
       event.outcome = 'malformed';
@@ -291,21 +427,85 @@ async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: string) {
       await event.save();
       return;
     }
+    if (await PaymentIntent.exists({ receiptNumber: transId })) {
+      event.outcome = 'duplicate';
+      await event.save();
+      return;
+    }
+    const cents = Math.round(amount * 100);
+    const billRef = String(payload.BillRefNumber ?? '').trim().toUpperCase();
+    const paid = {
+      receiptNumber: transId, paidAmountCents: cents, phone: String(payload.MSISDN ?? ''),
+      payerName: [payload.FirstName, payload.MiddleName, payload.LastName].filter(Boolean).join(' '),
+      transactionDate: parseDarajaDate(String(payload.TransTime ?? '')),
+    };
+    const waiting = { configId: cfg._id, source: 'c2b', awaiting: 'expected', status: 'pending' };
+    let expected = billRef ? await PaymentIntent.findOne({ ...waiting, accountReference: billRef }) : null;
+    if (!expected && cfg.settings?.type === 'till') {
+      const candidates = await PaymentIntent.find({ ...waiting, amountCents: cents, createdAt: { $gt: new Date(Date.now() - 30 * 60_000) } }).limit(2);
+      if (candidates.length === 1) expected = candidates[0];
+    }
     try {
-      const [intent] = await PaymentIntent.create([{
-        source: 'c2b', status: 'succeeded', amountCents: Math.round(amount * 100), paidAmountCents: Math.round(amount * 100), receiptNumber: transId,
-        phone: String(payload.MSISDN ?? ''), payerName: [payload.FirstName, payload.MiddleName, payload.LastName].filter(Boolean).join(' '),
-        accountReference: payload.BillRefNumber, shortCode: String(payload.BusinessShortCode), configId: cfg._id, branchId: cfg.branchIds?.[0],
-        transactionDate: parseDarajaDate(String(payload.TransTime ?? '')), completedAt: new Date(),
-      }]);
-      event.paymentIntentId = intent._id;
-      event.outcome = 'recorded';
-      emitToTenant(tenantId, 'payment.updated', presentIntent(intent));
+      if (expected) {
+        const done = await finalizeIntent(expected, { status: 'succeeded', resultCode: 0, resultDesc: 'Paid to M-Pesa Paybill/Till', ...paid });
+        event.paymentIntentId = expected._id;
+        event.outcome = done ? 'matched_expected' : 'duplicate';
+      } else {
+        const [intent] = await PaymentIntent.create([{
+          source: 'c2b', status: 'succeeded', amountCents: cents, ...paid, accountReference: billRef || undefined,
+          shortCode: String(payload.BusinessShortCode), configId: cfg._id, branchId: cfg.branchIds?.[0], completedAt: new Date(),
+        }]);
+        event.paymentIntentId = intent._id;
+        event.outcome = 'recorded';
+        emitToTenant(tenantId, 'payment.updated', presentIntent(intent));
+      }
     } catch (err: any) {
       if (err?.code !== 11000) throw err;
       event.outcome = 'duplicate';
     }
     await event.save();
+  });
+}
+
+/**
+ * Result of a Transaction Status query (a receipt code a cashier entered): becomes a confirmed payment
+ * when Safaricom says the transaction completed and credited this business.
+ */
+export async function handleStatusResult(tenantId: Types.ObjectId, payload: any, ip: string) {
+  return runInTenant(tenantId, async () => {
+    const parsed = parseAsyncResult(payload);
+    const event = await MpesaEvent.create({ kind: 'txn_status', payload, ip });
+    const intent = parsed?.originatorConversationId ? await PaymentIntent.findOne({ originatorConversationId: parsed.originatorConversationId, awaiting: 'verify' }) : null;
+    event.paymentIntentId = intent?._id;
+    if (!parsed || !intent) {
+      event.outcome = parsed ? 'unknown_request' : 'malformed';
+      await event.save();
+      return event.outcome;
+    }
+    if (intent.status !== 'pending') {
+      event.outcome = 'duplicate';
+      await event.save();
+      return event.outcome;
+    }
+    const status = String(parsed.params.get('TransactionStatus') ?? '');
+    const cents = Math.round(Number(parsed.params.get('Amount') ?? 0) * 100);
+    const receipt = String(parsed.params.get('ReceiptNo') ?? intent.accountReference ?? '').toUpperCase();
+    if (parsed.resultCode !== 0 || !/completed/i.test(status) || cents <= 0) {
+      await finalizeIntent(intent, { status: 'failed', resultCode: parsed.resultCode, resultDesc: parsed.resultDesc || `Transaction ${status || 'not found'}` });
+      event.outcome = 'not_confirmed';
+    } else if (await PaymentIntent.exists({ receiptNumber: receipt, _id: { $ne: intent._id } })) {
+      // Already recorded (e.g. its C2B confirmation arrived meanwhile): point the cashier at that one.
+      await finalizeIntent(intent, { status: 'failed', resultDesc: `Receipt ${receipt} is already recorded` });
+      event.outcome = 'duplicate_receipt';
+    } else {
+      const payer = splitParty(parsed.params.get('DebitPartyName'));
+      await PaymentIntent.updateOne({ _id: intent._id }, { $set: { amountCents: cents } });
+      intent.amountCents = cents;
+      await finalizeIntent(intent, { status: 'succeeded', resultCode: 0, resultDesc: 'Confirmed by M-Pesa transaction status', receiptNumber: receipt, paidAmountCents: cents, phone: payer.phone, payerName: payer.name });
+      event.outcome = 'confirmed';
+    }
+    await event.save();
+    return event.outcome;
   });
 }
 
@@ -348,6 +548,25 @@ mpesaCallbackRoutes.post('/:tenantId/:token/c2b/validation', async (req, res) =>
   }
   await runInTenant(tenant._id, () => MpesaEvent.create({ kind: 'c2b_validation', payload: req.body, ip: req.ip }));
   res.json({ ResultCode: '0', ResultDesc: 'Accepted' });
+});
+
+mpesaCallbackRoutes.post('/:tenantId/:token/status/result', async (req, res) => {
+  const tenant = await callbackTenant(req);
+  if (tenant) await handleStatusResult(tenant._id, req.body, req.ip ?? '');
+  res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+});
+
+mpesaCallbackRoutes.post('/:tenantId/:token/b2c/result', async (req, res) => {
+  const tenant = await callbackTenant(req);
+  if (tenant) await handleB2CResult(tenant._id, req.body, req.ip ?? '');
+  res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+});
+
+/** Safaricom gave up queueing an async request (Transaction Status or B2C); recorded for reconciliation. */
+mpesaCallbackRoutes.post('/:tenantId/:token/timeout', async (req, res) => {
+  const tenant = await callbackTenant(req);
+  if (tenant) await runInTenant(tenant._id, () => MpesaEvent.create({ kind: 'async_timeout', payload: req.body, ip: req.ip, outcome: 'timeout' }));
+  res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
 });
 
 mpesaCallbackRoutes.post('/:tenantId/:token/c2b/confirmation', async (req, res) => {

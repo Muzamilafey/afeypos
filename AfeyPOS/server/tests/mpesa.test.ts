@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { setupApp, teardown, registerTenant, createProduct, openShift, rid, BASE, type Ctx } from './helpers.js';
+import { setupApp, teardown, registerTenant, createProduct, openShift, rid, BASE, Client, type Ctx } from './helpers.js';
 import { buildStkCallback } from '../src/modules/payments/mpesa.js';
 import { MockMpesaGateway, darajaTimestamp, stkPassword, parseStkCallback, parseDarajaDate } from '../src/integrations/mpesa/daraja.js';
 import { Tenant } from '../src/models/index.js';
@@ -141,5 +141,84 @@ describe('C2B', () => {
     expect((await t.client.get('/payments/intents?source=c2b&unallocated=true')).body.data).toHaveLength(0);
     const rec = await t.client.get('/payments/mpesa/reconciliation');
     expect(rec.status).toBe(200);
+  });
+});
+
+describe('customer pays the Paybill/Till directly (offline payment)', () => {
+  const sale = (p: any, amountCents: number, intentId: string) => t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: p._id, qty: 1 }], payments: [{ method: 'mpesa', amountCents, paymentIntentId: intentId }] });
+
+  it('Paybill: gives an account number for the sale and matches the payment to it', async () => {
+    const p = await createProduct(t.client, { prices: { retail: 32000 }, openingStock: [{ warehouseId: wh, qty: 5 }] });
+    const ex = await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 32000, tillId: till });
+    expect(ex.status).toBe(201);
+    expect(ex.body.data.payTo).toEqual({ type: 'paybill', number: '174379' });
+    expect(ex.body.data.accountReference).toMatch(/^T1\d{4}$/);
+    expect((await sale(p, 32000, ex.body.data.id)).body.error.code).toBe('MPESA_NOT_AVAILABLE');
+    // Another customer's payment to the same paybill with a different account is not matched to this sale.
+    await t.client.post('/payments/mpesa/simulate-c2b', { amountCents: 32000, account: 'SOMEONE', tillId: till });
+    expect((await t.client.get(`/payments/intents/${ex.body.data.id}`)).body.data.status).toBe('pending');
+    const paid = await t.client.post('/payments/mpesa/simulate-c2b', { amountCents: 32000, account: ex.body.data.accountReference.toLowerCase(), tillId: till, receipt: 'PBL1234567' });
+    expect(paid.status).toBe(200);
+    const done = (await t.client.get(`/payments/intents/${ex.body.data.id}`)).body.data;
+    expect(done).toMatchObject({ status: 'succeeded', receiptNumber: 'PBL1234567', paidAmountCents: 32000 });
+    expect((await sale(p, 32000, ex.body.data.id)).status).toBe(201);
+  });
+
+  it('Buy Goods: matches by amount only when exactly one sale is waiting for it', async () => {
+    const cfgs = (await t.client.get('/settings/integrations')).body.data.filter((c: any) => c.kind === 'mpesa');
+    expect((await t.client.patch(`/settings/integrations/${cfgs[0].id}`, { settings: { shortCode: '174379', type: 'till', tillNumber: '5551234' } })).status).toBe(200);
+    const one = await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 15000, tillId: till });
+    expect(one.body.data.payTo).toEqual({ type: 'till', number: '5551234' });
+    expect(one.body.data.accountReference).toBeUndefined();
+    await t.client.post('/payments/mpesa/simulate-c2b', { amountCents: 15000, tillId: till, receipt: 'BGD0000001' });
+    expect((await t.client.get(`/payments/intents/${one.body.data.id}`)).body.data.status).toBe('succeeded');
+    // Two tills waiting for the same amount: ambiguous, so the payment stays unallocated for a cashier to pick.
+    const a = await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 8000, tillId: till });
+    const b = await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 8000, tillId: till });
+    await t.client.post('/payments/mpesa/simulate-c2b', { amountCents: 8000, tillId: till, receipt: 'BGD0000002' });
+    expect((await t.client.get(`/payments/intents/${a.body.data.id}`)).body.data.status).toBe('pending');
+    expect((await t.client.get(`/payments/intents/${b.body.data.id}`)).body.data.status).toBe('pending');
+    const open = (await t.client.get('/payments/intents?source=c2b&unallocated=true&provider=mpesa')).body.data;
+    expect(open.map((i: any) => i.receiptNumber)).toContain('BGD0000002');
+    await t.client.patch(`/settings/integrations/${cfgs[0].id}`, { settings: { shortCode: '174379', type: 'paybill' } });
+  });
+
+  it('looks up the code from the customer SMS, or verifies it with Safaricom, and refuses reuse', async () => {
+    const found = await t.client.post('/payments/mpesa/lookup', { receipt: 'bgd0000002', clientRequestId: rid(), tillId: till });
+    expect(found.body).toMatchObject({ found: true, data: { receiptNumber: 'BGD0000002', paidAmountCents: 8000 } });
+    const used = await t.client.post('/payments/mpesa/lookup', { receipt: 'PBL1234567', clientRequestId: rid(), tillId: till });
+    expect(used.body.error.code).toBe('MPESA_ALREADY_USED');
+    expect((await t.client.post('/payments/mpesa/lookup', { receipt: 'no', clientRequestId: rid() })).status).toBe(400);
+    // Not in the system yet (C2B URL not registered, or the callback was lost): ask Safaricom.
+    const v = await t.client.post('/payments/mpesa/lookup', { receipt: 'SJK3AB12CD', clientRequestId: rid(), tillId: till });
+    expect(v.status).toBe(202);
+    expect(v.body.verifying).toBe(true);
+    expect(MockMpesaGateway.statusQueries.at(-1)!.transactionId).toBe('SJK3AB12CD');
+    const ok = await t.client.post(`/payments/mpesa/simulate-status/${v.body.data.id}`, { amountCents: 45000 });
+    expect(ok.body.data).toMatchObject({ status: 'succeeded', receiptNumber: 'SJK3AB12CD', paidAmountCents: 45000, payerName: 'SIMULATED CUSTOMER' });
+    // A second check of a code Safaricom does not confirm fails cleanly.
+    const bad = await t.client.post('/payments/mpesa/lookup', { receipt: 'ZZZ0000000', clientRequestId: rid(), tillId: till });
+    expect((await t.client.post(`/payments/mpesa/simulate-status/${bad.body.data.id}`, { amountCents: 100, completed: false })).body.data.status).toBe('failed');
+  });
+});
+
+describe('M-Pesa B2C payouts (salaries, refunds)', () => {
+  it('needs a second person to approve, sends once, and is paid only on Safaricom’s result', async () => {
+    const created = await t.client.post('/payments/payouts', { payouts: [{ purpose: 'salary', amountCents: 2500000, phone: '0712345678', payeeName: 'Jane Wanjiku', ref: { type: 'PayrollRun', number: 'PR-2026-10' } }] });
+    expect(created.status).toBe(201);
+    const id = created.body.data[0]._id;
+    expect((await t.client.post('/payments/payouts/approve', { ids: [id] })).status).toBe(403);
+    await t.client.post('/settings/users', { name: 'Fiona Finance', email: 'fiona@paysafe.test', password: 'Fiona12345', roles: ['business_admin'] });
+    const fiona = new Client(ctx.api, 'paysafe');
+    await fiona.login('fiona@paysafe.test', 'Fiona12345');
+    expect((await fiona.post('/payments/payouts/send', { ids: [id] })).body.data[0].status).toBe('skipped');
+    expect((await fiona.post('/payments/payouts/approve', { ids: [id] })).body.data.approved).toBe(1);
+    const sent = await fiona.post('/payments/payouts/send', { ids: [id] });
+    expect(sent.body.data[0].status).toBe('sent');
+    expect(MockMpesaGateway.payouts.at(-1)).toMatchObject({ amount: 25000, phone: '254712345678', commandId: 'SalaryPayment' });
+    expect((await fiona.post('/payments/payouts/send', { ids: [id] })).body.data[0].status).toBe('skipped');
+    const done = await fiona.post(`/payments/payouts/${id}/simulate`, {});
+    expect(done.body.data).toMatchObject({ status: 'succeeded', receiverName: 'Jane Wanjiku' });
+    expect(done.body.data.receiptNumber).toBeTruthy();
   });
 });

@@ -81,7 +81,8 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: GoodsReceipt, dir: 'up', field: 'updatedAt', owner: inWarehouses },
   { model: SupplierReturn, dir: 'up', field: 'updatedAt', owner: inWarehouses },
   { model: Expense, dir: 'up', field: 'updatedAt', owner: inBranch },
-  { model: PaymentIntent, dir: 'up', field: 'updatedAt', owner: inBranch },
+  // Paybill/Till payments reach HQ (public callbacks) and belong to the branch that owns the M-Pesa config.
+  { model: PaymentIntent, dir: 'both', field: 'updatedAt', owner: inBranch, downFilter: (b) => ({ branchId: new Types.ObjectId(b.branchId) }) },
   { model: MpesaEvent, dir: 'up', field: 'at' },
   { model: LedgerEntry, dir: 'up', field: 'updatedAt' },
   { model: AttendanceRecord, dir: 'up', field: 'at' },

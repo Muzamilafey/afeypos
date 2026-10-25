@@ -46,6 +46,8 @@ export const PERMISSIONS = [
   'shifts.manage',
   'cash.movement',
   'payments.reconcile',
+  'payouts.request',
+  'payouts.approve',
   'expenses.manage',
   // reporting
   'reports.read',
@@ -98,7 +100,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   cashier: ['products.read', 'inventory.read', 'customers.read', 'sales.create', 'sales.read', 'sales.discount', 'shifts.open', 'cash.movement', 'customers.payments'],
   accountant: [
     'products.read', 'inventory.read', 'customers.read', 'suppliers.read', 'suppliers.pay', 'purchasing.read', 'sales.read', 'sales.read.all',
-    'payments.reconcile', 'expenses.manage', 'customers.payments', 'reports.read', 'reports.financial', 'commissions.read', 'audit.read',
+    'payments.reconcile', 'payouts.request', 'expenses.manage', 'customers.payments', 'reports.read', 'reports.financial', 'commissions.read', 'audit.read',
   ],
   auditor: [
     'products.read', 'inventory.read', 'customers.read', 'suppliers.read', 'purchasing.read', 'sales.read', 'sales.read.all',

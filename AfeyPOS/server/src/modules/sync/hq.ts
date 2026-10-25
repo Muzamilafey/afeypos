@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import express, { Router, type Request, type RequestHandler } from 'express';
 import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
-import { Branch, SyncTombstone, Tenant, Till, Warehouse } from '../../models/index.js';
+import { Branch, MpesaEvent, SyncTombstone, Tenant, Till, Warehouse } from '../../models/index.js';
 import { AppError, badRequest, forbidden, unauthorized } from '../../lib/errors.js';
 import { safeEqual, sha256 } from '../../lib/crypto.js';
 import { runAsPlatform } from '../../lib/context.js';
@@ -117,6 +117,17 @@ hqSyncRoutes.get('/pull', async (req, res) => {
   const last = docs.at(-1);
   await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPullAt': new Date() } });
   send(res, { docs, next: last ? { t: last[f], id: last._id } : null, more: docs.length === limit });
+});
+
+/**
+ * M-Pesa results Safaricom sent to HQ for requests a branch made (STK prompts, receipt checks, payouts):
+ * HQ did not recognise them, so the branch processes them itself. Events a branch logged while processing
+ * relayed results (ip "hq-relay") come back up by sync and are never relayed again.
+ */
+hqSyncRoutes.get('/mpesa-relay', async (req, res) => {
+  const t = req.query.t ? new Date(String(req.query.t)) : new Date(Date.now() - 24 * 3600_000);
+  const docs = await MpesaEvent.find({ kind: { $in: ['stk_callback', 'txn_status', 'b2c_result'] }, outcome: { $in: ['unknown_checkout_request', 'unknown_request', 'unknown_payout'] }, ip: { $ne: 'hq-relay' }, at: { $gt: t } }).sort({ at: 1 }).limit(500).lean();
+  send(res, { docs: docs.map((d) => ({ kind: d.kind, payload: d.payload, at: d.at })), next: docs.at(-1)?.at ?? null });
 });
 
 /** Deletions to mirror (e.g. a removed customer price). */

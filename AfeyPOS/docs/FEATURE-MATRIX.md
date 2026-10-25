@@ -74,6 +74,10 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Feature | Status |
 |---|---|
 | Daraja STK Push, callbacks, status query, C2B confirmation/validation, C2B URL registration | Tested with simulator; Not verified against Safaricom |
+| Paybill and Buy Goods (Till): STK for both; offline payments matched by account number (Paybill) or unique amount (Buy Goods) | Tested with simulator |
+| Enter the M-Pesa code from the customer's SMS: applied if received, refused if used, verified via Transaction Status API otherwise | Tested with simulator; Not verified against Safaricom |
+| M-Pesa B2C payouts (salaries/refunds) with two-person approval, send-once claim, result callbacks | Tested with simulator; Not verified against Safaricom |
+| M-Pesa on branch servers (callbacks via HQ relayed during sync) | Implemented; relay path not covered by an automated test |
 | Payment states, idempotent callbacks, duplicate receipts, amount verification, expiry, reconciliation | Tested |
 | Per-branch M-Pesa configurations, sandbox/production | Implemented |
 | Payment gateways: Paystack, Flutterwave, pawaPay, Airtel Money, Kopo Kopo, Hubtel, iPay, ZenoPay, Africa's Talking (phone prompt and payment link / QR) | Tested with stubbed provider APIs and the simulator; Not verified against the providers ([PAYMENTS.md](PAYMENTS.md)) |

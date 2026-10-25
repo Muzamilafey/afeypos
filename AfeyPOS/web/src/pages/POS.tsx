@@ -10,6 +10,7 @@ import { useRealtime } from '../lib/realtime';
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
+import { MpesaPanel } from '../components/MpesaPayment';
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
@@ -411,7 +412,6 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
   const [amount, setAmount] = useState<number | null>(remaining);
   const [tendered, setTendered] = useState<number | null>(null);
   const [reference, setReference] = useState('');
-  const [phone, setPhone] = useState('');
   const [stk, setStk] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -430,10 +430,12 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
     if (stk?.status === 'succeeded' && !payments.some((p) => p.paymentIntentId === stk.id)) {
       const isMpesa = (stk.provider ?? 'mpesa') === 'mpesa';
       const label = isMpesa ? 'M-Pesa' : paymentLabel('gateway', stk.provider);
-      setPayments((ps) => [...ps, { method: isMpesa ? 'mpesa' : 'gateway', amountCents: stk.paidAmountCents ?? stk.amountCents, paymentIntentId: stk.id, label: `${label} ${stk.receiptNumber ?? ''}` }]);
+      // A customer may have paid more than is left (e.g. a code entered at the till); only what is due is used.
+      const free = (stk.paidAmountCents ?? stk.amountCents) - (stk.allocatedCents ?? 0);
+      setPayments((ps) => [...ps, { method: isMpesa ? 'mpesa' : 'gateway', amountCents: Math.min(free, ps.reduce((a, p) => a - p.amountCents, total)), paymentIntentId: stk.id, label: `${label} ${stk.receiptNumber ?? ''}` }]);
       toast.success(`${label} payment confirmed`);
     }
-  }, [stk, payments, toast]);
+  }, [stk, payments, toast, total]);
 
   const c2b = useQuery({ queryKey: ['c2b-open'], queryFn: () => api<{ data: any[] }>('/payments/intents', { query: { status: 'succeeded', unallocated: 'true', provider: 'mpesa', limit: 10 } }).then((r) => r.data), enabled: method === 'mpesa' && has('mpesa'), refetchInterval: 5000 });
   const gateways = useQuery({ queryKey: ['gateways', till._id], queryFn: () => api<{ data: GatewayOption[] }>('/payments/gateways', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('payments'), staleTime: 60_000 });
@@ -457,15 +459,6 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
     setReference('');
   };
 
-  const startStk = async () => {
-    setError(null);
-    try {
-      const r = await api<{ data: any }>('/payments/mpesa/stk', { body: { clientRequestId: newRequestId(), amountCents: amount, phone, tillId: till._id } });
-      setStk(r.data);
-    } catch (e) {
-      setError(e);
-    }
-  };
 
   const complete = async (overrideToken?: string) => {
     setBusy(true);
@@ -517,28 +510,8 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
                 </>
               )}
               {method === 'mpesa' && (
-                <div className="space-y-3 rounded-lg border border-ink-200 p-3 dark:border-ink-700">
-                  {!stk || stk.status !== 'pending' || (stk.provider ?? 'mpesa') !== 'mpesa' ? (
-                    <div className="flex gap-2"><Input placeholder="Customer phone e.g. 0712345678" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" /><Button onClick={startStk} disabled={!phone || !amount || amount % 100 !== 0}>Send STK</Button></div>
-                  ) : (
-                    <div className="flex items-center gap-2 text-sm"><Spinner className="h-4 w-4" />Waiting for the customer to enter their M-Pesa PIN…
-                      <Button size="sm" variant="ghost" onClick={async () => setStk((await api<{ data: any }>(`/payments/intents/${stk.id}/query`, { body: {} })).data)}>Check status</Button>
-                      <Button size="sm" variant="ghost" onClick={async () => { await api(`/payments/intents/${stk.id}/cancel`, { body: {} }); setStk(null); }}>Cancel</Button>
-                    </div>
-                  )}
-                  {stk && (stk.provider ?? 'mpesa') === 'mpesa' && ['failed', 'cancelled', 'expired'].includes(stk.status) && <ErrorBox error={`M-Pesa ${stk.status}: ${stk.resultDesc ?? ''}. Nothing was charged; try again or use another method.`} />}
-                  {amount !== null && amount % 100 !== 0 && <p className="text-xs text-amber-600">M-Pesa accepts whole shillings only.</p>}
-                  {c2b.data && c2b.data.length > 0 && (
-                    <div>
-                      <div className="label">Or use a payment received to the till/paybill</div>
-                      <ul className="space-y-1">{c2b.data.filter((i) => !payments.some((p) => p.paymentIntentId === i.id)).map((i) => (
-                        <li key={i.id}><button className="flex w-full justify-between rounded border border-ink-200 px-2 py-1.5 text-sm hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800" onClick={() => setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - i.allocatedCents, remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}` }])}>
-                          <span>{i.receiptNumber} · {i.payerName || i.phone}</span><span className="font-medium">{money(i.paidAmountCents - i.allocatedCents)}</span>
-                        </button></li>
-                      ))}</ul>
-                    </div>
-                  )}
-                </div>
+                <MpesaPanel amount={amount} tillId={till._id} intent={stk} setIntent={setStk} unallocated={c2b.data} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
+                  onUse={(i) => setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - (i.allocatedCents ?? 0), remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}` }])} />
               )}
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}
               {['card', 'bank'].includes(method) && <Field label="Reference (approval code)"><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>}

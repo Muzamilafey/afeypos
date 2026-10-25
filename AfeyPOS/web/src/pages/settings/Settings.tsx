@@ -244,8 +244,11 @@ export function LocationsPage() {
 }
 
 const PROVIDER_FIELDS: Record<string, { settings: [string, string][]; secrets: [string, string][] }> = {
-  daraja: { settings: [['shortCode', 'Business short code'], ['type', 'Type (paybill or till)'], ['tillNumber', 'Till number (Buy Goods)']], secrets: [['consumerKey', 'Consumer key'], ['consumerSecret', 'Consumer secret'], ['passkey', 'Lipa na M-Pesa passkey']] },
-  mock: { settings: [['shortCode', 'Short code'], ['type', 'Type']], secrets: [] },
+  daraja: {
+    settings: [['type', 'Account type'], ['shortCode', 'Paybill number, or store (head office) number for Buy Goods'], ['tillNumber', 'Till number (Buy Goods only)'], ['initiatorName', 'Initiator name (optional: code checks and payouts)'], ['b2cShortCode', 'B2C short code (optional: salary payouts)']],
+    secrets: [['consumerKey', 'Consumer key'], ['consumerSecret', 'Consumer secret'], ['passkey', 'Lipa na M-Pesa passkey'], ['securityCredential', 'Initiator security credential (optional)']],
+  },
+  mock: { settings: [['type', 'Account type'], ['shortCode', 'Short code'], ['tillNumber', 'Till number (Buy Goods only)']], secrets: [] },
   talksasa: { settings: [['senderId', 'Sender ID'], ['baseUrl', 'API base URL (optional)']], secrets: [['apiToken', 'API token']] },
   africastalking: { settings: [['username', 'Username'], ['senderId', 'Sender ID / short code']], secrets: [['apiKey', 'API key']] },
   smtp: { settings: [['host', 'SMTP host'], ['port', 'Port'], ['user', 'Username'], ['from', 'From address']], secrets: [['password', 'Password']] },
@@ -336,7 +339,11 @@ export function IntegrationsPage() {
             {edit.kind === 'payment' && edit.webhookUrl && (
               <div className="sm:col-span-2"><div className="label">Webhook / callback URL (set this in the provider dashboard if asked)</div><div className="break-all rounded bg-ink-50 p-2 font-mono text-xs dark:bg-ink-800">{edit.webhookUrl}</div><p className="mt-1 text-xs text-ink-500">Contains a secret token. Charges started from the till send it automatically where the provider supports per-request callbacks.</p></div>
             )}
-            {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => <Field key={k} label={l}><Input value={edit.settings?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [k]: k === 'port' ? Number(e.target.value) : e.target.value } })} /></Field>)}
+            {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => k === 'type' && edit.kind === 'mpesa' ? (
+              <Field key={k} label={l}><Select value={edit.settings?.type ?? 'paybill'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, type: e.target.value } })} options={[{ value: 'paybill', label: 'Paybill (customers enter an account number)' }, { value: 'till', label: 'Buy Goods / Till number' }]} /></Field>
+            ) : (k === 'tillNumber' && edit.kind === 'mpesa' && (edit.settings?.type ?? 'paybill') !== 'till') ? null : (
+              <Field key={k} label={l}><Input value={edit.settings?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [k]: k === 'port' ? Number(e.target.value) : e.target.value } })} /></Field>
+            ))}
             {(PROVIDER_FIELDS[edit.provider]?.secrets ?? []).map(([k, l]) => <Field key={k} label={l} hint={edit.secretsSet?.includes(k) ? 'Saved. Leave blank to keep.' : undefined}><Input type="password" autoComplete="new-password" value={edit.secrets?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, secrets: { ...edit.secrets, [k]: e.target.value } })} /></Field>)}
             {edit.kind === 'mpesa' && edit.provider === 'daraja' && <Checkbox label="Double-check every callback with an STK status query" checked={Boolean(edit.settings?.verifyCallbacksWithQuery)} onChange={(v) => setEdit({ ...edit, settings: { ...edit.settings, verifyCallbacksWithQuery: v } })} />}
           </div>

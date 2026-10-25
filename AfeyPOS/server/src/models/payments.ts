@@ -21,6 +21,14 @@ const paymentIntentSchema = new Schema(
     tillId: ObjectId,
     configId: ObjectId,
     checkoutRequestId: String,
+    /**
+     * M-Pesa payments made to the Paybill/Till rather than by prompt:
+     *  expected = the till is waiting for a payment with this account number (Paybill) or amount (Buy Goods);
+     *  verify   = the cashier entered a receipt code and we asked Safaricom (Transaction Status API).
+     */
+    awaiting: { type: String, enum: ['expected', 'verify'] },
+    originatorConversationId: String,
+    conversationId: String,
     /** Gateway intents: our reference sent to the provider, the provider's own id, and the hosted checkout URL. */
     reference: String,
     providerRef: String,
@@ -47,12 +55,14 @@ paymentIntentSchema.index({ tenantId: 1, clientRequestId: 1 }, { unique: true, p
 paymentIntentSchema.index({ tenantId: 1, reference: 1 }, { unique: true, partialFilterExpression: { reference: { $type: 'string' } } });
 paymentIntentSchema.index({ tenantId: 1, configId: 1, providerRef: 1 }, { partialFilterExpression: { providerRef: { $type: 'string' } } });
 paymentIntentSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
+paymentIntentSchema.index({ tenantId: 1, awaiting: 1, status: 1, accountReference: 1 }, { partialFilterExpression: { awaiting: { $type: 'string' } } });
+paymentIntentSchema.index({ tenantId: 1, originatorConversationId: 1 }, { partialFilterExpression: { originatorConversationId: { $type: 'string' } } });
 export const PaymentIntent = tenantModel('PaymentIntent', paymentIntentSchema);
 export type PaymentIntentDoc = InstanceType<typeof PaymentIntent>;
 
 const mpesaEventSchema = new Schema(
   {
-    kind: { type: String, enum: ['stk_callback', 'c2b_validation', 'c2b_confirmation', 'stk_query', 'gateway_webhook', 'gateway_verify'], required: true },
+    kind: { type: String, enum: ['stk_callback', 'c2b_validation', 'c2b_confirmation', 'stk_query', 'gateway_webhook', 'gateway_verify', 'txn_status', 'b2c_result', 'async_timeout'], required: true },
     provider: String,
     configId: ObjectId,
     payload: Schema.Types.Mixed,
@@ -66,6 +76,40 @@ const mpesaEventSchema = new Schema(
 );
 mpesaEventSchema.index({ tenantId: 1, at: -1 });
 export const MpesaEvent = tenantModel('MpesaEvent', mpesaEventSchema);
+
+/**
+ * Money sent out by M-Pesa B2C (salaries, refunds). Created as a draft, approved by a second person,
+ * then sent; it is "paid" only when Safaricom's result callback confirms it.
+ */
+const payoutSchema = new Schema(
+  {
+    purpose: { type: String, enum: ['salary', 'refund', 'other'], required: true },
+    status: { type: String, enum: ['draft', 'approved', 'sent', 'succeeded', 'failed', 'cancelled'], default: 'draft' },
+    amountCents: { type: Number, required: true },
+    phone: { type: String, required: true },
+    payeeName: String,
+    /** e.g. { type: 'PayrollRun', id, number } or the sale return. */
+    ref: { type: { type: String }, id: ObjectId, number: String },
+    employeeId: ObjectId,
+    configId: ObjectId,
+    batchId: String,
+    originatorConversationId: String,
+    conversationId: String,
+    receiptNumber: String,
+    receiverName: String,
+    resultCode: Number,
+    resultDesc: String,
+    requestedBy: ObjectId,
+    approvedBy: ObjectId,
+    approvedAt: Date,
+    sentAt: Date,
+    completedAt: Date,
+  },
+  { timestamps: true },
+);
+payoutSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
+payoutSchema.index({ tenantId: 1, originatorConversationId: 1 }, { unique: true, partialFilterExpression: { originatorConversationId: { $type: 'string' } } });
+export const Payout = tenantModel('Payout', payoutSchema);
 
 const integrationConfigSchema = new Schema(
   {
