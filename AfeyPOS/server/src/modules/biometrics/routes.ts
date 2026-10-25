@@ -16,6 +16,7 @@ import { decrypt, encrypt, hmacSha256, randomToken, safeEqual } from '../../lib/
 import { forbidden, notFound, unauthorized } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { recordTombstone } from '../sync/hq.js';
+import { clockInOut } from '../auth/routes.js';
 
 const router = Router();
 
@@ -59,6 +60,12 @@ router.post('/biometrics/enroll', requirePermission('biometrics.enroll'), async 
   res.status(201).json({ ok: true });
 });
 
+/** Which fingers each user has enrolled (no template data). */
+router.get('/biometrics/enrolled', requirePermission('biometrics.enroll'), async (_req, res) => {
+  const rows = await BiometricTemplate.aggregate([{ $group: { _id: '$userId', fingers: { $addToSet: '$finger' }, updatedAt: { $max: '$updatedAt' } } }]);
+  res.json({ data: rows.map((r) => ({ userId: r._id, fingers: r.fingers, updatedAt: r.updatedAt })) });
+});
+
 router.delete('/biometrics/templates/:userId', requirePermission('biometrics.enroll'), async (req, res) => {
   const doomed = await BiometricTemplate.find({ userId: idParam(req.params.userId) }, { _id: 1 }).lean();
   const r = await BiometricTemplate.deleteMany({ userId: idParam(req.params.userId) });
@@ -67,41 +74,58 @@ router.delete('/biometrics/templates/:userId', requirePermission('biometrics.enr
   res.json({ ok: true, deleted: r.deletedCount });
 });
 
+/** Most templates handed to a reader for 1:N identification (staff of one shop or branch). */
+const MAX_IDENTIFY_TEMPLATES = 500;
+
 /**
- * Starts a 1:1 verification: returns a nonce and the encrypted-at-rest template decrypted for the bridge.
+ * Starts a verification and returns a single-use nonce with the templates, decrypted for the bridge.
+ *  - with an email: 1:1 verification against that user's fingers;
+ *  - without: 1:N identification ("just touch the reader") against the active staff allowed at the reader's branch.
  * The bridge authenticates this call with its device HMAC, so templates only leave the server to registered devices.
  */
 biometricBridgeRoutes.post('/biometrics/challenge', async (req, res) => {
-  const body = parse(z.object({ deviceId: objectId, email: z.string().email(), purpose: z.enum(['login', 'override', 'attendance']), ts: z.number().int(), signature: z.string().length(64) }), req.body);
+  const body = parse(z.object({ deviceId: objectId, email: z.string().email().optional(), purpose: z.enum(['login', 'override', 'attendance']), ts: z.number().int(), signature: z.string().length(64) }), req.body);
   const { device, key } = await deviceKey(body.deviceId);
   if (Math.abs(Date.now() - body.ts) > 60_000) throw unauthorized('Stale request');
-  if (!safeEqual(hmacSha256(key, `challenge:${body.email.toLowerCase()}:${body.purpose}:${body.ts}`), body.signature)) throw unauthorized('Invalid device signature');
-  const user = await User.findOne({ email: body.email.toLowerCase(), status: 'active' });
-  if (!user) throw notFound('User');
-  const templates = await BiometricTemplate.find({ userId: user._id }).lean();
-  if (!templates.length) throw notFound('Enrolled fingerprint');
+  const email = body.email?.toLowerCase() ?? '';
+  if (!safeEqual(hmacSha256(key, `challenge:${email}:${body.purpose}:${body.ts}`), body.signature)) throw unauthorized('Invalid device signature');
   const nonce = randomToken(16);
-  await BiometricChallenge.create({ nonce, userId: user._id, purpose: body.purpose, deviceId: device._id, expiresAt: new Date(Date.now() + 60_000) });
+  let users;
+  if (email) {
+    const user = await User.findOne({ email, status: 'active' });
+    if (!user) throw notFound('User');
+    users = [user];
+  } else {
+    users = await User.find({ status: 'active', ...(device.branchId ? { $or: [{ branchIds: { $size: 0 } }, { branchIds: device.branchId }] } : {}) }, { _id: 1, name: 1 }).lean();
+  }
+  const templates = await BiometricTemplate.find({ userId: { $in: users.map((u) => u._id) } }).limit(MAX_IDENTIFY_TEMPLATES).lean();
+  if (!templates.length) throw notFound('Enrolled fingerprint');
+  await BiometricChallenge.create({ nonce, userId: email ? users[0]._id : undefined, candidates: email ? undefined : [...new Set(templates.map((t) => String(t.userId)))], purpose: body.purpose, deviceId: device._id, expiresAt: new Date(Date.now() + 60_000) });
   device.lastSeenAt = new Date();
   await device.save();
-  res.json({ data: { nonce, userId: user._id, templates: templates.map((t) => ({ finger: t.finger, format: t.format, template: decrypt(t.templateEnc, String(user._id)) })) } });
+  res.json({ data: { nonce, mode: email ? 'verify' : 'identify', userId: email ? users[0]._id : undefined, templates: templates.map((t) => ({ userId: String(t.userId), finger: t.finger, format: t.format, template: decrypt(t.templateEnc, String(t.userId)) })) } });
 });
 
 /** Completes verification with the bridge's signed match result. */
 biometricBridgeRoutes.post('/biometrics/verify', async (req, res) => {
-  const body = parse(z.object({ deviceId: objectId, nonce: z.string(), matched: z.boolean(), score: z.number().optional(), permission: z.string().optional(), forUserId: objectId.optional(), signature: z.string().length(64) }), req.body);
+  const body = parse(z.object({ deviceId: objectId, nonce: z.string(), matched: z.boolean(), userId: objectId.optional(), score: z.number().optional(), permission: z.string().optional(), forUserId: objectId.optional(), signature: z.string().length(64) }), req.body);
   const { device, key } = await deviceKey(body.deviceId);
-  if (!safeEqual(hmacSha256(key, `verify:${body.nonce}:${body.matched ? 1 : 0}`), body.signature)) throw unauthorized('Invalid device signature');
+  // Identification results name the matched user, and the signature covers it.
+  const signed = body.userId ? `verify:${body.nonce}:${body.matched ? 1 : 0}:${body.userId}` : `verify:${body.nonce}:${body.matched ? 1 : 0}`;
+  if (!safeEqual(hmacSha256(key, signed), body.signature)) throw unauthorized('Invalid device signature');
   const ch = await BiometricChallenge.findOneAndUpdate({ nonce: body.nonce, deviceId: device._id, usedAt: null, expiresAt: { $gt: new Date() } }, { $set: { usedAt: new Date(), result: body.matched ? 'match' : 'no_match' } }, { new: true });
   if (!ch) throw unauthorized('Challenge expired or already used');
-  const user = await User.findById(ch.userId);
-  await audit(null, { action: body.matched ? 'biometrics.verified' : 'biometrics.verification_failed', entity: 'User', entityId: ch.userId, details: { purpose: ch.purpose, device: device.name, score: body.score } });
-  if (!body.matched || !user) throw unauthorized('Fingerprint did not match');
+  let userId = ch.userId;
+  if (!userId && body.matched) {
+    if (!body.userId || !(ch.candidates ?? []).some((c) => String(c) === String(body.userId))) throw unauthorized('Fingerprint matched nobody enrolled here');
+    userId = body.userId;
+  }
+  const user = userId ? await User.findOne({ _id: userId, status: 'active' }) : null;
+  await audit(null, { action: body.matched ? 'biometrics.verified' : 'biometrics.verification_failed', entity: 'User', entityId: userId ?? undefined, details: { purpose: ch.purpose, mode: ch.userId ? 'verify' : 'identify', device: device.name, score: body.score } });
+  if (!body.matched || !user) throw unauthorized('Fingerprint not recognised');
   if (ch.purpose === 'attendance') {
-    const last = await AttendanceRecord.findOne({ userId: user._id }).sort({ at: -1 }).lean();
-    const kind = last?.kind === 'clock_in' ? 'clock_out' : 'clock_in';
-    const rec = await AttendanceRecord.create({ userId: user._id, kind, method: 'fingerprint', deviceId: device._id, branchId: device.branchId });
-    res.json({ data: { attendance: rec } });
+    const rec = await clockInOut(user._id, 'fingerprint', { deviceId: device._id, branchId: device.branchId });
+    res.json({ data: { attendance: rec, user: { id: user._id, name: user.name } } });
     return;
   }
   if (ch.purpose === 'override') {
@@ -112,7 +136,7 @@ biometricBridgeRoutes.post('/biometrics/verify', async (req, res) => {
     return;
   }
   // login: short-lived token the till exchanges at /auth/biometric-login
-  res.json({ data: { loginToken: signShortToken({ sub: String(user._id), tid: String(req.tenant!._id), jti: crypto.randomUUID() }, 'bio-login', 60) } });
+  res.json({ data: { loginToken: signShortToken({ sub: String(user._id), tid: String(req.tenant!._id), jti: crypto.randomUUID() }, 'bio-login', 60), user: { id: user._id, name: user.name } } });
 });
 
 router.get('/attendance', requirePermission('users.manage'), async (req, res) => {

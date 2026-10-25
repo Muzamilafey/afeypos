@@ -43,10 +43,6 @@ describe('local network printing', () => {
 
 describe('biometrics (device bridge protocol)', () => {
   it('enrolls an encrypted template and issues an override only for a signed match', async () => {
-    await t.client.put('/settings/modules', { enabled: ['biometrics'] }).then((r) => expect(r.status).toBe(200));
-    // Supermarket on the starter plan is not entitled to biometrics; move to business plan via platform owner.
-    const pl = await ctx.api.post('/api/v1/platform/auth/login').send({ email: 'owner@afeypos.test', password: 'PlatformPass123' });
-    await ctx.api.patch(`/api/v1/platform/tenants/${t.tenant.id}`).set('Authorization', `Bearer ${pl.body.accessToken}`).send({ planCode: 'business' });
     expect((await t.client.put('/settings/modules', { enabled: ['biometrics'] })).status).toBe(200);
     await t.client.post('/settings/users', { name: 'Sup Visor', email: 'sup@devices.test', password: 'Super1234', roles: ['branch_manager'] });
     await t.client.post('/settings/users', { name: 'Cash Ier', email: 'cash@devices.test', password: 'Cashi1234', roles: ['cashier'] });

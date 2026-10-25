@@ -14,6 +14,7 @@ import { nextNumber } from '../../lib/numbering.js';
 import { env } from '../../config/env.js';
 import { revokeAllSessions } from '../auth/service.js';
 import { passwordSchema } from '../tenants/provisioning.js';
+import { nextEmployeeNo } from '../staff/cards.js';
 import { capabilitiesFor } from '../tenants/capabilities.js';
 import { openSecrets, presentConfig, sealSecrets } from '../integrations/configs.js';
 import { gatewayCallbackUrl, paymentGatewayFor } from '../payments/gateways.js';
@@ -51,6 +52,7 @@ const settingsSchema = z.object({
       logoFileId: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/).or(z.literal('')),
       tagline: z.string().max(120),
       creditReminders: z.object({ enabled: z.boolean(), overdueDays: z.number().int().min(1).max(180) }).partial(),
+      staffLogin: z.object({ cardRequiresPin: z.boolean() }).partial(),
       returns: z.object({ windowDays: z.number().int().min(0).max(365), approvalAboveCents: z.number().int().min(0), restockByDefault: z.boolean() }).partial(),
     })
     .partial(),
@@ -95,12 +97,15 @@ const userSchema = z.object({
   roles: z.array(z.enum(TENANT_ROLES as [string, ...string[]])).min(1),
   branchIds: z.array(objectId).default([]),
   commissionRateBp: z.number().int().min(0).max(5000).default(0),
+  jobTitle: z.string().trim().max(80).optional(),
+  photoFileId: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/).or(z.literal('')).optional(),
   employeeNo: z.string().max(30).optional(),
 });
 
 function present(u: any) {
-  const { passwordHash: _p, pinHash, twoFactor, ...rest } = u;
-  return { ...rest, hasPin: Boolean(pinHash), twoFactorEnabled: Boolean(twoFactor?.enabled) };
+  const { passwordHash: _p, pinHash, twoFactor, card, ...rest } = u;
+  const cardInfo = card?.codeHash && !card.revokedAt ? { last4: card.last4, issuedAt: card.issuedAt } : null;
+  return { ...rest, hasPin: Boolean(pinHash), twoFactorEnabled: Boolean(twoFactor?.enabled), card: cardInfo };
 }
 
 router.get('/settings/users', requirePermission('users.manage'), async (_req, res) => {
@@ -110,14 +115,14 @@ router.get('/settings/users', requirePermission('users.manage'), async (_req, re
 router.post('/settings/users', requirePermission('users.manage'), async (req, res) => {
   const body = parse(userSchema.extend({ password: passwordSchema, pin: z.string().regex(/^\d{4,8}$/).optional() }), req.body);
   if (body.roles.includes('tenant_owner') && !req.auth!.roles.includes('tenant_owner')) throw forbidden('Only owners can create owners');
-  const u = await User.create({ ...body, passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined });
+  const u = await User.create({ ...body, employeeNo: body.employeeNo || (await nextEmployeeNo()), passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined });
   await audit(req, { action: 'user.created', entity: 'User', entityId: u._id, details: { roles: body.roles } });
   res.status(201).json({ data: present(u.toObject()) });
 });
 
 router.patch('/settings/users/:id', requirePermission('users.manage'), async (req, res) => {
   const id = idParam(req.params.id);
-  const body = parse(userSchema.partial().extend({ status: z.enum(['active', 'disabled']).optional(), password: passwordSchema.optional() }), req.body);
+  const body = parse(userSchema.partial().extend({ status: z.enum(['active', 'disabled']).optional(), password: passwordSchema.optional(), pin: z.string().regex(/^\d{4,8}$/).or(z.literal('')).optional() }), req.body);
   const target = await User.findById(id);
   if (!target) throw notFound('User');
   const touchesOwner = target.roles.includes('tenant_owner') || body.roles?.includes('tenant_owner');
@@ -125,12 +130,14 @@ router.patch('/settings/users/:id', requirePermission('users.manage'), async (re
   if (String(id) === String(req.auth!.userId) && (body.status === 'disabled' || (body.roles && !body.roles.includes('tenant_owner') && target.roles.includes('tenant_owner')))) {
     throw badRequest('You cannot disable or demote your own owner account');
   }
-  const { password, ...rest } = body;
+  const { password, pin, ...rest } = body;
   Object.assign(target, rest);
   if (password) target.passwordHash = await hashPassword(password);
+  // Managers set or clear a till PIN (needed with the staff card); '' removes it.
+  if (pin !== undefined) target.pinHash = pin ? await hashPassword(pin) : undefined;
   await target.save();
   if (body.status === 'disabled' || password || body.roles) await revokeAllSessions(target._id);
-  await audit(req, { action: 'user.updated', entity: 'User', entityId: id, details: { fields: Object.keys(body).filter((k) => k !== 'password'), passwordReset: Boolean(password) } });
+  await audit(req, { action: 'user.updated', entity: 'User', entityId: id, details: { fields: Object.keys(body).filter((k) => k !== 'password' && k !== 'pin'), passwordReset: Boolean(password), pinChanged: pin !== undefined } });
   res.json({ data: present(target.toObject()) });
 });
 

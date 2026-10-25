@@ -37,7 +37,7 @@ export interface BridgeDeps {
  * so other websites open in the same browser cannot drive the printer or fingerprint reader.
  */
 export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
-  const fp = deps.fingerprint ?? createFingerprintAdapter(cfg.fingerprint?.vendor);
+  const fp = deps.fingerprint ?? createFingerprintAdapter(cfg.fingerprint?.vendor, cfg.fingerprint?.options);
   const doFetch = deps.fetchImpl ?? fetch;
 
   async function serverCall(path: string, body: unknown) {
@@ -45,6 +45,25 @@ export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
     const data: any = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(data?.error?.message ?? `Server returned ${res.status}`), { status: res.status });
     return data;
+  }
+
+  async function verifyOrIdentify(b: any) {
+    const dev = cfg.biometricDevice;
+    if (!dev?.deviceId) throw Object.assign(new Error('Register this reader in Afey POS first'), { status: 409 });
+    const purpose = ['login', 'override', 'attendance'].includes(b.purpose) ? b.purpose : 'login';
+    const email = b.email ? String(b.email).trim().toLowerCase() : '';
+    const ts = Date.now();
+    const ch = await serverCall('/biometrics/challenge', { deviceId: dev.deviceId, email: email || undefined, purpose, ts, signature: hmac(dev.deviceKey, `challenge:${email}:${purpose}:${ts}`) });
+    const nonce = ch.data.nonce;
+    const candidate = await fp.capture();
+    const extra = { permission: b.permission, forUserId: b.forUserId };
+    if (email) {
+      const { matched, score } = await fp.match(candidate, ch.data.templates);
+      return serverCall('/biometrics/verify', { deviceId: dev.deviceId, nonce, matched, score, ...extra, signature: hmac(dev.deviceKey, `verify:${nonce}:${matched ? 1 : 0}`) });
+    }
+    const { userId, score } = await fp.identify(candidate, ch.data.templates);
+    const matched = Boolean(userId);
+    return serverCall('/biometrics/verify', { deviceId: dev.deviceId, nonce, matched, userId: userId ?? undefined, score, ...extra, signature: hmac(dev.deviceKey, userId ? `verify:${nonce}:1:${userId}` : `verify:${nonce}:0`) });
   }
 
   const routes: Record<string, (body: any) => Promise<unknown>> = {
@@ -81,22 +100,16 @@ export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
     'POST /fingerprint/enroll-capture': async (b) => {
       const dev = cfg.biometricDevice;
       if (!dev?.deviceId) throw Object.assign(new Error('Register this reader in Afey POS first'), { status: 409 });
-      const t = await fp.capture();
+      const t = await fp.capture({ enroll: true });
       const finger = String(b.finger ?? 'right_index');
       return { deviceId: dev.deviceId, userId: b.userId, finger, format: t.format, template: t.template, signature: hmac(dev.deviceKey, `enroll:${b.userId}:${finger}:${t.template}`) };
     },
-    /** Full 1:1 verification: challenge from server, local capture+match, signed result back to server. */
-    'POST /fingerprint/verify': async (b) => {
-      const dev = cfg.biometricDevice;
-      if (!dev?.deviceId) throw Object.assign(new Error('Register this reader in Afey POS first'), { status: 409 });
-      const email = String(b.email).toLowerCase();
-      const ts = Date.now();
-      const ch = await serverCall('/biometrics/challenge', { deviceId: dev.deviceId, email, purpose: b.purpose, ts, signature: hmac(dev.deviceKey, `challenge:${email}:${b.purpose}:${ts}`) });
-      const candidate = await fp.capture();
-      const { matched, score } = await fp.match(candidate, ch.data.templates);
-      const nonce = ch.data.nonce;
-      return serverCall('/biometrics/verify', { deviceId: dev.deviceId, nonce, matched, score, permission: b.permission, forUserId: b.forUserId, signature: hmac(dev.deviceKey, `verify:${nonce}:${matched ? 1 : 0}`) });
-    },
+    /**
+     * Challenge from the server, local capture and match, signed result back to the server.
+     * With an email: 1:1 verification of that person. Without: 1:N identification ("touch the reader").
+     */
+    'POST /fingerprint/verify': (b) => verifyOrIdentify(b),
+    'POST /fingerprint/identify': (b) => verifyOrIdentify({ ...b, email: undefined }),
   };
 
   return http.createServer(async (req, res) => {

@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { navigationFor, type Permission } from '@afeypos/shared';
-import { Session, User, IdempotencyRecord } from '../../models/index.js';
+import { AttendanceRecord, Session, User, IdempotencyRecord } from '../../models/index.js';
+import { authenticateCard } from '../staff/cards.js';
 import { parse, idParam } from '../../http/validate.js';
 import { authenticate, signShortToken, verifyShortToken } from '../../http/auth.js';
 import { decrypt, encrypt, generateTotpSecret, hashPassword, verifyPassword, verifyTotp } from '../../lib/crypto.js';
@@ -66,6 +67,27 @@ router.post('/pin-login', authLimiter, async (req, res) => {
   res.json({ accessToken: s.accessToken, expiresIn: s.expiresIn });
 });
 
+/** Staff card sign-in: scan the card barcode, then the PIN (unless the business allows card only). */
+router.post('/card-login', authLimiter, async (req, res) => {
+  const body = parse(z.object({ code: z.string().trim().min(4).max(40), pin: z.string().regex(/^\d{4,8}$/).optional() }), req.body);
+  const u = await authenticateCard(req, body.code, body.pin);
+  if (u.twoFactor?.enabled) throw new AppError(403, 'TWO_FACTOR_REQUIRED', 'This account uses two-step verification; sign in with email and password');
+  await User.updateOne({ _id: u._id }, { $set: { failedLogins: 0, lastLoginAt: new Date() } });
+  const s = await issueSession({ userType: 'tenant', userId: u._id, tenantId: req.tenant!._id, req, expiresAt: new Date(Date.now() + 16 * 3600_000) });
+  await audit(req, { action: 'auth.login', entity: 'User', entityId: u._id, details: { method: body.pin ? 'card+pin' : 'card' } });
+  setRefreshCookie(res, REFRESH_COOKIE, s.refreshToken);
+  res.json({ accessToken: s.accessToken, expiresIn: s.expiresIn });
+});
+
+/** Clock in / out at the till with the staff card (the fingerprint equivalent goes through the device bridge). */
+router.post('/clock', authLimiter, async (req, res) => {
+  const body = parse(z.object({ code: z.string().trim().min(4).max(40), pin: z.string().regex(/^\d{4,8}$/).optional(), branchId: z.string().regex(/^[a-f0-9]{24}$/).optional() }), req.body);
+  const u = await authenticateCard(req, body.code, body.pin);
+  await User.updateOne({ _id: u._id }, { $set: { failedLogins: 0 } });
+  const rec = await clockInOut(u._id, 'card', { branchId: body.branchId });
+  res.json({ data: { name: u.name, kind: rec.kind, at: rec.at } });
+});
+
 router.post('/refresh', async (req, res) => {
   const s = await rotateRefresh(req.cookies?.[REFRESH_COOKIE], req.tenant!._id);
   setRefreshCookie(res, REFRESH_COOKIE, s.refreshToken);
@@ -86,12 +108,19 @@ router.post('/logout', async (req, res) => {
  */
 router.post('/override', authLimiter, authenticate, async (req, res) => {
   const body = parse(
-    z.object({ email: z.string().trim().toLowerCase().email(), password: z.string().optional(), pin: z.string().optional(), permission: z.string() }),
+    z.object({ email: z.string().trim().toLowerCase().email().optional(), cardCode: z.string().trim().max(40).optional(), password: z.string().optional(), pin: z.string().optional(), permission: z.string() }),
     req.body,
   );
-  const sup = await User.findOne({ email: body.email, status: 'active' });
-  const secretOk = sup && (body.password ? await verifyPassword(body.password, sup.passwordHash) : body.pin && sup.pinHash ? await verifyPassword(body.pin, sup.pinHash) : false);
-  if (!sup || !secretOk) throw unauthorized('Supervisor credentials are invalid');
+  let sup;
+  if (body.cardCode) {
+    // A supervisor's card (plus PIN when the business requires it).
+    sup = await authenticateCard(req, body.cardCode, body.pin).catch(() => null);
+    if (!sup) throw unauthorized('Supervisor card or PIN is invalid');
+  } else {
+    sup = body.email ? await User.findOne({ email: body.email, status: 'active' }) : null;
+    const secretOk = sup && (body.password ? await verifyPassword(body.password, sup.passwordHash) : body.pin && sup.pinHash ? await verifyPassword(body.pin, sup.pinHash) : false);
+    if (!sup || !secretOk) throw unauthorized('Supervisor credentials are invalid');
+  }
   const { permissionsForRoles } = await import('@afeypos/shared');
   if (!permissionsForRoles(sup.roles as any).has(body.permission as Permission)) throw forbidden('Supervisor lacks the required permission');
   const token = signShortToken({ sub: String(sup._id), tid: String(req.tenant!._id), perm: body.permission, for: String(req.auth!.userId), jti: crypto.randomUUID() }, 'override', 120);
@@ -259,6 +288,13 @@ recoveryRoutes.post('/email/verify', async (req, res) => {
   await User.updateOne({ _id: rec.userId }, { $set: { emailVerifiedAt: new Date() } });
   res.json({ ok: true });
 });
+
+/** Records the next attendance event for a user: clock in after a clock out (or first of all), otherwise clock out. */
+export async function clockInOut(userId: unknown, method: 'card' | 'fingerprint' | 'pin', extra: { deviceId?: unknown; branchId?: unknown } = {}) {
+  const last = await AttendanceRecord.findOne({ userId }).sort({ at: -1 }).lean();
+  const kind = last?.kind === 'clock_in' ? 'clock_out' : 'clock_in';
+  return AttendanceRecord.create({ userId, kind, method, ...extra });
+}
 
 /** Address of the web app, used in emailed links. */
 export function appUrl(): string {

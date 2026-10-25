@@ -9,6 +9,8 @@ import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { StaffAccessPanel } from './StaffAccess';
+import { BridgePairingCard, FingerprintReadersCard } from './ThisComputer';
 
 export function BusinessSettingsPage() {
   const { me, reload } = useAuth();
@@ -23,7 +25,7 @@ export function BusinessSettingsPage() {
   const setS = (k: string, v: any) => setF({ ...f, settings: { ...s, [k]: v } });
   const save = async () => {
     try {
-      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, receiptHeader: s.receiptHeader ?? '', receiptFooter: s.receiptFooter ?? '', logoFileId: s.logoFileId ?? '', tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders, returns: { windowDays: s.returns?.windowDays ?? 14, approvalAboveCents: s.returns?.approvalAboveCents ?? 0, restockByDefault: s.returns?.restockByDefault ?? true } } } });
+      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, receiptHeader: s.receiptHeader ?? '', receiptFooter: s.receiptFooter ?? '', logoFileId: s.logoFileId ?? '', tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders, returns: { windowDays: s.returns?.windowDays ?? 14, approvalAboveCents: s.returns?.approvalAboveCents ?? 0, restockByDefault: s.returns?.restockByDefault ?? true }, staffLogin: { cardRequiresPin: s.staffLogin?.cardRequiresPin ?? true } } } });
       await reload();
       toast.success('Settings saved');
     } catch (e) { toast.error(e); }
@@ -76,6 +78,7 @@ export function BusinessSettingsPage() {
           <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
             <Field label="Return window (days)" hint="Older sales need a manager; 0 = no limit"><Input type="number" min={0} className="w-28" value={s.returns?.windowDays ?? 14} onChange={(e) => setS('returns', { ...s.returns, windowDays: Math.max(0, Number(e.target.value) || 0) })} /></Field>
             <Field label="Manager approves refunds above (KES)" hint="0 = never"><Input inputMode="decimal" className="w-36" value={(s.returns?.approvalAboveCents ?? 0) / 100} onChange={(e) => setS('returns', { ...s.returns, approvalAboveCents: Math.max(0, Math.round(Number(e.target.value) * 100) || 0) })} /></Field>
+            <Checkbox label="Staff cards also need the PIN (recommended)" checked={s.staffLogin?.cardRequiresPin ?? true} onChange={(v) => setS('staffLogin', { cardRequiresPin: v })} />
             <Checkbox label="Returned items go back to the shelf by default" checked={s.returns?.restockByDefault ?? true} onChange={(v) => setS('returns', { ...s.returns, restockByDefault: v })} />
           </div>
           <Field label="Daily sales summary emails" hint="Comma separated; sent at 21:00 local time" className="sm:col-span-2"><Input value={(s.dailyReportEmails ?? []).join(', ')} onChange={(e) => setS('dailyReportEmails', e.target.value.split(',').map((x: string) => x.trim()).filter(Boolean))} /></Field>
@@ -166,7 +169,7 @@ export function UsersPage() {
   const save = async () => {
     setError(null);
     try {
-      const body: any = { name: edit.name, email: edit.email, phone: edit.phone || undefined, roles: edit.roles, branchIds: edit.branchIds ?? [], commissionRateBp: Number(edit.commissionRateBp ?? 0), employeeNo: edit.employeeNo || undefined };
+      const body: any = { name: edit.name, email: edit.email, phone: edit.phone || undefined, roles: edit.roles, branchIds: edit.branchIds ?? [], commissionRateBp: Number(edit.commissionRateBp ?? 0), employeeNo: edit.employeeNo || undefined, jobTitle: edit.jobTitle || undefined };
       if (edit.password) body.password = edit.password;
       if (edit.pin) body.pin = edit.pin;
       if (edit._id) await api(`/settings/users/${edit._id}`, { method: 'PATCH', body: { ...body, pin: undefined } });
@@ -183,7 +186,8 @@ export function UsersPage() {
         { key: 'n', header: 'Name', render: (r: any) => <div><div className="font-medium">{r.name}</div><div className="text-xs text-ink-500">{r.email}</div></div> },
         { key: 'r', header: 'Roles', render: (r: any) => <div className="flex flex-wrap gap-1">{r.roles.map((x: string) => <Badge key={x}>{ROLE_LABELS[x as keyof typeof ROLE_LABELS] ?? x}</Badge>)}</div> },
         { key: 'b', header: 'Branches', render: (r: any) => (r.branchIds?.length ? r.branchIds.map((b: string) => locs.data?.branches.find((x) => x._id === b)?.name).join(', ') : 'All') },
-        { key: 'sec', header: 'Security', render: (r: any) => <div className="flex gap-1">{r.twoFactorEnabled && <Badge tone="green">2FA</Badge>}{r.hasPin && <Badge>PIN</Badge>}</div> },
+        { key: 'e', header: 'Employee no.', render: (r: any) => r.employeeNo ?? '—' },
+        { key: 'sec', header: 'Sign-in', render: (r: any) => <div className="flex gap-1">{r.twoFactorEnabled && <Badge tone="green">2FA</Badge>}{r.hasPin && <Badge>PIN</Badge>}{r.card && <Badge tone="blue">Card</Badge>}</div> },
         { key: 'l', header: 'Last sign-in', render: (r: any) => dateTime(r.lastLoginAt) },
         { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
       ]} /></div>
@@ -195,13 +199,15 @@ export function UsersPage() {
             <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
             <Field label="Email"><Input value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></Field>
             <Field label="Phone"><Input value={edit.phone ?? ''} onChange={(e) => setEdit({ ...edit, phone: e.target.value })} /></Field>
-            <Field label="Employee number"><Input value={edit.employeeNo ?? ''} onChange={(e) => setEdit({ ...edit, employeeNo: e.target.value })} /></Field>
+            <Field label="Employee number" hint={edit._id ? undefined : 'Left empty, the next EMP- number is used'}><Input value={edit.employeeNo ?? ''} onChange={(e) => setEdit({ ...edit, employeeNo: e.target.value })} /></Field>
+            <Field label="Job title (printed on the card)"><Input value={edit.jobTitle ?? ''} onChange={(e) => setEdit({ ...edit, jobTitle: e.target.value })} /></Field>
             <Field label={edit._id ? 'New password (optional)' : 'Password'}><Input type="password" value={edit.password ?? ''} onChange={(e) => setEdit({ ...edit, password: e.target.value })} /></Field>
             {!edit._id && <Field label="Till PIN (optional, 4-8 digits)"><Input inputMode="numeric" value={edit.pin ?? ''} onChange={(e) => setEdit({ ...edit, pin: e.target.value })} /></Field>}
             {me!.capabilities.modules.includes('salesReps') && <Field label="Commission %"><Input inputMode="decimal" value={(edit.commissionRateBp ?? 0) / 100} onChange={(e) => setEdit({ ...edit, commissionRateBp: Math.round(Number(e.target.value) * 100) })} /></Field>}
           </div>
           <div className="mt-4"><div className="label">Roles</div><div className="grid gap-2 sm:grid-cols-3">{roles.map((r) => <Checkbox key={r} label={ROLE_LABELS[r]} checked={edit.roles.includes(r)} onChange={(v) => setEdit({ ...edit, roles: v ? [...edit.roles, r] : edit.roles.filter((x: string) => x !== r) })} />)}</div></div>
           {(locs.data?.branches.length ?? 0) > 1 && <div className="mt-4"><div className="label">Branch access (none selected = all)</div><div className="flex flex-wrap gap-3">{locs.data!.branches.map((b) => <Checkbox key={b._id} label={b.name} checked={(edit.branchIds ?? []).includes(b._id)} onChange={(v) => setEdit({ ...edit, branchIds: v ? [...(edit.branchIds ?? []), b._id] : edit.branchIds.filter((x: string) => x !== b._id) })} />)}</div></div>}
+          {edit._id && <StaffAccessPanel user={list.data?.find((u: any) => u._id === edit._id) ?? edit} onChanged={() => qc.invalidateQueries({ queryKey: ['users'] })} />}
           <div className="mt-3"><ErrorBox error={error} /></div>
         </Modal>
       )}
@@ -379,6 +385,8 @@ export function HardwarePage() {
           <li>Scales, customer displays, RFID and fingerprint readers need the device bridge on the till PC; see docs/HARDWARE.md. Not every model has been tested.</li>
         </ul>
       </Card>
+      <BridgePairingCard />
+      <FingerprintReadersCard />
       <div className="card"><DataTable rows={q.data} loading={q.isLoading} empty="No devices configured" columns={[
         { key: 'k', header: 'Type', render: (r: any) => r.kind.replace(/_/g, ' ') }, { key: 'n', header: 'Name', render: (r: any) => r.name }, { key: 'c', header: 'Connection', render: (r: any) => `${r.connection}${r.settings?.host ? ` ${r.settings.host}:${r.settings.port ?? 9100}` : ''}` },
         { key: 't', header: 'Till', render: (r: any) => locs.data?.tills.find((t) => t._id === r.tillId)?.name ?? '—' },

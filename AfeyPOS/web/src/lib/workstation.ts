@@ -6,6 +6,9 @@ export interface Workstation {
   theme?: 'light' | 'dark' | 'system';
   receiptWidth?: number;
   autoPrint?: boolean;
+  /** Afey device bridge on this PC, e.g. http://127.0.0.1:9123, and its pairing token. */
+  bridgeUrl?: string;
+  bridgeToken?: string;
 }
 
 export function getWorkstation(): Workstation {

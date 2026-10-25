@@ -23,7 +23,8 @@ export interface BridgeConfig {
   printers: Record<string, PrinterConfig>;
   display?: SerialConfig | null;
   scale?: SerialConfig | null;
-  fingerprint?: { vendor: 'simulator' | 'zkteco' | 'secugen'; options?: Record<string, unknown> };
+  /** zkteco / secugen / helper need options.helperPath (the vendor helper program, see bridge/helpers). */
+  fingerprint?: { vendor: 'simulator' | 'zkteco' | 'secugen' | 'helper'; options?: Record<string, unknown> };
 }
 
 export function loadConfig(file = process.env.AFEY_BRIDGE_CONFIG ?? path.resolve('config.json')): BridgeConfig {

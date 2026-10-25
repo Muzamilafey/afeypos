@@ -100,6 +100,9 @@ Legend: **Tested** = implemented with automated tests · **Implemented** = worki
 | Variable-weight scale barcodes | Tested |
 | ZKTeco / SecuGen readers | Not implemented (adapter interface + simulator only) |
 | Biometric enrolment, verification, overrides, attendance, audit, encryption | Tested with simulator |
+| Fingerprint sign-in by touch (1:N identification), fingerprint approval and clocking, browser ↔ bridge ↔ server | Tested end to end with the simulated reader |
+| ZKTeco reader helper (ZKFinger SDK) | Source only; not compiled or tested with hardware |
+| Staff ID cards (Code 128), card + PIN sign-in, card approval, card clock in/out, reissue/revoke, lockout | Tested (server and browser) |
 
 ## Reports, security, reliability
 

@@ -142,7 +142,10 @@ export const BiometricTemplate = tenantModel('BiometricTemplate', biometricTempl
 const biometricChallengeSchema = new Schema(
   {
     nonce: { type: String, required: true },
-    userId: { type: ObjectId, required: true },
+    /** 1:1 verification: the user who claims to be at the reader. Empty for 1:N identification. */
+    userId: ObjectId,
+    /** 1:N identification: the users whose templates were handed to the reader. */
+    candidates: { type: [ObjectId], default: undefined },
     purpose: { type: String, enum: ['login', 'override', 'attendance'], required: true },
     deviceId: { type: ObjectId, required: true },
     expiresAt: { type: Date, required: true },
@@ -155,7 +158,7 @@ biometricChallengeSchema.index({ tenantId: 1, nonce: 1 }, { unique: true });
 export const BiometricChallenge = tenantModel('BiometricChallenge', biometricChallengeSchema);
 
 const attendanceSchema = new Schema(
-  { userId: { type: ObjectId, required: true }, kind: { type: String, enum: ['clock_in', 'clock_out'], required: true }, method: { type: String, enum: ['fingerprint', 'pin', 'password'] }, deviceId: ObjectId, branchId: ObjectId, at: { type: Date, default: () => new Date() } },
+  { userId: { type: ObjectId, required: true }, kind: { type: String, enum: ['clock_in', 'clock_out'], required: true }, method: { type: String, enum: ['fingerprint', 'card', 'pin', 'password'] }, deviceId: ObjectId, branchId: ObjectId, at: { type: Date, default: () => new Date() } },
   { timestamps: false },
 );
 attendanceSchema.index({ tenantId: 1, userId: 1, at: -1 });

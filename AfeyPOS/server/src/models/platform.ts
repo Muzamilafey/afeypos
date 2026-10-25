@@ -35,6 +35,8 @@ const tenantSettingsSchema = new Schema(
     restrictedSaleHours: { start: { type: String }, end: { type: String } },
     dailyReportEmails: { type: [String], default: [] },
     creditReminders: { enabled: { type: Boolean, default: false }, overdueDays: { type: Number, default: 7 } },
+    /** Staff sign-in with an employee card: require the PIN as well (recommended; a barcode can be copied). */
+    staffLogin: { cardRequiresPin: { type: Boolean, default: true } },
     /** Returns policy: older sales or bigger refunds need someone with returns.approve. */
     returns: {
       windowDays: { type: Number, default: 14 },

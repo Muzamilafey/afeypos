@@ -20,10 +20,24 @@ const userSchema = new Schema(
     lastLoginAt: Date,
     commissionRateBp: { type: Number, default: 0 },
     employeeNo: String,
+    /** Staff ID card: the barcode code is kept hashed (for sign-in lookup) and encrypted (for reprints). */
+    card: {
+      codeHash: String,
+      codeEnc: String,
+      last4: String,
+      issuedAt: Date,
+      issuedBy: ObjectId,
+      revokedAt: Date,
+    },
+    /** Uploaded photo (modules/files) printed on the card. */
+    photoFileId: String,
+    jobTitle: String,
   },
   { timestamps: true },
 );
 userSchema.index({ tenantId: 1, email: 1 }, { unique: true });
+userSchema.index({ tenantId: 1, 'card.codeHash': 1 }, { unique: true, partialFilterExpression: { 'card.codeHash': { $type: 'string' } } });
+userSchema.index({ tenantId: 1, employeeNo: 1 }, { unique: true, partialFilterExpression: { employeeNo: { $type: 'string' } } });
 export const User = tenantModel('User', userSchema);
 
 /** Refresh sessions are looked up by id before tenant context exists, so they are not plugin-scoped; every query filters tenantId explicitly. */

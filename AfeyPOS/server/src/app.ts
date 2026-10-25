@@ -28,6 +28,7 @@ import { settingsRoutes } from './modules/settings/routes.js';
 import { reportRoutes } from './modules/reports/routes.js';
 import { hardwareRoutes } from './modules/hardware/routes.js';
 import { biometricBridgeRoutes, biometricRoutes } from './modules/biometrics/routes.js';
+import { staffCardRoutes } from './modules/staff/cards.js';
 import { backupRoutes } from './modules/backups/routes.js';
 import { syncSettingsRoutes } from './modules/sync/routes.js';
 import { hqSyncRoutes } from './modules/sync/hq.js';
@@ -61,7 +62,8 @@ export function createApp() {
         useDefaults: true,
         directives: {
           'img-src': ["'self'", 'data:', 'blob:'],
-          'connect-src': ["'self'", 'ws:', 'wss:'],
+          // The Afey device bridge (printers, scale, fingerprint reader) listens on the till PC's loopback address.
+          'connect-src': ["'self'", 'ws:', 'wss:', 'http://127.0.0.1:*', 'http://localhost:*'],
           'script-src': ["'self'"],
           'style-src': ["'self'", "'unsafe-inline'"],
           // Only force HTTPS sub-resources when the site is served over HTTPS; local shop installations use plain HTTP on the LAN.
@@ -128,7 +130,7 @@ export function createApp() {
   tenant.use('/auth', recoveryRoutes);
   tenant.use('/auth', authRoutes);
   tenant.use(authenticate);
-  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, backupRoutes, fileRoutes]) {
+  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, backupRoutes, fileRoutes]) {
     tenant.use(r);
   }
   v1.use(tenant);

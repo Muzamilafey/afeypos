@@ -40,6 +40,8 @@ const paths: Record<string, string> = {
   barcode: 'M4 5v14M7 5v14M10 5v14M14 5v14M17 5v14M20 5v14',
   download: 'M12 3v12M7 10l5 5 5-5M4 21h16',
   upload: 'M12 21V9M7 14l5-5 5 5M4 3h16',
+  finger: 'M12 11v3a8 8 0 01-1.5 4.7M8 9.5a4 4 0 018 0V13a12 12 0 01-.8 4.3M5 12V9.5a7 7 0 0112.8-3.9M19 10v2.5a15 15 0 01-.5 3.8M9 14.5a5 5 0 01-1 3',
+  idcard: 'M3 6h18v12H3zM7 10h4M7 14h6M15 10h3v4h-3z',
   undo: 'M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3',
   refresh: 'M4 4v6h6M20 20v-6h-6M5 15a7 7 0 0012 3M19 9A7 7 0 007 6',
   alert: 'M12 3l10 18H2zM12 10v5M12 18h0',

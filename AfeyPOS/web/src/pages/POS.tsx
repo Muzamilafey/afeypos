@@ -5,6 +5,7 @@ import { api, ApiError, newRequestId, openPrintable } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useLocations } from '../lib/hooks';
 import { getWorkstation, setWorkstation } from '../lib/workstation';
+import { bridgeConfigured, fingerprint } from '../lib/bridge';
 import { money, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
 import { useRealtime } from '../lib/realtime';
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
@@ -538,16 +539,47 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
   );
 }
 
+/** Supervisor approval on the cashier's screen: email + PIN/password, staff card + PIN, or fingerprint. */
 export function OverrideModal({ permission, message, onClose, onApproved }: { permission: string; message: string; onClose: () => void; onApproved: (token: string) => void }) {
+  const { me } = useAuth();
+  const [mode, setMode] = useState<'card' | 'email' | 'finger'>('card');
   const [email, setEmail] = useState('');
+  const [card, setCard] = useState('');
   const [pin, setPin] = useState('');
   const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const pinRef = useRef<HTMLInputElement>(null);
+  const approve = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (mode === 'finger') {
+        const r = await fingerprint<{ overrideToken: string }>('override', { permission, forUserId: me!.user.id });
+        onApproved(r.overrideToken);
+        return;
+      }
+      const digits = /^\d{4,8}$/.test(pin);
+      const body = mode === 'card' ? { cardCode: card.trim(), pin: pin || undefined, permission } : { email, pin: digits ? pin : undefined, password: digits ? undefined : pin, permission };
+      const r = await api<{ overrideToken: string }>('/auth/override', { body });
+      onApproved(r.overrideToken);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const modes = [{ key: 'card', label: 'Staff card' }, { key: 'email', label: 'Email' }, ...(bridgeConfigured() ? [{ key: 'finger', label: 'Fingerprint' }] : [])] as { key: typeof mode; label: string }[];
   return (
-    <Modal open onClose={onClose} title="Supervisor approval" size="sm" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={async () => { try { const r = await api<{ overrideToken: string }>('/auth/override', { body: { email, pin: /^\d{4,8}$/.test(pin) ? pin : undefined, password: /^\d{4,8}$/.test(pin) ? undefined : pin, permission } }); onApproved(r.overrideToken); } catch (e) { setError(e); } }}>Approve</Button></>}>
+    <Modal open onClose={onClose} title="Supervisor approval" size="sm" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} onClick={approve}>{mode === 'finger' ? 'Scan finger' : 'Approve'}</Button></>}>
       <p className="mb-3 text-sm">{message}</p>
+      <div className="mb-3 flex gap-1 rounded-lg bg-ink-100 p-1 text-sm dark:bg-ink-800" role="radiogroup" aria-label="Approve with">
+        {modes.map((m) => <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} className={`flex-1 rounded-md py-1.5 ${mode === m.key ? 'bg-white shadow dark:bg-ink-700' : 'text-ink-500'}`} onClick={() => { setMode(m.key); setError(null); }}>{m.label}</button>)}
+      </div>
       <div className="space-y-3">
-        <Field label="Supervisor email"><Input autoFocus value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
-        <Field label="PIN or password"><Input type="password" value={pin} onChange={(e) => setPin(e.target.value)} /></Field>
+        {mode === 'card' && <Field label="Supervisor card"><Input autoFocus type="password" autoComplete="off" value={card} placeholder="Scan the supervisor's card" onChange={(e) => setCard(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); pinRef.current?.focus(); } }} /></Field>}
+        {mode === 'email' && <Field label="Supervisor email"><Input autoFocus value={email} onChange={(e) => setEmail(e.target.value)} /></Field>}
+        {mode !== 'finger' && <Field label={mode === 'card' ? 'PIN' : 'PIN or password'}><Input ref={pinRef} type="password" value={pin} onChange={(e) => setPin(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') approve(); }} /></Field>}
+        {mode === 'finger' && <p className="text-sm text-ink-500">Press <strong>Scan finger</strong>; the supervisor places an enrolled finger on the reader.</p>}
         <ErrorBox error={error} />
       </div>
     </Modal>

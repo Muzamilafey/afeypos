@@ -1,10 +1,11 @@
 import { Logo } from '../components/Logo';
-import { useEffect, useState, type FormEvent, type InputHTMLAttributes, type ReactNode } from 'react';
+import { forwardRef, useEffect, useRef, useState, type FormEvent, type InputHTMLAttributes, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
+import { bridgeConfigured, fingerprint } from '../lib/bridge';
 import { useAuth } from '../lib/auth';
-import { Button, ErrorBox, Field, Input, Card, cx, Spinner } from '../components/ui';
+import { Button, ErrorBox, Field, Input, Card, Modal, cx, Spinner } from '../components/ui';
 import { Icon } from '../components/icons';
 
 interface PublicConfig {
@@ -83,44 +84,71 @@ function Shell({ title, subtitle, children, wide, tab }: { title: string; subtit
 }
 
 /** Text input with a leading icon (and optional trailing button), styled for the auth cards. */
-function IconInput({ icon, trailing, className, ...props }: InputHTMLAttributes<HTMLInputElement> & { icon: string; trailing?: ReactNode }) {
+const IconInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { icon: string; trailing?: ReactNode }>(function IconInput({ icon, trailing, className, ...props }, ref) {
   return (
     <div className="relative">
       <Icon name={icon} className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-ink-400" />
       <input
+        ref={ref}
         {...props}
         className={cx('block w-full rounded-xl border border-ink-200 bg-ink-50/60 py-3 pl-12 pr-12 text-sm shadow-sm placeholder-ink-400 focus:border-brand-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-ink-700 dark:bg-ink-950 dark:focus:ring-brand-700', className)}
       />
       {trailing && <div className="absolute right-2 top-1/2 -translate-y-1/2">{trailing}</div>}
     </div>
   );
-}
+});
+
+type LoginMode = 'password' | 'pin' | 'card' | 'finger';
+const MODES: { key: LoginMode; label: string; icon: string }[] = [
+  { key: 'password', label: 'Password', icon: 'lock' },
+  { key: 'pin', label: 'PIN', icon: 'keypad' },
+  { key: 'card', label: 'Staff card', icon: 'idcard' },
+  { key: 'finger', label: 'Fingerprint', icon: 'finger' },
+];
 
 export function LoginPage() {
-  const { login, completeMfa, pinLogin } = useAuth();
+  const { login, completeMfa, pinLogin, cardLogin, fingerprintLogin } = useAuth();
   const nav = useNavigate();
   const cfg = usePublicConfig();
-  const [mode, setMode] = useState<'password' | 'pin'>('password');
+  const [mode, setMode] = useState<LoginMode>('password');
   const [email, setEmail] = useState('');
   const [secret, setSecret] = useState('');
+  const [card, setCard] = useState('');
   const [mfa, setMfa] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [show, setShow] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [clock, setClock] = useState(false);
+  const pinRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (cfg.data?.setupRequired) nav('/setup');
   }, [cfg.data, nav]);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
+      await fn();
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'PIN_REQUIRED') pinRef.current?.focus();
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    run(async () => {
       if (mfa) await completeMfa(mfa, code);
       else if (mode === 'pin') await pinLogin(email, secret);
-      else {
+      else if (mode === 'card') await cardLogin(card.trim(), secret);
+      else if (mode === 'finger') {
+        const r = await fingerprint<{ loginToken: string }>('login');
+        await fingerprintLogin(r.loginToken);
+      } else {
         const r = await login(email, secret);
         if (r.mfaRequired) {
           setMfa(r.mfaToken!);
@@ -128,14 +156,26 @@ export function LoginPage() {
         }
       }
       nav('/');
-    } catch (err) {
-      setError(err);
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
-  const pin = mode === 'pin';
+  const pin = mode === 'pin' || mode === 'card';
+  const secretInput = (
+    <IconInput
+      ref={pinRef}
+      icon={pin ? 'keypad' : 'lock'}
+      aria-label={pin ? 'PIN' : 'Password'}
+      type={show ? 'text' : 'password'}
+      autoComplete={pin ? 'off' : 'current-password'}
+      inputMode={pin ? 'numeric' : undefined}
+      maxLength={pin ? 8 : undefined}
+      required={mode !== 'card'}
+      value={secret}
+      onChange={(e) => setSecret(pin ? e.target.value.replace(/\D/g, '') : e.target.value)}
+      placeholder={pin ? '4-8 digit PIN' : 'Password'}
+      trailing={<button type="button" onClick={() => setShow((v) => !v)} className="rounded-lg p-2 text-ink-400 hover:text-ink-700" aria-label={show ? 'Hide' : 'Show'}><Icon name={show ? 'eyeOff' : 'eye'} className="h-4 w-4" /></button>}
+    />
+  );
   return (
     <Shell title="Sign in" tab="signin">
       <form onSubmit={submit} className="space-y-5">
@@ -146,30 +186,36 @@ export function LoginPage() {
           </>
         ) : (
           <>
-            <div role="radiogroup" aria-label="Sign in with" className="relative grid grid-cols-2 rounded-full bg-ink-100 p-1 text-sm font-medium dark:bg-ink-800">
-              <span aria-hidden="true" className={cx('absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-full bg-brand-600 shadow transition-transform duration-200 dark:bg-brand-100', pin && 'translate-x-full')} />
-              {(['password', 'pin'] as const).map((m) => (
-                <button key={m} type="button" role="radio" aria-checked={mode === m} onClick={() => { setMode(m); setSecret(''); setError(null); }}
-                  className={cx('relative z-10 flex items-center justify-center gap-2 rounded-full py-2 transition-colors', mode === m ? 'text-white dark:text-brand-900' : 'text-ink-500 hover:text-ink-700')}>
-                  <Icon name={m === 'pin' ? 'keypad' : 'lock'} className="h-4 w-4" />
-                  {m === 'pin' ? 'Cashier PIN' : 'Password'}
+            <div role="radiogroup" aria-label="Sign in with" className="grid grid-cols-4 gap-1 rounded-2xl bg-ink-100 p-1 text-xs font-medium dark:bg-ink-800">
+              {MODES.map((m) => (
+                <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} onClick={() => { setMode(m.key); setSecret(''); setError(null); }}
+                  className={cx('flex flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 transition-colors', mode === m.key ? 'bg-brand-600 text-white shadow dark:bg-brand-100 dark:text-brand-900' : 'text-ink-500 hover:text-ink-700')}>
+                  <Icon name={m.icon} className="h-5 w-5" />
+                  <span className="whitespace-nowrap">{m.label}</span>
                 </button>
               ))}
             </div>
-            <IconInput icon="mail" aria-label="Email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" />
-            <IconInput
-              icon={pin ? 'keypad' : 'lock'}
-              aria-label={pin ? 'PIN' : 'Password'}
-              type={show ? 'text' : 'password'}
-              autoComplete={pin ? 'off' : 'current-password'}
-              inputMode={pin ? 'numeric' : undefined}
-              maxLength={pin ? 8 : undefined}
-              required
-              value={secret}
-              onChange={(e) => setSecret(pin ? e.target.value.replace(/\D/g, '') : e.target.value)}
-              placeholder={pin ? '4-8 digit PIN' : 'Password'}
-              trailing={<button type="button" onClick={() => setShow((v) => !v)} className="rounded-lg p-2 text-ink-400 hover:text-ink-700" aria-label={show ? 'Hide' : 'Show'}><Icon name={show ? 'eyeOff' : 'eye'} className="h-4 w-4" /></button>}
-            />
+            {(mode === 'password' || mode === 'pin') && (
+              <>
+                <IconInput icon="mail" aria-label="Email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" />
+                {secretInput}
+              </>
+            )}
+            {mode === 'card' && (
+              <>
+                <IconInput icon="idcard" aria-label="Staff card" autoFocus autoComplete="off" type="password" value={card} required
+                  onChange={(e) => setCard(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); pinRef.current?.focus(); } }}
+                  placeholder="Scan your staff card" />
+                {secretInput}
+              </>
+            )}
+            {mode === 'finger' && (
+              <div className="rounded-2xl border border-dashed border-ink-300 p-6 text-center dark:border-ink-700">
+                <Icon name="finger" className="mx-auto h-12 w-12 text-brand-600" />
+                <p className="mt-2 text-sm text-ink-600 dark:text-ink-300">{busy ? 'Place your finger on the reader…' : bridgeConfigured() ? 'Press Sign in, then place your enrolled finger on the reader.' : 'This computer has no fingerprint reader set up (Hardware → This computer).'}</p>
+              </div>
+            )}
           </>
         )}
         <ErrorBox error={error} />
@@ -177,12 +223,55 @@ export function LoginPage() {
           {mfa ? (
             <button type="button" className="text-sm text-ink-500 hover:underline" onClick={() => { setMfa(null); setCode(''); }}>Back</button>
           ) : (
-            <Link to="/forgot-password" className="text-sm text-brand-700 hover:underline dark:text-brand-200">Forgot your password?</Link>
+            <div className="flex gap-4 text-sm">
+              <Link to="/forgot-password" className="text-brand-700 hover:underline dark:text-brand-200">Forgot your password?</Link>
+              <button type="button" className="text-brand-700 hover:underline dark:text-brand-200" onClick={() => setClock(true)}>Clock in / out</button>
+            </div>
           )}
           <Button type="submit" loading={busy} size="lg" className="rounded-full px-10">{mfa ? 'Verify' : 'Sign in'}</Button>
         </div>
       </form>
+      {clock && <ClockModal onClose={() => setClock(false)} />}
     </Shell>
+  );
+}
+
+/** Attendance from the sign-in screen: staff card (+PIN) or fingerprint; nobody needs to be signed in. */
+function ClockModal({ onClose }: { onClose: () => void }) {
+  const [card, setCard] = useState('');
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState<unknown>(null);
+  const [done, setDone] = useState<{ name: string; kind: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const pinRef = useRef<HTMLInputElement>(null);
+  const go = async (fn: () => Promise<{ name: string; kind: string }>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setDone(await fn());
+      setCard('');
+      setPin('');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const byCard = () => go(async () => (await api<{ data: { name: string; kind: string } }>('/auth/clock', { body: { code: card.trim(), pin: pin || undefined } })).data);
+  const byFinger = () => go(async () => {
+    const r = await fingerprint<{ attendance: { kind: string }; user: { name: string } }>('attendance');
+    return { name: r.user.name, kind: r.attendance.kind };
+  });
+  return (
+    <Modal open onClose={onClose} title="Clock in / out" size="sm" footer={<><Button variant="secondary" onClick={onClose}>Close</Button><Button loading={busy} disabled={!card} onClick={byCard}>Clock with card</Button></>}>
+      {done && <p className="mb-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200" role="status">{done.name}: {done.kind === 'clock_in' ? 'clocked in' : 'clocked out'} at {new Date().toLocaleTimeString()}</p>}
+      <div className="space-y-3">
+        <Field label="Staff card"><Input autoFocus type="password" autoComplete="off" value={card} onChange={(e) => setCard(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); pinRef.current?.focus(); } }} placeholder="Scan your card" /></Field>
+        <Field label="PIN"><Input ref={pinRef} type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} onKeyDown={(e) => { if (e.key === 'Enter' && card) byCard(); }} /></Field>
+        {bridgeConfigured() && <Button variant="secondary" className="w-full" loading={busy} onClick={byFinger}><Icon name="finger" className="h-4 w-4" />Use fingerprint</Button>}
+        <ErrorBox error={error} />
+      </div>
+    </Modal>
   );
 }
 

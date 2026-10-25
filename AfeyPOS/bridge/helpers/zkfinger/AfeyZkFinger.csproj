@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Afey POS fingerprint helper for ZKTeco readers (ZK4500, ZK9500, SLK20R, ...).
+    Needs the ZKFinger SDK for Windows: copy libzkfpcsharp.dll from the SDK into this folder.
+    Build: dotnet build -c Release   (x86, like the SDK's native libzkfp.dll)
+    NOT compiled or tested in the Afey POS build environment; see docs/BIOMETRICS.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x86</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <Reference Include="libzkfpcsharp">
+      <HintPath>libzkfpcsharp.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>
