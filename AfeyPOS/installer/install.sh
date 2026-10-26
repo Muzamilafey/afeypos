@@ -321,6 +321,13 @@ $v6
 }
 EOF
   [ -d /etc/nginx/sites-enabled ] && ln -sf "$site" /etc/nginx/sites-enabled/afeypos.conf
+  # Another site that also lists this name (e.g. the main website, or an earlier certbot run) would win.
+  local others
+  others=$(grep -rlE "server_name[^;]*[[:space:]]$DOMAIN([[:space:];]|\$)" /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | xargs -r readlink -f | grep -v '/afeypos.conf$' | sort -u || true)
+  if [ -n "$others" ]; then
+    note "Another nginx site also uses $DOMAIN: $others"
+    note "Remove $DOMAIN from its server_name lines (keep its other names), then: sudo nginx -t && sudo systemctl reload nginx"
+  fi
   if ! nginx -t >/dev/null 2>&1; then nginx -t || true; note "nginx rejected the configuration above; fix it, then: sudo systemctl reload nginx"; return 1; fi
   systemctl reload nginx
   command -v certbot >/dev/null || apt-get install -y -qq certbot python3-certbot-nginx >/dev/null 2>&1 || true

@@ -48,6 +48,8 @@ case "${1:-status}" in
       if [ "$match" = 1 ]; then ok "DNS: $d -> $ips (this server)"
       else bad "DNS: $d -> $ips, but this server's addresses are: $mine"; tip "If that is not this VPS (e.g. a wildcard *.afey.co.ke or the website host), set the A record for 'pos' to this VPS's public IP"; fi
     fi
+    clash=$(grep -rlE "server_name[^;]*[[:space:]]$d([[:space:];]|\$)" /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | xargs -r readlink -f | grep -v '/afeypos.conf$' | sort -u | tr '\n' ' ' || true)
+    if [ -n "$clash" ]; then bad "Another nginx site also uses $d: $clash"; tip "Remove $d from the server_name lines in that file (keep its other names), then: sudo nginx -t && sudo systemctl reload nginx"; fi
     owner=$(ss -ltnpH 2>/dev/null | awk '$4 ~ /:(80|443)$/' | grep -o 'users:(("[^"]*"' | sed 's/users:(("//; s/"//' | sort -u | tr '\n' ' ' || true)
     echo "  ..   Ports 80/443 are served by: ${owner:-nothing}"
     if curl -fsS -m 5 -H "Host: $d" "http://127.0.0.1/health" 2>/dev/null | grep -q '"service":"afeypos"'; then ok "http://$d reaches Afey POS"
