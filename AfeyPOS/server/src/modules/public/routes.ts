@@ -3,6 +3,7 @@ import { BUSINESS_PROFILES, BUSINESS_TYPES, MODULE_INFO } from '@afeypos/shared'
 import { env } from '../../config/env.js';
 import { runInTenant } from '../../lib/context.js';
 import { parse } from '../../http/validate.js';
+import { AppError } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { findTenantForRequest } from '../../http/tenant.js';
 import { authLimiter, appUrl } from '../auth/routes.js';
@@ -47,6 +48,9 @@ router.get('/business-types', (_req, res) => {
 
 /** One-time installation setup: creates the business and its owner. Refused once set up. */
 router.post('/register', authLimiter, async (req, res) => {
+  if (env().DEPLOYMENT_MODE === 'branch') {
+    throw new AppError(409, 'BRANCH_SERVER', 'This is a branch server: the business, staff and products arrive from head office by sync. Do not set it up here.');
+  }
   const input = parse(registrationSchema, req.body);
   const { tenant, owner } = await provisionTenant(input);
   await runInTenant(tenant._id, () => audit(req, { action: 'business.setup', entity: 'Tenant', entityId: tenant._id, details: { businessType: tenant.businessType, owner: owner.email } }));

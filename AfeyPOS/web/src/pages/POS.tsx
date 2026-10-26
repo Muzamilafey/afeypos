@@ -4,6 +4,7 @@ import { allocateProportionally, calculateTax, CARD_NETWORKS, KENYA_BANKS, lineA
 import { PosTile, type PosTileKind } from '../components/PosTiles';
 import { api, ApiError, newRequestId } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { usePublicConfig } from './Auth';
 import { useLocations } from '../lib/hooks';
 import { getWorkstation, setWorkstation } from '../lib/workstation';
 import { bridgeConfigured, fingerprint } from '../lib/bridge';
@@ -30,7 +31,10 @@ export function POSPage() {
   const { me } = useAuth();
   const locs = useLocations();
   const [tillId, setTillId] = useState(getWorkstation().tillId ?? '');
-  const tills = (locs.data?.tills ?? []).filter((t) => t.active && (!me?.user.branchIds.length || me.user.branchIds.includes(t.branchId)));
+  // A branch server sells only from its own branch's tills (other branches' tills arrive by sync, read-only).
+  const serverBranch = usePublicConfig().data?.branchCode?.toUpperCase();
+  const serverBranchId = serverBranch ? locs.data?.branches.find((b) => b.code?.toUpperCase() === serverBranch)?._id : undefined;
+  const tills = (locs.data?.tills ?? []).filter((t) => t.active && (!me?.user.branchIds.length || me.user.branchIds.includes(t.branchId)) && (!serverBranch || t.branchId === serverBranchId));
   useEffect(() => {
     if (!tillId && tills.length === 1) setTillId(tills[0]._id);
   }, [tills, tillId]);

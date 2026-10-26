@@ -135,6 +135,19 @@ describe('branch server bootstrap', () => {
   });
 });
 
+describe('branch server tills', () => {
+  it('cannot be set up as a new business, and sells only from its own branch tills', async () => {
+    const reg = await branch.api.post('/api/v1/public/register').send({ businessName: 'Other', businessType: 'supermarket', ownerName: 'X Y', email: 'x@other.test', password: OWNER_PASSWORD });
+    expect(reg.status).toBe(409);
+    expect(reg.body.error.code).toBe('BRANCH_SERVER');
+    // Head office's own till (and another branch's) arrive by sync but cannot sell here.
+    const other = await branch.post('/shifts', { tillId: hq.locations.tills[0]._id, openingFloatCents: 0 });
+    expect(other.status).toBe(409);
+    expect(other.body.error.code).toBe('STOCK_OWNED_ELSEWHERE');
+    expect(other.body.error.message).toMatch(/This till belongs to .* but this server runs branch MSA01/);
+  });
+});
+
 describe('selling at the branch', () => {
   it('sells offline-first at the branch; HQ receives the sale and the branch stock after sync', async () => {
     await openShift(branch, b1.tillId, 100000);

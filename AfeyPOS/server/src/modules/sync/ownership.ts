@@ -55,12 +55,15 @@ export async function assertWarehouseOwned(warehouseId: Types.ObjectId | string)
   const e = env();
   const w = await Warehouse.findById(warehouseId, { branchId: 1 }).lean();
   const b = w ? await Branch.findById(w.branchId, { name: 1, code: 1 }).lean() : null;
+  if (!w || !b) {
+    throw new AppError(409, 'STOCK_LOCATION_MISSING', 'This till’s store (warehouse) is not on this server yet. Wait for the first sync to finish, then check Administration → Branch sync for errors.');
+  }
   throw new AppError(
     409,
     'STOCK_OWNED_ELSEWHERE',
     e.DEPLOYMENT_MODE === 'branch'
-      ? `Stock for ${b?.name ?? 'that branch'} is managed on its own server; record it there`
-      : `${b?.name ?? 'That branch'} runs its own server; record its sales and stock changes on the branch system`,
+      ? `This till belongs to ${b.name} (${b.code}), but this server runs branch ${e.BRANCH_CODE?.toUpperCase()}. Choose one of branch ${e.BRANCH_CODE?.toUpperCase()}'s tills (Change till), or set BRANCH_CODE to ${b.code} if this PC is in ${b.name}.`
+      : `${b.name} runs its own server; record its sales and stock changes on the branch system`,
   );
 }
 

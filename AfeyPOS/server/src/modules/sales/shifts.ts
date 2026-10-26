@@ -8,6 +8,7 @@ import { audit } from '../../lib/audit.js';
 import { assertBranchAccess, can } from '../../http/auth.js';
 import { denominationTotalCents, denominationsFor, mergeCheckoutRules } from '@afeypos/shared';
 import { consumeOverride } from '../auth/routes.js';
+import { assertWarehouseOwned } from '../sync/ownership.js';
 
 export const checkoutRulesOf = (req: Request) => mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
 
@@ -27,6 +28,8 @@ export async function openShift(req: Request, tillId: Types.ObjectId, openingFlo
   const till = await Till.findOne({ _id: tillId, active: true });
   if (!till) throw notFound('Till');
   assertBranchAccess(req, till.branchId);
+  // Branch servers sell only from their own branch's tills (the stock of other branches is read-only here).
+  await assertWarehouseOwned(till.warehouseId);
   const rules = checkoutRulesOf(req).shifts;
   if (openingFloatCents < rules.minOpeningFloatCents) throw new AppError(422, 'FLOAT_TOO_LOW', `The opening float must be at least ${(rules.minOpeningFloatCents / 100).toFixed(2)}`);
   if (rules.oneOpenShiftPerCashier) {
