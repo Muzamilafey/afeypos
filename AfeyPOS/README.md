@@ -14,7 +14,23 @@ It runs in one of three roles (`DEPLOYMENT_MODE` in `server/.env`):
 | API server | `server` | Node.js 22, Express 5, Mongoose 8, Zod, Socket.IO |
 | Web app (POS and back office) | `web` | React 18, Vite 6, Tailwind CSS, TanStack Query |
 | Device bridge for the till PC | `bridge` | Node.js, no native dependencies |
-| Windows installer scripts | `installer/windows` | PowerShell |
+| Installers (one-line Linux and Windows, setup) | `installer`, `scripts/setup.mjs` | Bash, PowerShell, Node.js |
+
+## Install a server (one command)
+
+Downloads and sets up everything: Node.js 22, MongoDB 8 (checksums verified), Afey POS, the database replica set, the configuration with fresh secrets, and services that start at boot. Run the same command again to upgrade; data and settings are kept. Details and options: [docs/INSTALL.md](docs/INSTALL.md).
+
+**Linux** (Ubuntu, Debian, RHEL/Rocky/Alma, Amazon Linux):
+```bash
+curl -fsSL https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/installer/install.sh | sudo bash
+```
+
+**Windows 10/11 or Server** (PowerShell, *Run as administrator*):
+```powershell
+irm https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/installer/windows/install-online.ps1 | iex
+```
+
+Then open the address it prints and create the owner account.
 
 ## Run it on your computer (one command)
 

@@ -15,7 +15,7 @@
 
 Permissions are enforced on the server; the web app only hides what a user cannot use.
 
-**Roles.** Built-in roles (owner, business administrator, branch manager, inventory manager, procurement officer, cashier, accountant, auditor, salesperson, warehouse operator) are defined in `packages/shared/src/permissions.ts`. Owners and administrators can add **custom roles** (any set of the 54 permissions) under *Administration → Roles & permissions*, and adjust a single user (**allow** a permission their roles lack, or **deny** one their roles give). A user's access is: built-in roles + custom roles + allowed - denied. Owners always have everything. Access is recomputed on every request, so changes apply at once without a new sign-in; supervisor approvals (PIN, card or fingerprint) use the supervisor's effective permissions the same way.
+**Roles.** Built-in roles (owner, business administrator, branch manager, inventory manager, procurement officer, cashier, accountant, auditor, salesperson, warehouse operator) are defined in `packages/shared/src/permissions.ts`. Owners and administrators can add **custom roles** (any set of the 54 permissions) under *Administration → Roles & permissions*, and adjust a single user (**allow** a permission their roles lack, or **deny** one their roles give). A user's access is: built-in roles + custom roles + allowed - denied. Owners always have everything. Access is recomputed on every request, so changes apply at once without a new sign-in; supervisor approvals (PIN, card or fingerprint) use the supervisor's effective permissions the same way, and a supervisor limited to some branches only approves at those branches (the till's or fingerprint reader's branch).
 
 **Deny by default.** Every route a signed-in user can reach declares who may use it (`requirePermission`, `requireAnyPermission`, `requireRole` or an explicit `signedIn(reason)`). `server/tests/route-guards.test.ts` walks the live router and fails if any signed-in route has no rule, and pins the short list open to every signed-in user (their own account, the list of tills, uploaded pictures, asking a supervisor).
 
@@ -58,6 +58,5 @@ See ARCHITECTURE.md. One business per installation; records carry its id and the
 
 - No WAF or bot protection in the app itself; use the reverse proxy/CDN.
 - Customers, suppliers and products are shared by all branches (not branch-scoped). The books (journal entries) are not branch-scoped either: give accounting permissions only to staff who may see the whole business.
-- A supervisor's branch limits are not checked when they approve an override at a till.
 - Rate limits and SMS token buckets are per process (use a shared store if you run many instances).
 - KRA eTIMS fiscal submission is not implemented.

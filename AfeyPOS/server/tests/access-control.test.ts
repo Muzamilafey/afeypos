@@ -69,6 +69,18 @@ describe('custom roles and per-user permissions', () => {
   });
 });
 
+describe('supervisor approvals and branches', () => {
+  it('a supervisor limited to one branch only approves at that branch', async () => {
+    await user('wlsup@guarded.test', { roles: ['branch_manager'], branchIds: [B.branch] });
+    const cashier = await user('cashier4@guarded.test', { roles: ['cashier'], branchIds: [A.branch] });
+    const ask = (tillId?: string) => cashier.c.post('/auth/override', { email: 'wlsup@guarded.test', password: 'Passw0rd!x', permission: 'sales.discount.override', tillId });
+    expect((await ask(A.till)).status).toBe(403);
+    expect((await ask()).status).toBe(403); // the cashier works at the other branch
+    const wlCashier = await user('cashier5@guarded.test', { roles: ['cashier'], branchIds: [B.branch] });
+    expect((await wlCashier.c.post('/auth/override', { email: 'wlsup@guarded.test', password: 'Passw0rd!x', permission: 'sales.discount.override', tillId: B.till })).status).toBe(200);
+  });
+});
+
 describe('no escalation', () => {
   let hr: Awaited<ReturnType<typeof user>>;
 

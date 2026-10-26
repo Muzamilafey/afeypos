@@ -14,8 +14,9 @@ if ($NewReleaseZip) {
 } elseif (Test-Path .git) {
   git pull --ff-only
 }
-npm ci --no-audit --no-fund
-npm run build
+# Keeps server\.env (secrets, mode, port); installs dependencies, builds, checks the database.
+node scripts\setup.mjs
+if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Host 'Upgrade failed; the backup is in the backups folder.' -ForegroundColor Red; exit 1 }
 Pop-Location
 Start-ScheduledTask -TaskName 'AfeyPOS'
 Write-Host 'Upgrade complete. Database indexes are updated automatically on start.' -ForegroundColor Green

@@ -9,7 +9,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { Permission } from '@afeypos/shared';
-import { userPermissions } from '../../lib/access.js';
+import { supervisorCoversBranch, userPermissions } from '../../lib/access.js';
 import { AttendanceRecord, BiometricChallenge, BiometricDevice, BiometricTemplate, User } from '../../models/index.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission, signShortToken } from '../../http/auth.js';
@@ -132,6 +132,8 @@ biometricBridgeRoutes.post('/biometrics/verify', async (req, res) => {
   if (ch.purpose === 'override') {
     if (!body.permission || !body.forUserId) throw forbidden('Override needs a permission and the requesting user');
     if (!(await userPermissions(user)).has(body.permission as Permission)) throw forbidden('Supervisor lacks the required permission');
+    const requester = await User.findById(body.forUserId, { branchIds: 1 }).lean();
+    if (!supervisorCoversBranch(user, { branchId: device.branchId, requester })) throw forbidden('This supervisor does not work at this branch');
     const token = signShortToken({ sub: String(user._id), tid: String(req.tenant!._id), perm: body.permission, for: String(body.forUserId), jti: crypto.randomUUID() }, 'override', 120);
     res.json({ data: { overrideToken: token, supervisor: { id: user._id, name: user.name } } });
     return;

@@ -18,6 +18,8 @@ No Docker or Kubernetes is required. A small VM (2 vCPU / 4 GB) is enough for mo
 
 ## HQ server
 
+**One command** (Linux): `curl -fsSL https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/installer/install.sh | sudo bash -s -- --mode hq --domain hq.myshop.co.ke` installs Node.js, MongoDB, Afey POS, HTTPS and the services (see [INSTALL.md](INSTALL.md); use `--mongo-uri` for Atlas). Branch servers: `--mode branch --hq-url ... --branch-code ... --sync-token ...`. The manual steps follow.
+
 1. **Database**: MongoDB 7 as a replica set (MongoDB Atlas M10+ with backups, or a self-managed replica set).
 2. **Server**: Ubuntu 24.04 (or similar) with Node.js 22 LTS.
    ```bash

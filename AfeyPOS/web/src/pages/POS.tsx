@@ -559,7 +559,9 @@ export function OverrideModal({ permission, message, onClose, onApproved }: { pe
         return;
       }
       const digits = /^\d{4,8}$/.test(pin);
-      const body = mode === 'card' ? { cardCode: card.trim(), pin: pin || undefined, permission } : { email, pin: digits ? pin : undefined, password: digits ? undefined : pin, permission };
+      // The till tells the server which branch the approval is for (supervisors may be limited to some branches).
+      const tillId = getWorkstation().tillId || undefined;
+      const body = mode === 'card' ? { cardCode: card.trim(), pin: pin || undefined, permission, tillId } : { email, pin: digits ? pin : undefined, password: digits ? undefined : pin, permission, tillId };
       const r = await api<{ overrideToken: string }>('/auth/override', { body });
       onApproved(r.overrideToken);
     } catch (e) {

@@ -3,9 +3,9 @@
   Installs Afey POS as a local (single business) server on Windows 10/11 or Windows Server.
 
 .DESCRIPTION
-  - Checks Node.js 20+ and MongoDB 7+ are installed.
+  - Checks Node.js 22.9+ and MongoDB 7+ are installed (install-online.ps1 downloads them for you).
   - Configures MongoDB as a single-node replica set (required for transactions) and a Windows service.
-  - Creates server\.env with freshly generated secrets.
+  - Creates server\.env with freshly generated secrets (kept when run again) and initialises the replica set.
   - Installs dependencies and builds the application.
   - Registers "AfeyPOS" as a startup Scheduled Task that runs as SYSTEM and restarts on failure.
   - Opens the firewall port for tills on the local network.
@@ -16,7 +16,13 @@
 #>
 [CmdletBinding()]
 param(
+  [ValidateSet('standalone', 'hq', 'branch')][string]$Mode = 'standalone',
   [int]$Port = 4000,
+  [string]$PublicUrl = '',
+  [string]$ShopHost = '',
+  [string]$HqUrl = '',
+  [string]$SyncToken = '',
+  [string]$BranchCode = '',
   [string]$InstallDir = (Resolve-Path "$PSScriptRoot\..\..").Path,
   [string]$DataDir = "C:\AfeyPOS\data",
   [string]$MongoDataDir = "C:\AfeyPOS\mongodb",
@@ -69,45 +75,28 @@ if (-not $svc) {
 }
 Start-Service AfeyMongoDB
 Start-Sleep -Seconds 5
-$mongosh = Get-Command mongosh -ErrorAction SilentlyContinue
-if ($mongosh) {
-  & mongosh --quiet --eval 'try { rs.status().ok } catch (e) { rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] }).ok }'
-} else {
-  Write-Warning 'mongosh not found. Initialise the replica set once with: mongosh --eval "rs.initiate()" (see docs/INSTALL-WINDOWS.md).'
-}
 
-Step 'Creating configuration (server\.env)'
-$envFile = Join-Path $InstallDir 'server\.env'
-New-Item -ItemType Directory -Force -Path $DataDir, "$DataDir\backups", "$DataDir\uploads" | Out-Null
-if (-not (Test-Path $envFile)) {
-  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-  $jwt = New-Object byte[] 48; $rng.GetBytes($jwt)
-  $key = New-Object byte[] 32; $rng.GetBytes($key)
-  $content = Get-Content (Join-Path $InstallDir 'server\.env.example') -Raw
-  $content = $content -replace 'NODE_ENV=development', 'NODE_ENV=production'
-  $content = $content -replace 'PORT=4000', "PORT=$Port"
-  $content = $content -replace 'JWT_ACCESS_SECRET=.*', ("JWT_ACCESS_SECRET=" + [Convert]::ToBase64String($jwt).Replace('+','-').Replace('/','_').TrimEnd('='))
-  $content = $content -replace 'ENCRYPTION_KEY=.*', ("ENCRYPTION_KEY=" + [Convert]::ToBase64String($key))
-  $content = $content -replace 'BACKUP_DIR=.*', "BACKUP_DIR=$DataDir\backups"
-  $content = $content -replace 'UPLOAD_DIR=.*', "UPLOAD_DIR=$DataDir\uploads"
-  $content = $content -replace 'WEB_DIST_DIR=.*', ("WEB_DIST_DIR=" + (Join-Path $InstallDir 'web\dist'))
-  $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.PrefixOrigin -ne 'WellKnown' } | Select-Object -First 1).IPAddress
-  $content = $content -replace 'PUBLIC_APP_URL=.*', "PUBLIC_APP_URL=http://${ip}:$Port"
-  $content = $content -replace 'API_PUBLIC_URL=.*', "API_PUBLIC_URL=http://${ip}:$Port"
-  $content = $content -replace 'CORS_ORIGINS=.*', "CORS_ORIGINS=http://${ip}:$Port,http://localhost:$Port"
-  Set-Content -Path $envFile -Value $content -Encoding UTF8
-  # Restrict the file to Administrators and SYSTEM: it contains the encryption key.
-  icacls $envFile /inheritance:r /grant:r "Administrators:F" "SYSTEM:F" | Out-Null
-  Write-Host "Created $envFile. BACK UP THIS FILE: without ENCRYPTION_KEY stored secrets cannot be decrypted."
-} else { Write-Host 'Keeping existing server\.env' }
-
-Step 'Installing dependencies and building'
+Step 'Configuring, installing and building Afey POS (a few minutes the first time)'
+# An upgrade replaces files the running server uses: stop it first.
+Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+# scripts\setup.mjs writes server\.env (new secrets the first time, existing values kept afterwards),
+# runs npm ci and the build, and initialises the database replica set.
+$setupArgs = @('scripts\setup.mjs', '--mode', $Mode, '--port', "$Port", '--data-dir', $DataDir)
+if ($PublicUrl) { $setupArgs += @('--public-url', $PublicUrl) }
+if ($ShopHost) { $setupArgs += @('--shop-host', $ShopHost) }
+if ($HqUrl) { $setupArgs += @('--hq-url', $HqUrl) }
+if ($SyncToken) { $setupArgs += @('--sync-token', $SyncToken) }
+if ($BranchCode) { $setupArgs += @('--branch-code', $BranchCode) }
 Push-Location $InstallDir
-npm ci --no-audit --no-fund
-if ($LASTEXITCODE -ne 0) { Fail 'npm ci failed' }
-npm run build
-if ($LASTEXITCODE -ne 0) { Fail 'Build failed' }
+& node @setupArgs
+$code = $LASTEXITCODE
 Pop-Location
+if ($code -ne 0) { Fail 'Setup failed (see the messages above).' }
+# Restrict the file to Administrators and SYSTEM: it contains the encryption key.
+$envFile = Join-Path $InstallDir 'server\.env'
+icacls $envFile /inheritance:r /grant:r "Administrators:F" "SYSTEM:F" | Out-Null
+Write-Host "Configuration: $envFile. BACK UP THIS FILE: without ENCRYPTION_KEY stored secrets cannot be decrypted."
 
 Step 'Registering the Afey POS service (Scheduled Task, runs at startup as SYSTEM)'
 $nodeExe = (Get-Command node).Source
@@ -136,7 +125,8 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 if ($ok) {
   Write-Host "`nAfey POS is running." -ForegroundColor Green
-  Write-Host "Open http://localhost:$Port on this computer, or http://<this-computer-ip>:$Port on other tills, and complete the setup."
+  $url = ((Get-Content (Join-Path $InstallDir 'server\.env')) -match '^PUBLIC_APP_URL=' | Select-Object -First 1) -replace '^PUBLIC_APP_URL=', ''
+  Write-Host "Open http://localhost:$Port on this computer, or $url on other tills, and create the owner account."
 } else {
   Write-Warning "The server did not answer yet. Check: Get-ScheduledTaskInfo AfeyPOS, and docs/TROUBLESHOOTING.md"
 }

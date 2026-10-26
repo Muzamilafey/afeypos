@@ -1,11 +1,11 @@
 import { Router } from 'express';
-import { userPermissions } from '../../lib/access.js';
+import { supervisorCoversBranch, userPermissions } from '../../lib/access.js';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { navigationFor, type Permission } from '@afeypos/shared';
-import { AttendanceRecord, Session, User, IdempotencyRecord } from '../../models/index.js';
+import { AttendanceRecord, Session, Till, User, IdempotencyRecord } from '../../models/index.js';
 import { authenticateCard } from '../staff/cards.js';
-import { parse, idParam } from '../../http/validate.js';
+import { idParam, objectId, parse } from '../../http/validate.js';
 import { authenticate, signedIn, signShortToken, verifyShortToken } from '../../http/auth.js';
 import { decrypt, encrypt, generateTotpSecret, hashPassword, verifyPassword, verifyTotp } from '../../lib/crypto.js';
 import { AppError, badRequest, forbidden, notFound, unauthorized } from '../../lib/errors.js';
@@ -110,7 +110,7 @@ router.post('/logout', async (req, res) => {
 // Any signed-in cashier may ask; the supervisor's own permissions decide.
 router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor to approve'), async (req, res) => {
   const body = parse(
-    z.object({ email: z.string().trim().toLowerCase().email().optional(), cardCode: z.string().trim().max(40).optional(), password: z.string().optional(), pin: z.string().optional(), permission: z.string() }),
+    z.object({ email: z.string().trim().toLowerCase().email().optional(), cardCode: z.string().trim().max(40).optional(), password: z.string().optional(), pin: z.string().optional(), permission: z.string(), tillId: objectId.optional() }),
     req.body,
   );
   let sup;
@@ -125,6 +125,10 @@ router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor 
   }
   // Same effective permissions as a sign-in: custom roles count and per-user denials apply.
   if (!(await userPermissions(sup)).has(body.permission as Permission)) throw forbidden('Supervisor lacks the required permission');
+  const till = body.tillId ? await Till.findById(body.tillId, { branchId: 1 }).lean() : null;
+  if (body.tillId && !till) throw notFound('Till');
+  const requester = await User.findById(req.auth!.userId, { branchIds: 1 }).lean();
+  if (!supervisorCoversBranch(sup, { branchId: till?.branchId, requester })) throw forbidden('This supervisor does not work at this branch');
   const token = signShortToken({ sub: String(sup._id), tid: String(req.tenant!._id), perm: body.permission, for: String(req.auth!.userId), jti: crypto.randomUUID() }, 'override', 120);
   await audit(req, { action: 'auth.override_granted', entity: 'User', entityId: sup._id, details: { permission: body.permission, forUser: String(req.auth!.userId) } });
   res.json({ overrideToken: token, supervisor: { id: sup._id, name: sup.name } });

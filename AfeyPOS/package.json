@@ -13,6 +13,7 @@
   "scripts": {
     "build:shared": "npm run build -w @afeypos/shared",
     "local": "node scripts/local.mjs",
+    "setup": "node scripts/setup.mjs",
     "dev": "npm run build:shared && node scripts/dev.mjs",
     "dev:server": "npm run dev -w @afeypos/server",
     "dev:web": "npm run dev -w @afeypos/web",

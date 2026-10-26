@@ -2,6 +2,10 @@
 
 This guide is for shop owners and the technician setting up the shop. One computer is the **server** (it keeps the database); every till is a browser pointing at it.
 
+> **Quickest way:** in PowerShell *Run as administrator* run
+> `irm https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/installer/windows/install-online.ps1 | iex`
+> It downloads and installs Node.js, MongoDB and Afey POS and does everything below. See [INSTALL.md](INSTALL.md). The rest of this page covers the manual route and day-to-day operation.
+
 ## What you need
 
 - A Windows 10/11 (64-bit) or Windows Server PC that stays on while the shop is open. 8 GB RAM and an SSD are recommended.

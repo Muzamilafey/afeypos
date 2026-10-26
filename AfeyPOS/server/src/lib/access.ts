@@ -20,3 +20,15 @@ export async function userWarehouses(u: UserLike): Promise<Types.ObjectId[]> {
   if (!u.branchIds?.length) return [];
   return (await Warehouse.find({ branchId: { $in: u.branchIds } }, { _id: 1 }).lean()).map((w) => w._id as Types.ObjectId);
 }
+
+/**
+ * A supervisor limited to some branches only approves at those branches: the till's (or reader's) branch when
+ * known, otherwise every branch the requesting user works in must be one of theirs.
+ */
+export function supervisorCoversBranch(sup: UserLike, where: { branchId?: unknown; requester?: UserLike | null }): boolean {
+  const mine = (sup.branchIds ?? []).map(String);
+  if (!mine.length) return true;
+  if (where.branchId) return mine.includes(String(where.branchId));
+  const theirs = (where.requester?.branchIds ?? []).map(String);
+  return theirs.length > 0 && theirs.every((b) => mine.includes(b));
+}
