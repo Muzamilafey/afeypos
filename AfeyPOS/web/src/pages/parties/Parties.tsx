@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, newRequestId } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useList } from '../../lib/hooks';
@@ -9,6 +9,7 @@ import { DataTable } from '../../components/DataTable';
 import { Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, StatusBadge, useToast } from '../../components/ui';
 import { CustomerCrmPanel } from '../crm/CRM';
 import { Icon } from '../../components/icons';
+import { PdfButton } from '../../components/DocumentActions';
 
 function PartyForm({ kind, initial, onSaved, onClose }: { kind: 'customer' | 'supplier'; initial?: any; onSaved: () => void; onClose: () => void }) {
   const { me, can } = useAuth();
@@ -78,6 +79,22 @@ export function PartiesPage({ kind }: { kind: 'customer' | 'supplier' }) {
   );
 }
 
+/** A supplier's quotation requests and purchase orders, with their PDFs. */
+function SupplierPurchasing({ supplierId }: { supplierId: string }) {
+  const quotes = useQuery({ queryKey: ['supplier-quotations', supplierId], queryFn: () => api<{ data: any[] }>('/supplier-quotations', { query: { supplierId, limit: 10 } }).then((r) => r.data) });
+  const pos = useQuery({ queryKey: ['pos', supplierId], queryFn: () => api<{ data: any[] }>('/purchase-orders', { query: { supplierId, limit: 10 } }).then((r) => r.data) });
+  return (
+    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <Card title="Quotations" actions={<Link className="text-xs text-brand-600 hover:underline" to="/purchasing/quotations">All quotations</Link>}>
+        <DataTable rows={quotes.data} loading={quotes.isLoading} empty="No quotation requests yet" columns={[{ key: 'n', header: 'Number', render: (q: any) => q.number }, { key: 'd', header: 'Date', render: (q: any) => date(q.createdAt) }, { key: 't', header: 'Quoted', className: 'num', render: (q: any) => (q.totalCents ? money(q.totalCents) : '—') }, { key: 's', header: 'Status', render: (q: any) => <StatusBadge status={q.status} /> }, { key: 'f', header: '', render: (q: any) => <PdfButton kind="supplier_quotation" id={q._id} /> }]} />
+      </Card>
+      <Card title="Purchase orders" actions={<Link className="text-xs text-brand-600 hover:underline" to="/purchasing">All orders</Link>}>
+        <DataTable rows={pos.data} loading={pos.isLoading} empty="No purchase orders yet" columns={[{ key: 'n', header: 'PO', render: (o: any) => o.number }, { key: 'd', header: 'Date', render: (o: any) => date(o.createdAt) }, { key: 't', header: 'Total', className: 'num', render: (o: any) => money(o.totalCents) }, { key: 's', header: 'Status', render: (o: any) => <StatusBadge status={o.status} /> }, { key: 'f', header: '', render: (o: any) => <PdfButton kind="purchase_order" id={o._id} /> }]} />
+      </Card>
+    </div>
+  );
+}
+
 export function PartyDetailPage({ kind }: { kind: 'customer' | 'supplier' }) {
   const { id } = useParams();
   const qc = useQueryClient();
@@ -120,9 +137,10 @@ export function PartyDetailPage({ kind }: { kind: 'customer' | 'supplier' }) {
         <table className="min-w-full text-sm"><thead><tr><th className="th">Date</th><th className="th">Type</th><th className="th">Document</th><th className="th">Due</th><th className="th num">Amount</th><th className="th num">Balance</th></tr></thead>
           <tbody>{entries.map((e: any) => <tr key={e._id}><td className="td">{dateTime(e.at)}</td><td className="td">{e.kind.replace('_', ' ')}</td><td className="td">{e.ref?.number} {e.reference && !String(e.reference).startsWith('req:') ? e.reference : ''}</td><td className="td">{e.dueDate ? date(e.dueDate) : ''}</td><td className="td num">{money(e.amountCents)}</td><td className="td num">{money(e.balanceAfterCents)}</td></tr>)}</tbody></table>
       </Card>
+      {kind === 'supplier' && has('purchasing') && can('purchasing.read') && <SupplierPurchasing supplierId={p._id} />}
       {kind === 'supplier' && p.goodsReceipts?.length > 0 && (
         <Card title="Goods received" className="mt-4">
-          <DataTable rows={p.goodsReceipts} columns={[{ key: 'n', header: 'GRN', render: (g: any) => g.number }, { key: 'i', header: 'Invoice', render: (g: any) => g.supplierInvoiceNo ?? '—' }, { key: 'd', header: 'Due', render: (g: any) => date(g.dueDate) }, { key: 't', header: 'Total', className: 'num', render: (g: any) => money(g.totalCents) }, { key: 'p', header: 'Paid', className: 'num', render: (g: any) => money(g.paidCents) }]} />
+          <DataTable rows={p.goodsReceipts} columns={[{ key: 'n', header: 'GRN', render: (g: any) => g.number }, { key: 'i', header: 'Invoice', render: (g: any) => g.supplierInvoiceNo ?? '—' }, { key: 'd', header: 'Due', render: (g: any) => date(g.dueDate) }, { key: 't', header: 'Total', className: 'num', render: (g: any) => money(g.totalCents) }, { key: 'p', header: 'Paid', className: 'num', render: (g: any) => money(g.paidCents) }, { key: 'f', header: '', render: (g: any) => <PdfButton kind="goods_receipt" id={g._id} /> }]} />
         </Card>
       )}
       {editing && <PartyForm kind={kind} initial={p} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); qc.invalidateQueries({ queryKey: [path, id] }); }} />}

@@ -14,7 +14,7 @@ import {
   AttendanceRecord, AuditLog, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
   IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
   SalesDocument, SerialItem, Shift, StockAdjustment, StockBatch, StockLevel, StockMovement, Stocktake, StockTransfer, Supplier,
-  SupplierReturn, Tenant, Till, User, Warehouse,
+  SupplierQuotation, SupplierReturn, Tenant, Till, User, Warehouse,
 } from '../../models/index.js';
 
 export interface BranchScope {
@@ -64,6 +64,7 @@ export const SYNC_SPECS: SyncSpec[] = [
     downFilter: (b) => ({ $or: [{ fromWarehouseId: { $in: ids(b.warehouseIds) } }, { toWarehouseId: { $in: ids(b.warehouseIds) } }] }),
   },
   { model: PurchaseOrder, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
+  { model: SupplierQuotation, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
   { model: BiometricTemplate, dir: 'both', field: 'updatedAt' },
   { model: CustomerActivity, dir: 'both', field: 'updatedAt' },
   // Online orders are taken at HQ; the branch that fulfils them receives and completes them.

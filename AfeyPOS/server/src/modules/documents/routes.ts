@@ -1,0 +1,83 @@
+/**
+ * PDF downloads and "email with PDF" for business documents:
+ *   GET  /pdf/:kind/:id    supplier_quotation | purchase_order | goods_receipt | quotation | invoice
+ *   POST /email/:kind/:id  { to?, cc?, message? }  (defaults to the supplier's or customer's email)
+ */
+import { Router } from 'express';
+import type { Request } from 'express';
+import { z } from 'zod';
+import type { Permission } from '@afeypos/shared';
+import { Sale, User } from '../../models/index.js';
+import { idParam, parse } from '../../http/validate.js';
+import { can } from '../../http/auth.js';
+import { forbidden, notFound, unprocessable } from '../../lib/errors.js';
+import { audit } from '../../lib/audit.js';
+import { notify } from '../notifications/service.js';
+import { buildDocument, DOCUMENT_KINDS, type DocumentKind } from './builders.js';
+
+const READ: Record<DocumentKind, { perm: Permission; module: string }> = {
+  supplier_quotation: { perm: 'purchasing.read', module: 'purchasing' },
+  purchase_order: { perm: 'purchasing.read', module: 'purchasing' },
+  goods_receipt: { perm: 'purchasing.read', module: 'purchasing' },
+  quotation: { perm: 'sales.read', module: 'pos' },
+  invoice: { perm: 'sales.read', module: 'pos' },
+};
+const SEND: Record<DocumentKind, Permission> = {
+  supplier_quotation: 'purchasing.manage', purchase_order: 'purchasing.manage', goods_receipt: 'purchasing.read', quotation: 'quotations.manage', invoice: 'sales.read',
+};
+
+function kindOf(req: Request): DocumentKind {
+  const kind = String(req.params.kind) as DocumentKind;
+  if (!DOCUMENT_KINDS.includes(kind)) throw notFound('Document type');
+  return kind;
+}
+
+async function checkAccess(req: Request, kind: DocumentKind, id: unknown, perm: Permission) {
+  if (!can(req, perm)) throw forbidden('You do not have permission for this document');
+  if (!req.capabilities!.modules.includes(READ[kind].module as any)) throw unprocessable('This module is not enabled', 'MODULE_DISABLED');
+  // Cashiers without "all sales" only see their own sales.
+  if (kind === 'invoice' && !can(req, 'sales.read.all') && !(await Sale.exists({ _id: id, cashierId: req.auth!.userId }))) throw notFound('Sale');
+}
+
+/** Queues an email with the document's PDF attached. Used here and when sending RFQs and purchase orders. */
+export async function emailDocument(req: Request, kind: DocumentKind, id: unknown, opts: { to?: string; cc?: string[]; message?: string; templateKey?: string; data?: Record<string, unknown> } = {}): Promise<{ queued: boolean; reason?: string; to?: string }> {
+  if (!req.capabilities!.modules.includes('email')) return { queued: false, reason: 'The email module is not enabled' };
+  const doc = await buildDocument(req.tenant!._id, kind, id);
+  const to = opts.to || doc.recipient.email;
+  if (!to) return { queued: false, reason: `${doc.recipient.name} has no email address` };
+  const me = await User.findById(req.auth!.userId, { name: 1 }).lean();
+  const t = req.tenant!;
+  const contact = [t.contact?.phone, t.contact?.email].filter(Boolean).join(' | ');
+  const r = await notify({
+    channel: 'email', to, cc: opts.cc, templateKey: opts.templateKey ?? 'document', attachment: { kind, id: String(id) }, ref: { type: kind, id: id as any },
+    dedupeKey: `doc:${kind}:${id}:${to}:${Date.now()}`,
+    data: { business: t.name, recipient: doc.recipient.name, title: doc.title.toLowerCase(), number: doc.number, message: opts.message || 'Thank you for your business.', sender: me?.name ?? '', contact: contact ? `\n${contact}` : '', amountLine: '', ...opts.data },
+  });
+  return { ...r, to };
+}
+
+const router = Router();
+
+router.get('/pdf/:kind/:id', async (req, res) => {
+  const kind = kindOf(req);
+  const id = idParam(req.params.id);
+  await checkAccess(req, kind, id, READ[kind].perm);
+  const doc = await buildDocument(req.tenant!._id, kind, id);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${doc.filename}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.send(doc.buffer);
+});
+
+router.post('/email/:kind/:id', async (req, res) => {
+  const kind = kindOf(req);
+  const id = idParam(req.params.id);
+  await checkAccess(req, kind, id, SEND[kind]);
+  const body = parse(z.object({ to: z.string().trim().email().optional().or(z.literal('')), cc: z.array(z.string().trim().email()).max(5).default([]), message: z.string().trim().max(2000).optional() }), req.body ?? {});
+  const r = await emailDocument(req, kind, id, { to: body.to || undefined, cc: body.cc, message: body.message });
+  if (!r.queued) throw unprocessable(`Email not sent: ${r.reason}`, 'EMAIL_NOT_SENT');
+  await audit(req, { action: 'document.emailed', entity: kind, entityId: id, details: { to: r.to, cc: body.cc } });
+  res.json({ data: { queued: true, to: r.to } });
+});
+
+export const documentPdfRoutes = router;

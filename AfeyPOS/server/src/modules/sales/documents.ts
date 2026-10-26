@@ -39,7 +39,9 @@ router.get('/documents', requirePermission('sales.read'), async (req, res) => {
   if (q.customerId) filter.customerId = q.customerId;
   if (q.q) filter.number = new RegExp(q.q.replace(/[^\w-]/g, ''), 'i');
   const [data, total] = await Promise.all([SalesDocument.find(filter).sort({ createdAt: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), SalesDocument.countDocuments(filter)]);
-  res.json({ data, total, page: q.page, limit: q.limit });
+  // Email addresses for "Email with PDF".
+  const emails = new Map((await Customer.find({ _id: { $in: data.map((d) => d.customerId).filter(Boolean) } }, { email: 1 }).lean()).map((c) => [String(c._id), c.email]));
+  res.json({ data: data.map((d) => ({ ...d, customerEmail: d.customerId ? emails.get(String(d.customerId)) ?? null : null })), total, page: q.page, limit: q.limit });
 });
 
 router.get('/documents/:id', requirePermission('sales.read'), async (req, res) => {

@@ -83,6 +83,9 @@ const notificationLogSchema = new Schema(
     attempts: { type: Number, default: 0 },
     dedupeKey: String,
     ref: { type: { type: String }, id: ObjectId },
+    cc: { type: [String], default: undefined },
+    /** Business document attached as PDF (rebuilt when sending). */
+    attachment: { kind: String, id: ObjectId },
     sentAt: Date,
   },
   { timestamps: true },

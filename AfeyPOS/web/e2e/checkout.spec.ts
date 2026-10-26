@@ -20,7 +20,7 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await expect(page.getByRole('heading', { name: 'Data Panel Widget' })).toBeVisible();
   // Minimart navigation: checkout yes, quotations no.
   await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Quotations' })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Quotations', exact: true })).toHaveCount(0);
   await page.screenshot({ path: 'test-results/dashboard.png', fullPage: true });
 
   await page.getByRole('link', { name: 'Products', exact: true }).click();

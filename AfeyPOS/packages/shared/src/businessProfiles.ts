@@ -312,7 +312,7 @@ export interface NavItem {
   module?: ModuleKey;
   anyModule?: ModuleKey[];
   permission?: Permission;
-  group: 'sell' | 'stock' | 'parties' | 'people' | 'finance' | 'admin';
+  group: 'sell' | 'stock' | 'buy' | 'parties' | 'people' | 'finance' | 'admin';
 }
 
 export const NAVIGATION: NavItem[] = [
@@ -333,9 +333,11 @@ export const NAVIGATION: NavItem[] = [
   { key: 'transfers', label: 'Transfers', path: '/inventory/transfers', icon: 'shuffle', module: 'stockTransfers', permission: 'inventory.transfer', group: 'stock' },
   { key: 'stocktake', label: 'Stocktake', path: '/inventory/stocktakes', icon: 'clipboard', module: 'stocktake', permission: 'inventory.stocktake', group: 'stock' },
   { key: 'labels', label: 'Labels', path: '/labels', icon: 'tag', module: 'labels', permission: 'products.read', group: 'stock' },
-  { key: 'purchasing', label: 'Purchase orders', path: '/purchasing', icon: 'truck', module: 'purchasing', permission: 'purchasing.read', group: 'stock' },
   { key: 'customers', label: 'Customers', path: '/customers', icon: 'users', module: 'customers', permission: 'customers.read', group: 'parties' },
-  { key: 'suppliers', label: 'Suppliers', path: '/suppliers', icon: 'factory', module: 'suppliers', permission: 'suppliers.read', group: 'parties' },
+  { key: 'suppliers', label: 'Suppliers', path: '/suppliers', icon: 'factory', module: 'suppliers', permission: 'suppliers.read', group: 'buy' },
+  { key: 'supplierQuotations', label: 'Supplier quotations', path: '/purchasing/quotations', icon: 'doc', module: 'purchasing', permission: 'purchasing.read', group: 'buy' },
+  { key: 'purchasing', label: 'Purchase orders', path: '/purchasing', icon: 'truck', module: 'purchasing', permission: 'purchasing.read', group: 'buy' },
+  { key: 'goodsReceived', label: 'Goods received', path: '/purchasing/receiving', icon: 'package', module: 'purchasing', permission: 'purchasing.read', group: 'buy' },
   { key: 'promotions', label: 'Promotions', path: '/promotions', icon: 'percent', module: 'promotions', permission: 'prices.manage', group: 'parties' },
   { key: 'employees', label: 'Employees', path: '/hr/employees', icon: 'users', module: 'hr', permission: 'hr.manage', group: 'people' },
   { key: 'payroll', label: 'Payroll', path: '/hr/payroll', icon: 'wallet', module: 'hr', permission: 'payroll.manage', group: 'people' },

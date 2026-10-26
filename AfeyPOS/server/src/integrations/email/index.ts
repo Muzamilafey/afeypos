@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer';
 
 export interface EmailMessage {
   to: string;
+  cc?: string[];
   subject: string;
   text: string;
   html?: string;

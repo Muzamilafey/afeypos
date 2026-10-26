@@ -15,7 +15,9 @@ Platform-level email (password resets before a tenant has SMTP) uses the `SMTP_*
 
 ## Use cases and templates
 
-`receipt`, `payment_confirmation`, `customer_statement`, `credit_reminder`, `low_stock`, `purchase_order`, `password_reset`, `email_verify`, `scheduled_report`, `test`. Templates use `{{variable}}` placeholders; tenants can override any template per channel (API `PUT /settings/notifications/templates`).
+`receipt`, `payment_confirmation`, `customer_statement`, `credit_reminder`, `low_stock`, `purchase_order`, `supplier_rfq`, `document`, `password_reset`, `email_verify`, `scheduled_report`, `test`. Templates use `{{variable}}` placeholders; tenants can override any template per channel (API `PUT /settings/notifications/templates`).
+
+**PDF attachments**: purchase orders, requests for quotation, goods received notes, customer quotations and invoices are emailed with the document attached as PDF (see SUPPLIERS.md). The log keeps only a reference to the document; the PDF is built when the email is sent. Copies (cc, up to 5) are supported.
 
 Scheduled: daily sales summary email at 21:00 local time (Settings → Sales & tax → *Daily sales summary emails*); overdue-balance SMS reminders at 09:00, at most once a week per customer.
 
@@ -30,4 +32,4 @@ Scheduled: daily sales summary email at 21:00 local time (Settings → Sales & t
 
 ## Verification status
 
-Queueing, templates, retries, dedupe and quotas are covered by automated tests with the console providers. Talk Sasa and Africa's Talking HTTP calls follow their published APIs but **were not exercised against the live services** (requires accounts and internet). Confirm the Talk Sasa endpoint/payload with your account documentation before going live.
+Queueing, templates, retries, dedupe, quotas and PDF attachments are covered by automated tests with the console providers; delivery of attachments through a real SMTP server was not tested here. Talk Sasa and Africa's Talking HTTP calls follow their published APIs but **were not exercised against the live services** (requires accounts and internet). Confirm the Talk Sasa endpoint/payload with your account documentation before going live.

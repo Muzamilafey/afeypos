@@ -9,6 +9,7 @@ import { DataTable } from '../../components/DataTable';
 import { ProductPicker } from '../../components/ProductPicker';
 import { Button, ErrorBox, Field, Input, Modal, PageHeader, Select, StatusBadge, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { EmailDocButton, PdfButton } from '../../components/DocumentActions';
 import { getWorkstation } from '../../lib/workstation';
 
 const TITLES: Record<string, string> = { quotation: 'Quotations', sales_order: 'Sales orders', delivery_note: 'Delivery notes' };
@@ -56,6 +57,8 @@ export function DocumentsPage() {
           { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
           { key: 'a', header: '', render: (r: any) => <div className="flex gap-1">
             <Button size="sm" variant="secondary" onClick={() => openPrintable(`/documents/${r._id}/print`).catch(toast.error)}>Print</Button>
+            <PdfButton kind="quotation" id={r._id} />
+            {can('quotations.manage') && <EmailDocButton kind="quotation" id={r._id} defaultTo={r.customerEmail} what={TITLES[type]!.replace(/s$/, '')} onSent={() => r.status === 'draft' && api(`/documents/${r._id}/status`, { body: { status: 'sent' } }).then(() => qc.invalidateQueries({ queryKey: ['documents'] })).catch(() => undefined)} />}
             {type !== 'delivery_note' && ['draft', 'sent', 'accepted'].includes(r.status) && can('sales.create') && <Button size="sm" onClick={() => convert(r)}>Convert to sale</Button>}
             {type === 'sales_order' && !r.stockReserved && ['draft', 'sent', 'accepted'].includes(r.status) && <Button size="sm" variant="secondary" onClick={() => api(`/documents/${r._id}/reserve`, { body: {} }).then(() => qc.invalidateQueries({ queryKey: ['documents'] })).catch(toast.error)}>Reserve stock</Button>}
             {type === 'delivery_note' && r.status === 'sent' && <Button size="sm" onClick={() => api(`/delivery-notes/${r._id}/delivered`, { body: {} }).then(() => qc.invalidateQueries({ queryKey: ['documents'] })).catch(toast.error)}>Mark delivered</Button>}

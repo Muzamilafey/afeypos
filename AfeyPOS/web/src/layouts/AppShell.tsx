@@ -10,7 +10,7 @@ import { cx, QueryRefreshCtx, useToast } from '../components/ui';
 import { applyTheme, getWorkstation, setWorkstation } from '../lib/workstation';
 import { connectRealtime, disconnectRealtime, useRealtime } from '../lib/realtime';
 
-const GROUPS: Record<string, string> = { sell: 'Sales', stock: 'Stock', parties: 'Customers & suppliers', people: 'People', finance: 'Finance', admin: 'Administration' };
+const GROUPS: Record<string, string> = { sell: 'Sales', stock: 'Stock', buy: 'Suppliers & purchasing', parties: 'Customers & marketing', people: 'People', finance: 'Finance', admin: 'Administration' };
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
 

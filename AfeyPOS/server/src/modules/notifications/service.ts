@@ -9,6 +9,7 @@ import { ConsoleEmailProvider, createEmailProvider, SmtpProvider, type EmailProv
 import { IntegrationError } from '../../integrations/http.js';
 import { findActiveConfig, openSecrets } from '../integrations/configs.js';
 import { DEFAULT_TEMPLATES, render } from './templates.js';
+import { buildDocument, type DocumentKind } from '../documents/builders.js';
 
 export interface NotifyInput {
   channel: 'sms' | 'email';
@@ -17,7 +18,9 @@ export interface NotifyInput {
   data: Record<string, unknown>;
   dedupeKey?: string;
   ref?: { type: string; id: Types.ObjectId };
-  attachments?: undefined;
+  /** Email only: a business document attached as PDF (built when the email is sent). */
+  attachment?: { kind: DocumentKind; id: Types.ObjectId | string };
+  cc?: string[];
 }
 
 /**
@@ -49,7 +52,8 @@ export async function notify(input: NotifyInput): Promise<{ queued: boolean; rea
   }
   const dedupeKey = input.dedupeKey ? `${tenantId ?? 'platform'}:${input.channel}:${input.dedupeKey}` : undefined;
   try {
-    const log = await NotificationLog.create({ tenantId, channel: input.channel, to, templateKey: input.templateKey, subject, body, dedupeKey, ref: input.ref });
+    const cc = input.channel === 'email' ? (input.cc ?? []).map((c) => c.trim()).filter((c) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c)).slice(0, 5) : [];
+    const log = await NotificationLog.create({ tenantId, channel: input.channel, to, cc, templateKey: input.templateKey, subject, body, dedupeKey, ref: input.ref, attachment: input.channel === 'email' ? input.attachment : undefined });
     await enqueue('notification.send', { logId: String(log._id) }, { tenantId: tenantId ?? null, maxAttempts: 6 });
     return { queued: true };
   } catch (err: any) {
@@ -93,6 +97,13 @@ function takeToken(key: string, perMinute = 60): boolean {
   return true;
 }
 
+/** The PDF is rebuilt at send time, so it shows the document as it is now. */
+async function attachmentsFor(log: { attachment?: { kind?: string | null; id?: unknown } | null }, tenantId: unknown) {
+  if (!log.attachment?.kind || !log.attachment.id || !tenantId) return undefined;
+  const doc = await buildDocument(tenantId, log.attachment.kind as DocumentKind, log.attachment.id);
+  return [{ filename: doc.filename, content: doc.buffer, contentType: 'application/pdf' }];
+}
+
 registerJob('notification.send', async ({ logId }: { logId: string }, job) => {
   const log = await NotificationLog.findById(logId);
   if (!log || log.status === 'sent' || log.status === 'skipped') return;
@@ -109,7 +120,7 @@ registerJob('notification.send', async ({ logId }: { logId: string }, job) => {
     const result =
       log.channel === 'sms'
         ? await (provider as SmsProvider).send(log.to, log.body!)
-        : await (provider as EmailProvider).send({ to: log.to, subject: log.subject ?? '', text: log.body! });
+        : await (provider as EmailProvider).send({ to: log.to, cc: log.cc?.length ? log.cc : undefined, subject: log.subject ?? '', text: log.body!, attachments: await attachmentsFor(log, job.tenantId) });
     log.status = 'sent';
     log.provider = provider.name;
     log.providerMessageId = result.providerMessageId;

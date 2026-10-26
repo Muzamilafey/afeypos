@@ -67,7 +67,9 @@ export function App() {
         <Route path="inventory/transfers" element={<Gate perm="inventory.transfer" module="stockTransfers"><TransfersPage /></Gate>} />
         <Route path="inventory/stocktakes" element={<Gate perm="inventory.stocktake" module="stocktake"><StocktakesPage /></Gate>} />
         <Route path="labels" element={<Gate perm="products.read"><LabelsPage /></Gate>} />
-        <Route path="purchasing" element={<Gate perm="purchasing.read" module="purchasing"><PurchasingPage /></Gate>} />
+        <Route path="purchasing" element={<Gate perm="purchasing.read" module="purchasing"><PurchasingPage tab="orders" /></Gate>} />
+        <Route path="purchasing/quotations" element={<Gate perm="purchasing.read" module="purchasing"><PurchasingPage tab="quotations" /></Gate>} />
+        <Route path="purchasing/receiving" element={<Gate perm="purchasing.read" module="purchasing"><PurchasingPage tab="receiving" /></Gate>} />
         <Route path="customers" element={<Gate perm="customers.read"><PartiesPage kind="customer" /></Gate>} />
         <Route path="customers/:id" element={<Gate perm="customers.read"><PartyDetailPage kind="customer" /></Gate>} />
         <Route path="suppliers" element={<Gate perm="suppliers.read"><PartiesPage kind="supplier" /></Gate>} />

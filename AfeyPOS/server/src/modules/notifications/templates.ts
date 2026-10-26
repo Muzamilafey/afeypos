@@ -26,7 +26,14 @@ export const DEFAULT_TEMPLATES: Record<string, TemplateDef> = {
     sms: '{{business}}: {{count}} product(s) are low on stock: {{items}}',
   },
   purchase_order: {
-    email: { subject: 'Purchase order {{number}} from {{business}}', body: 'Dear {{supplier}},\n\nPlease supply the following:\n\n{{items}}\n\nTotal: {{total}}\n\nRegards,\n{{business}}' },
+    email: { subject: 'Purchase order {{number}} from {{business}}', body: 'Dear {{supplier}},\n\nPlease supply the following (the purchase order is attached as a PDF):\n\n{{items}}\n\nTotal: {{total}}\n\nRegards,\n{{business}}' },
+  },
+  /** Any business document sent with its PDF attached (quotation, invoice, request for quotation, GRN). */
+  document: {
+    email: { subject: '{{title}} {{number}} from {{business}}', body: 'Dear {{recipient}},\n\n{{message}}\n\nPlease find {{title}} {{number}} attached.{{amountLine}}\n\nRegards,\n{{sender}}\n{{business}}{{contact}}' },
+  },
+  supplier_rfq: {
+    email: { subject: 'Request for quotation {{number}} from {{business}}', body: 'Dear {{recipient}},\n\n{{message}}\n\nPlease send us your best prices, availability and delivery time for the items in the attached request {{number}}{{replyBy}}.\n\nItems:\n{{items}}\n\nRegards,\n{{sender}}\n{{business}}{{contact}}' },
   },
   password_reset: {
     email: { subject: 'Reset your Afey POS password', body: 'Hello {{name}},\n\nUse this link to reset your password (valid for 30 minutes):\n{{link}}\n\nIf you did not request this, ignore this email.' },

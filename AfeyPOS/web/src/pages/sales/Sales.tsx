@@ -7,6 +7,7 @@ import { useList, useLocations } from '../../lib/hooks';
 import { dateTime, money, paymentLabel, qty } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { ReturnWizard } from './Returns';
+import { EmailDocButton, PdfButton } from '../../components/DocumentActions';
 import { Button, Card, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, useConfirm, useToast } from '../../components/ui';
 
 export function SalesPage() {
@@ -62,6 +63,8 @@ export function SaleDetailPage() {
       <PageHeader title={`Sale ${s.number}`} subtitle={dateTime(s.completedAt)} actions={<>
         <Button variant="secondary" onClick={() => openPrintable(`/sales/${s._id}/receipt?format=html`).catch(toast.error)}>Reprint</Button>
         <Button variant="secondary" onClick={() => openPrintable(`/sales/${s._id}/invoice`).catch(toast.error)}>A4 invoice</Button>
+        <PdfButton kind="invoice" id={s._id} label="Invoice PDF" size="md" />
+        <EmailDocButton kind="invoice" id={s._id} defaultTo={s.customer?.email} what="Invoice" label="Email invoice" size="md" />
         {(can('sales.return') || can('sales.create')) && s.status !== 'voided' && s.status !== 'returned' && <Button variant="secondary" onClick={() => setReturning(true)}>Return items</Button>}
         {can('sales.void') && s.status === 'completed' && <Button variant="danger" onClick={voidSale}>Void</Button>}
       </>} />

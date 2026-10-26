@@ -13,10 +13,12 @@ import { audit } from '../../lib/audit.js';
 import { applyMovement } from '../inventory/stock.js';
 import { resolveUnit } from '../catalog/units.js';
 import { allocateAgainstOpen } from '../sales/returns.js';
-import { notify } from '../notifications/service.js';
 import { runAsPlatform } from '../../lib/context.js';
+import { emailDocument } from '../documents/routes.js';
+import { supplierQuotationRoutes } from './quotations.js';
 
 const router = Router();
+router.use(supplierQuotationRoutes);
 
 const lineSchema = z.object({ productId: objectId, unitCode: z.string().optional(), qty: z.number().positive(), unitCostCents: positiveCents });
 
@@ -53,20 +55,22 @@ router.post('/purchase-orders', requirePermission('purchasing.manage'), async (r
   res.status(201).json({ data: po });
 });
 
+/** Marks the order sent and emails it to the supplier with the PDF attached (when email is set up). */
 router.post('/purchase-orders/:id/send', requirePermission('purchasing.manage'), async (req, res) => {
-  const po = await PurchaseOrder.findOne({ _id: idParam(req.params.id), status: { $in: ['draft', 'sent'] } });
+  const body = parse(z.object({ to: z.string().trim().email().optional().or(z.literal('')), cc: z.array(z.string().trim().email()).max(5).default([]), message: z.string().trim().max(2000).optional(), email: z.boolean().default(true) }), req.body ?? {});
+  const po = await PurchaseOrder.findOne({ _id: idParam(req.params.id), status: { $in: ['draft', 'sent', 'partially_received'] } });
   if (!po) throw notFound('Purchase order');
   const supplier = await Supplier.findById(po.supplierId).lean();
-  po.status = 'sent';
+  if (po.status === 'draft') po.status = 'sent';
   po.sentAt = new Date();
   await po.save();
   let emailed: unknown = null;
-  if (supplier?.email && req.capabilities!.modules.includes('email')) {
+  if (body.email) {
     const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
     const cur = tenant?.settings?.currency ?? 'KES';
-    emailed = await notify({
-      channel: 'email', to: supplier.email, templateKey: 'purchase_order', dedupeKey: `po:${po._id}:${po.sentAt.getTime()}`,
-      data: { business: tenant?.name, supplier: supplier.name, number: po.number, total: formatMoney(po.totalCents, cur), items: po.lines.map((l) => `${l.qty} ${l.unitCode} x ${l.name} @ ${formatMoney(l.unitCostCents, cur)}`).join('\n') },
+    emailed = await emailDocument(req, 'purchase_order', po._id, {
+      to: body.to || undefined, cc: body.cc, message: body.message, templateKey: 'purchase_order',
+      data: { supplier: supplier?.name, total: formatMoney(po.totalCents, cur), items: po.lines.map((l) => `${l.qty} ${l.unitCode} x ${l.name} @ ${formatMoney(l.unitCostCents, cur)}`).join('\n') },
     });
   }
   await audit(req, { action: 'purchase_order.sent', entity: 'PurchaseOrder', entityId: po._id });

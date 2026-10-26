@@ -10,7 +10,7 @@ server in their own building.
 |---|---|---|
 | Business settings and modules, branches, stores, tills, staff (incl. password/PIN hashes), categories, brands, products, prices, customer prices, promotions, suppliers, notification templates, integrations for the branch | HQ | HQ → branches |
 | Sales, returns, voids, sales documents, shifts, cash movements, expenses, M-Pesa/gateway payments, stock levels/movements/batches/serials of the branch's own stores, adjustments, stocktakes, goods received, supplier returns, customer/supplier ledger entries, attendance, audit log | the branch | branch → HQ |
-| Customers, stock transfers, purchase orders, fingerprint templates | either | both (newest edit wins) |
+| Customers, stock transfers, supplier quotations, purchase orders, fingerprint templates | either | both (newest edit wins) |
 | Other branches' stock | owning branch | HQ → branches, read-only (to see stock elsewhere) |
 
 On a branch server, head-office data is read-only (editing returns `MANAGED_AT_HQ`). Stock in a store can only change
