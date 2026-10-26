@@ -182,3 +182,91 @@ describe('cancelling and expiry', () => {
     expect((await stock(milk._id)).reserved).toBe(0);
   });
 });
+
+describe('store studio and shop payment accounts', () => {
+  it('saves the studio, validates it, and the shop gets it merged with the defaults', async () => {
+    const got = (await t.client.get('/settings/store-studio')).body.data;
+    expect(got.saved).toBe(false);
+    expect(got.studio.hero.title).toBe(got.defaults.hero.title);
+    const studio = { ...got.studio, brand: { ...got.studio.brand, primary: '#123456', tagline: 'Fresh from the farm' }, hero: { ...got.studio.hero, title: 'Shop Fresh Today' } };
+    expect((await t.client.put('/settings/store-studio', { studio: { ...studio, brand: { ...studio.brand, primary: 'red' } } })).status).toBe(400);
+    expect((await t.client.put('/settings/store-studio', { studio: { ...studio, nav: [{ label: 'Bad', to: 'javascript:alert(1)' }] } })).status).toBe(400);
+    expect((await t.client.put('/settings/store-studio', { studio: { ...studio, pages: [{ slug: 'a', title: 'A', body: '' }, { slug: 'a', title: 'B', body: '' }] } })).status).toBe(400);
+    const r = await t.client.put('/settings/store-studio', { studio });
+    expect(r.status).toBe(200);
+    const cfg = (await shop.get('/store/config')).body.data;
+    expect(cfg.studio.brand).toMatchObject({ primary: '#123456', tagline: 'Fresh from the farm' });
+    expect(cfg.studio.hero.title).toBe('Shop Fresh Today');
+    expect(cfg.studio.pages.find((p: any) => p.slug === 'returns')).toBeTruthy();
+  });
+
+  it('serves studio images publicly, but not other uploads', async () => {
+    const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex').toString('base64');
+    const up = (await t.client.post('/files', { base64: png })).body.data;
+    const other = (await t.client.post('/files', { base64: png })).body.data;
+    const studio = (await t.client.get('/settings/store-studio')).body.data.studio;
+    await t.client.put('/settings/store-studio', { studio: { ...studio, hero: { ...studio.hero, imageUrl: up.url } } });
+    const cfg = (await shop.get('/store/config')).body.data;
+    expect(cfg.studio.hero.imageUrl).toBe(`/api/v1/store/images/${up.id}`);
+    expect((await shop.get(`/store/images/${up.id}`)).status).toBe(200);
+    expect((await shop.get(`/store/images/${other.id}`)).status).toBe(404);
+  });
+
+  it('sorts, filters deals and shows was-prices and badges', async () => {
+    await t.client.put(`/products/${milk._id}`, { ...(await t.client.get(`/products/${milk._id}`)).body.data, online: { enabled: true, featured: true, compareAtCents: 8000, badge: 'Organic' } });
+    const deals = (await shop.get('/store/products?deals=1')).body.data;
+    expect(deals.map((p: any) => p.name)).toEqual(['Milk 500ml']);
+    expect(deals[0]).toMatchObject({ compareAtCents: 8000, badge: 'Organic', isNew: true });
+    const cheap = (await shop.get('/store/products?sort=price_asc')).body.data.map((p: any) => p.name);
+    expect(cheap[0]).toBe('Milk 500ml'); // 6500 before bread's 7000
+    const best = (await shop.get('/store/products?sort=best')).body.data.map((p: any) => p.name);
+    expect(best).toHaveLength(2);
+    expect((await shop.get('/store/products?sort=new')).status).toBe(200);
+  });
+
+  it('newsletter sign-ups become customers who agreed to offers', async () => {
+    expect((await shop.post('/store/subscribe', { email: 'not-an-email' })).status).toBe(400);
+    expect((await shop.post('/store/subscribe', { email: 'Amina@Example.com' })).status).toBe(201);
+    expect((await shop.post('/store/subscribe', { email: 'amina@example.com' })).status).toBe(201);
+    const found = (await t.client.get('/customers?q=amina')).body.data;
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ email: 'amina@example.com', marketingOptIn: true });
+  });
+
+  it('the shop can use its own M-Pesa account instead of the till default', async () => {
+    const own = (await t.client.post('/settings/integrations', { kind: 'mpesa', provider: 'mock', name: 'Shop Paybill', settings: { shortCode: '600111', type: 'paybill' }, secrets: { consumerKey: 'k', consumerSecret: 's', passkey: 'p' } })).body.data;
+    const opts = (await t.client.get('/settings/store-studio')).body.data.options;
+    expect(opts.mpesa.map((m: any) => m.name)).toContain('Shop Paybill');
+    await t.client.patch('/settings/business', { settings: { store: { mpesaConfigId: own.id } } });
+    const r = await order({ payment: 'mpesa', fulfilment: 'pickup', area: undefined, address: undefined, lines: [{ productId: bread._id, qty: 1 }] });
+    expect(r.status).toBe(201);
+    const o = (await runAsPlatform(() => OnlineOrder.findOne({ number: r.body.data.number }).lean()))!;
+    const { PaymentIntent } = await import('../src/models/index.js');
+    const intent = (await runAsPlatform(() => PaymentIntent.findById(o.payment!.paymentIntentId).lean()))!;
+    expect(String(intent.configId)).toBe(String(own.id));
+    expect(intent.shortCode).toBe('600111');
+    await t.client.patch('/settings/business', { settings: { store: { mpesaConfigId: null } } });
+  });
+
+  it('takes card payments on the shop gateway and completes the sale with that payment', async () => {
+    expect((await shop.get('/store/config')).body.data.card).toBe(false);
+    expect((await order({ payment: 'card' })).body.error.code).toBe('CARD_OFF');
+    const sim = (await t.client.post('/settings/integrations', { kind: 'payment', provider: 'simulator', name: 'Card sim' })).body.data;
+    const opts = (await t.client.get('/settings/store-studio')).body.data.options;
+    expect(opts.gateways.map((g: any) => g.name)).toContain('Card sim');
+    await t.client.patch('/settings/business', { settings: { store: { gatewayConfigId: sim.id, publicUrl: 'https://shop.example.co.ke' } } });
+    expect((await shop.get('/store/config')).body.data.card).toBe(true);
+    const r = await order({ payment: 'card', fulfilment: 'pickup', area: undefined, address: undefined, customer: { name: 'Card Buyer', phone: '0722333444', email: 'card@example.com' }, lines: [{ productId: bread._id, qty: 1 }] });
+    expect(r.status).toBe(201);
+    expect(r.body.data).toMatchObject({ status: 'pending_payment', payment: { method: 'card', status: 'pending' } });
+    expect(r.body.data.payment.checkoutUrl).toBeTruthy();
+    const { number, token } = r.body.data;
+    const paid = await shop.post(`/store/orders/${number}/simulate-payment?token=${token}`, {});
+    expect(paid.body.data).toMatchObject({ status: 'placed', payment: { status: 'paid' } });
+    const o = (await t.client.get(`/online-orders?q=${number}`)).body.data[0];
+    await t.client.post(`/online-orders/${o._id}/status`, { status: 'accepted' });
+    const done = await t.client.post(`/online-orders/${o._id}/complete`, { tillId: till });
+    expect(done.body.error ?? null).toBeNull();
+    expect(done.body.sale.payments[0]).toMatchObject({ method: 'gateway', amountCents: r.body.data.totalCents });
+  });
+});

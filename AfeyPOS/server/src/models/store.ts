@@ -25,7 +25,9 @@ const onlineOrderSchema = new Schema(
     deliveryFeeCents: { type: Number, default: 0 },
     totalCents: Number,
     payment: {
-      method: { type: String, enum: ['mpesa', 'on_delivery'] },
+      method: { type: String, enum: ['mpesa', 'card', 'on_delivery'] },
+      /** Card payments: the gateway's hosted checkout page. */
+      checkoutUrl: String,
       status: { type: String, enum: ['unpaid', 'pending', 'paid', 'failed', 'refund_due', 'refunded'], default: 'unpaid' },
       paymentIntentId: ObjectId,
       phone: String,

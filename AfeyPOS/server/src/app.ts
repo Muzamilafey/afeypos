@@ -69,6 +69,8 @@ export function createApp() {
           // The Afey device bridge (printers, scale, fingerprint reader) listens on the till PC's loopback address.
           'connect-src': ["'self'", 'ws:', 'wss:', 'http://127.0.0.1:*', 'http://localhost:*'],
           'script-src': ["'self'"],
+          // Store studio shows the shop website (any address the owner enters, often plain HTTP on the LAN) in a frame.
+          'frame-src': ["'self'", 'https:', 'http:'],
           'style-src': ["'self'", "'unsafe-inline'"],
           // Only force HTTPS sub-resources when the site is served over HTTPS; local shop installations use plain HTTP on the LAN.
           'upgrade-insecure-requests': e.COOKIE_SECURE ? [] : null,
@@ -156,8 +158,23 @@ export function createApp() {
   if (e.SHOP_DIST_DIR && shopHosts.length && fs.existsSync(e.SHOP_DIST_DIR)) {
     const shopDist = path.resolve(e.SHOP_DIST_DIR);
     const shopStatic = express.static(shopDist, { index: false, maxAge: '1h' });
+    const originOf = (u: string) => {
+      try {
+        return new URL(u).origin;
+      } catch {
+        return null;
+      }
+    };
+    // The POS shows the shop in a frame (Store studio preview); studio pictures may be on other https sites.
+    const ancestors = [...new Set([...origins, ...e.SHOP_FRAME_ANCESTORS.split(','), e.API_PUBLIC_URL].map((o) => originOf(o.trim())).filter(Boolean))];
+    const shopCsp = [
+      "default-src 'self'", "base-uri 'self'", "object-src 'none'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "font-src 'self' data:",
+      "img-src 'self' data: blob: https:", `connect-src 'self' ${originOf(e.API_PUBLIC_URL) ?? ''}`.trim(), "form-action 'self'", `frame-ancestors 'self' ${ancestors.join(' ')}`.trim(),
+    ].join('; ');
     app.use((req, res, next) => {
       if (!shopHosts.includes(req.hostname.toLowerCase()) || req.path.startsWith('/api') || req.path.startsWith('/socket.io')) return next();
+      res.removeHeader('X-Frame-Options');
+      res.setHeader('Content-Security-Policy', shopCsp);
       shopStatic(req, res, () => (req.method === 'GET' ? res.sendFile(path.join(shopDist, 'index.html')) : next()));
     });
   }

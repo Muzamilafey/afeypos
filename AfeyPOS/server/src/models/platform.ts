@@ -55,6 +55,13 @@ const tenantSettingsSchema = new Schema(
       contactPhone: String,
       announcement: String,
       hours: String,
+      /** Look and content of the shop website, edited in Store studio (see STUDIO_DEFAULTS in shared). */
+      studio: Schema.Types.Mixed,
+      /** The shop may take payments on its own M-Pesa Paybill / Till or card gateway instead of the POS defaults. */
+      mpesaConfigId: ObjectId,
+      gatewayConfigId: ObjectId,
+      /** Web address of the shop website (Studio preview and links back from card payments). */
+      publicUrl: String,
     },
     /** CRM: spend tiers over the last 12 months and the birthday greeting. */
     crm: {

@@ -193,6 +193,10 @@ export function ProductEditPage() {
               <Checkbox label="Sell on the online shop" checked={Boolean(p.online?.enabled)} onChange={(v) => set('online', { ...p.online, enabled: v })} />
               {p.online?.enabled && <>
                 <Checkbox label="Feature on the home page" checked={Boolean(p.online?.featured)} onChange={(v) => set('online', { ...p.online, featured: v })} />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Was price (shows as a deal)" hint="Leave empty unless it is on offer"><MoneyInput value={p.online?.compareAtCents ?? null} onChange={(v) => set('online', { ...p.online, compareAtCents: v ?? null })} /></Field>
+                  <Field label="Badge on the shop" hint="e.g. New, Organic, Bestseller"><Input maxLength={20} value={p.online?.badge ?? ''} onChange={(e) => set('online', { ...p.online, badge: e.target.value })} /></Field>
+                </div>
                 <Field label="Description for shoppers"><textarea className="input min-h-20" maxLength={2000} value={p.online?.description ?? ''} onChange={(e) => set('online', { ...p.online, description: e.target.value })} /></Field>
                 <p className="text-xs text-ink-500">Shown with the retail price, the photos below and the stock of the shop warehouse.</p>
               </>}

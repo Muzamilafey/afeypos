@@ -58,6 +58,8 @@ const schema = z.object({
   /** Online shop website (shop/dist), served to requests for SHOP_HOSTNAMES (e.g. shop.mysupermarket.co.ke). */
   SHOP_DIST_DIR: z.string().optional(),
   SHOP_HOSTNAMES: z.string().default(''),
+  /** Extra sites allowed to show the shop in a frame (the Store studio preview), besides CORS_ORIGINS and API_PUBLIC_URL. */
+  SHOP_FRAME_ANCESTORS: z.string().default(''),
 });
 
 export type Env = z.infer<typeof schema>;

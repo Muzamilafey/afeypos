@@ -15,6 +15,7 @@ import { SupportPage } from './pages/Support';
 import { AccountingPage, LedgerPage } from './pages/accounting/Accounting';
 import { CrmPage } from './pages/crm/CRM';
 import { OnlineOrdersPage, StoreSettingsPage } from './pages/OnlineOrders';
+import { StoreStudioPage } from './pages/StoreStudio';
 import { PurchasingPage } from './pages/sales/Purchasing';
 import { DocumentsPage } from './pages/sales/Documents';
 import { ProductEditPage, ProductsPage } from './pages/inventory/Products';
@@ -78,6 +79,7 @@ export function App() {
         <Route path="payments/online" element={<Gate perm="payments.reconcile" module="payments"><OnlinePaymentsPage /></Gate>} />
         <Route path="online-orders" element={<Gate perm="orders.manage" module="onlineStore"><OnlineOrdersPage /></Gate>} />
         <Route path="settings/online-shop" element={<Gate perm="settings.manage" module="onlineStore"><StoreSettingsPage /></Gate>} />
+        <Route path="settings/store-studio" element={<Gate perm="settings.manage" module="onlineStore"><StoreStudioPage /></Gate>} />
         <Route path="accounting" element={<Gate perm="accounting.read" module="accounting"><AccountingPage /></Gate>} />
         <Route path="accounting/ledger/:code" element={<Gate perm="accounting.read" module="accounting"><LedgerPage /></Gate>} />
         <Route path="crm" element={<Gate perm="customers.read" module="crm"><CrmPage /></Gate>} />

@@ -15,8 +15,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import rateLimit from 'express-rate-limit';
-import { lineAmount, roundQty } from '@afeypos/shared';
-import { Branch, Category, Customer, IntegrationConfig, OnlineOrder, PaymentIntent, Product, StockLevel, Tenant, Till, Warehouse } from '../../models/index.js';
+import { lineAmount, mergeStudio, roundQty } from '@afeypos/shared';
+import { Branch, Category, Customer, IntegrationConfig, OnlineOrder, PaymentIntent, Product, Sale, StockLevel, Tenant, Till, Warehouse } from '../../models/index.js';
 import { escapeRegex, idParam, objectId, pagination, parse, qty } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, notFound, unprocessable } from '../../lib/errors.js';
@@ -34,12 +34,16 @@ import { tenantFilePath, mimeFor } from '../files/routes.js';
 import { buildStkCallback, handleStkCallback, startStk } from '../payments/mpesa.js';
 import { checkout } from '../sales/checkout.js';
 import { createPayouts } from '../payments/payouts.js';
+import { paymentGatewayFor, startGatewayCharge, verifyGatewayIntent } from '../payments/gateways.js';
+import { SimulatorGateway } from '../../integrations/payments/index.js';
+import { publicStudio, studioImages, studioRoutes } from './studio.js';
 
 export const storefrontRoutes = Router();
 export const onlineOrderRoutes = Router();
+onlineOrderRoutes.use(studioRoutes);
 
 const STATUS_TEXT: Record<string, string> = {
-  pending_payment: 'is waiting for your M-Pesa payment', placed: 'has been received', accepted: 'has been accepted', picking: 'is being packed',
+  pending_payment: 'is waiting for your payment', placed: 'has been received', accepted: 'has been accepted', picking: 'is being packed',
   ready: 'is ready for collection', out_for_delivery: 'is on the way', completed: 'is complete. Thank you!', cancelled: 'has been cancelled',
 };
 
@@ -63,11 +67,28 @@ const publicImage = (src: string) => {
   return m ? `/api/v1/store/images/${m[1]}` : src;
 };
 
+const NEW_DAYS = 30;
+
+/** Card payments for the shop: its own gateway, or none. Only gateways with hosted checkout pages work on a website. */
+async function shopGateway(s: any) {
+  if (!s.gatewayConfigId) return null;
+  const cfg = await IntegrationConfig.findOne({ _id: s.gatewayConfigId, kind: 'payment', enabled: true });
+  if (!cfg) return null;
+  try {
+    paymentGatewayFor(cfg);
+  } catch {
+    return null;
+  }
+  return cfg;
+}
+
 function presentProduct(p: any, stock: Map<string, number>) {
   const available = p.trackStock === false || p.type !== 'stock' ? null : Math.max(0, stock.get(String(p._id)) ?? 0);
   return {
     id: p._id, name: p.name, sku: p.sku, unit: p.baseUnit, priceCents: p.prices?.retail ?? 0, categoryId: p.categoryId, images: (p.images ?? []).map(publicImage),
     description: p.online?.description ?? p.description ?? '', featured: Boolean(p.online?.featured), allowFractional: Boolean(p.allowFractional),
+    compareAtCents: p.online?.compareAtCents && p.online.compareAtCents > (p.prices?.retail ?? 0) ? p.online.compareAtCents : null, badge: p.online?.badge || null,
+    isNew: Boolean(p.createdAt && Date.now() - new Date(p.createdAt).getTime() < NEW_DAYS * 86_400_000),
     inStock: available === null || available > 0, available: available === null ? null : Math.floor(available), ageRestricted: Boolean(p.ageRestricted),
   };
 }
@@ -92,6 +113,8 @@ storefrontRoutes.get('/config', async (req, res) => {
       announcement: s.announcement ?? '', contactPhone: s.contactPhone ?? '', hours: s.hours ?? '',
       pickup: s.pickup !== false, delivery: s.delivery !== false, deliveryAreas: s.deliveryAreas ?? [], deliveryFeeCents: s.deliveryFeeCents ?? 0, freeDeliveryAboveCents: s.freeDeliveryAboveCents ?? 0,
       minOrderCents: s.minOrderCents ?? 0, payOnDelivery: s.payOnDelivery !== false, mpesa: s.mpesa !== false && req.capabilities!.modules.includes('mpesa'),
+      card: Boolean(req.capabilities!.modules.includes('payments') && (await shopGateway(s))),
+      studio: publicStudio(mergeStudio(s.studio), publicImage),
       branches: branches.map((b) => ({ id: b._id, name: b.name, address: (b as any).address ?? '', phone: (b as any).phone ?? '' })), categories: categories.map((c) => ({ id: c._id, name: c.name, color: c.color })),
     },
   });
@@ -99,12 +122,35 @@ storefrontRoutes.get('/config', async (req, res) => {
 
 storefrontRoutes.get('/products', async (req, res) => {
   const s = storeSettings(req);
-  const q = parse(pagination.extend({ categoryId: objectId.optional(), featured: z.coerce.boolean().optional(), limit: z.coerce.number().int().min(1).max(60).default(24) }), req.query);
+  const flag = z.enum(['1', 'true', '0', 'false']).transform((v) => v === '1' || v === 'true').optional();
+  const q = parse(pagination.extend({
+    categoryId: objectId.optional(), featured: flag, deals: flag, sort: z.enum(['default', 'new', 'best', 'price_asc', 'price_desc', 'name']).default('default'),
+    limit: z.coerce.number().int().min(1).max(60).default(24),
+  }), req.query);
   const filter: Record<string, unknown> = { 'online.enabled': true, active: { $ne: false } };
   if (q.categoryId) filter.categoryId = q.categoryId;
   if (q.featured) filter['online.featured'] = true;
+  if (q.deals) filter.$expr = { $gt: [{ $ifNull: ['$online.compareAtCents', 0] }, { $ifNull: ['$prices.retail', 0] }] };
   if (q.q) filter.$or = [{ name: new RegExp(escapeRegex(q.q), 'i') }, { 'barcodes.code': q.q }, { sku: q.q }];
-  const [rows, total] = await Promise.all([Product.find(filter).sort({ 'online.featured': -1, name: 1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), Product.countDocuments(filter)]);
+  let rows: any[];
+  const total = await Product.countDocuments(filter);
+  if (q.sort === 'best') {
+    // Units sold in the last 90 days (all channels); products that never sold follow by name.
+    const since = new Date(Date.now() - 90 * 86_400_000);
+    const ids = (await Product.find(filter, { _id: 1 }).lean()).map((p) => p._id);
+    const sold = await Sale.aggregate([
+      { $match: { tenantId: req.tenant!._id, completedAt: { $gte: since }, status: { $ne: 'voided' } } },
+      { $unwind: '$lines' }, { $match: { 'lines.productId': { $in: ids } } },
+      { $group: { _id: '$lines.productId', qty: { $sum: '$lines.qty' } } }, { $sort: { qty: -1 } },
+    ]);
+    const rank = new Map(sold.map((r, i) => [String(r._id), i]));
+    const all = await Product.find({ _id: { $in: ids } }).sort({ name: 1 }).lean();
+    all.sort((a, b) => (rank.get(String(a._id)) ?? Infinity) - (rank.get(String(b._id)) ?? Infinity));
+    rows = all.slice((q.page - 1) * q.limit, q.page * q.limit);
+  } else {
+    const sort: Record<string, 1 | -1> = q.sort === 'new' ? { createdAt: -1 } : q.sort === 'price_asc' ? { 'prices.retail': 1 } : q.sort === 'price_desc' ? { 'prices.retail': -1 } : q.sort === 'name' ? { name: 1 } : { 'online.featured': -1, name: 1 };
+    rows = await Product.find(filter).sort({ ...sort, _id: 1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean();
+  }
   const stock = await available(rows.map((r) => r._id), await storeWarehouse(s));
   res.json({ data: rows.map((p) => presentProduct(p, stock)), total, page: q.page, limit: q.limit });
 });
@@ -120,7 +166,8 @@ storefrontRoutes.get('/products/:id', async (req, res) => {
 storefrontRoutes.get('/images/:id', async (req, res) => {
   const id = String(req.params.id);
   if (!/^[a-f0-9]{32}\.(png|jpg|webp)$/.test(id)) throw notFound('Image');
-  if (!(await Product.exists({ images: `/api/v1/files/${id}`, 'online.enabled': true }))) throw notFound('Image');
+  const listed = await Product.exists({ images: `/api/v1/files/${id}`, 'online.enabled': true });
+  if (!listed && !studioImages(mergeStudio(req.tenant!.settings?.store?.studio)).includes(`/api/v1/files/${id}`)) throw notFound('Image');
   const file = tenantFilePath(String(req.tenant!._id), id);
   if (!file || !fs.existsSync(file)) throw notFound('Image');
   res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -180,7 +227,7 @@ const orderSchema = cartSchema.extend({
   customer: z.object({ name: z.string().trim().min(2).max(120), phone: z.string().trim().min(9).max(20), email: z.string().trim().email().optional().or(z.literal('')) }),
   address: z.string().trim().max(300).optional(),
   notes: z.string().trim().max(500).optional(),
-  payment: z.enum(['mpesa', 'on_delivery']),
+  payment: z.enum(['mpesa', 'card', 'on_delivery']),
   mpesaPhone: z.string().trim().max(20).optional(),
   marketingOptIn: z.boolean().default(false),
 });
@@ -189,7 +236,7 @@ function presentOrder(o: any) {
   return {
     number: o.number, token: o.trackingToken, status: o.status, statusText: STATUS_TEXT[o.status], fulfilment: o.fulfilment, area: o.area, address: o.address, customer: { name: o.customer?.name },
     lines: o.lines, subtotalCents: o.subtotalCents, deliveryFeeCents: o.deliveryFeeCents, totalCents: o.totalCents,
-    payment: { method: o.payment?.method, status: o.payment?.status, receiptNumber: o.payment?.receiptNumber },
+    payment: { method: o.payment?.method, status: o.payment?.status, receiptNumber: o.payment?.receiptNumber, checkoutUrl: o.payment?.status === 'pending' ? o.payment?.checkoutUrl : undefined },
     history: (o.history ?? []).map((h: any) => ({ status: h.status, at: h.at, text: STATUS_TEXT[h.status] })), createdAt: o.createdAt,
   };
 }
@@ -209,9 +256,30 @@ async function findOrCreateCustomer(c: { name: string; phone: string; email?: st
   return Customer.create({ code: await nextNumber('customer', 'C', 5), name: c.name, phone: local, email: c.email || undefined, kind: 'retail', source: 'online shop', marketingOptIn: optIn, ...(optIn ? { marketingOptInAt: new Date() } : {}) });
 }
 
+/** Where card customers come back to after paying on the gateway's page. */
+function shopOrderUrl(req: Request, o: any) {
+  const base = (req.tenant!.settings?.store?.publicUrl || req.get('origin') || '').replace(/\/$/, '');
+  return base ? `${base}/order/${o.number}?t=${o.trackingToken}` : undefined;
+}
+
 async function startOrderPayment(req: Request, o: any, phone: string, attempt: string) {
+  const s: any = req.tenant!.settings?.store ?? {};
+  if (o.payment.method === 'card') {
+    const cfg = await shopGateway(s);
+    if (!cfg) throw new AppError(409, 'CARD_NOT_AVAILABLE', 'Card payment is not available right now');
+    const back = shopOrderUrl(req, o);
+    const { intent } = await startGatewayCharge({
+      tenant: req.tenant!, cfg, clientRequestId: `order:${o._id}:${attempt}`, amountCents: o.totalCents, flow: 'link', email: o.customer?.email, customerName: o.customer?.name,
+      description: `Order ${o.number}`, branchId: o.branchId, onlineOrderId: o._id, ...(back ? { redirectUrl: () => back } : {}),
+    });
+    o.payment.paymentIntentId = intent._id;
+    o.payment.status = 'pending';
+    o.payment.checkoutUrl = intent.checkoutUrl;
+    await o.save();
+    return;
+  }
   const amount = Math.ceil(o.totalCents / 100) * 100; // M-Pesa takes whole shillings
-  const { intent } = await startStk({ tenant: req.tenant!, clientRequestId: `order:${o._id}:${attempt}`, amountCents: amount, phone, accountReference: o.number.replace(/[^A-Za-z0-9]/g, ''), branchId: o.branchId, description: `Order ${o.number}` });
+  const { intent } = await startStk({ tenant: req.tenant!, clientRequestId: `order:${o._id}:${attempt}`, amountCents: amount, phone, accountReference: o.number.replace(/[^A-Za-z0-9]/g, ''), branchId: o.branchId, description: `Order ${o.number}`, configId: s.mpesaConfigId ?? undefined });
   await PaymentIntent.updateOne({ _id: intent._id }, { $set: { onlineOrderId: o._id } });
   o.payment.paymentIntentId = intent._id;
   o.payment.status = 'pending';
@@ -219,18 +287,24 @@ async function startOrderPayment(req: Request, o: any, phone: string, attempt: s
   await o.save();
 }
 
-/** Brings the order's payment up to date with its M-Pesa intent. */
+/** Brings the order's payment up to date with its M-Pesa or card intent. */
 export async function refreshPayment(o: any) {
-  if (o.payment?.method !== 'mpesa' || !o.payment.paymentIntentId || o.payment.status === 'paid') return o;
-  const intent = await PaymentIntent.findById(o.payment.paymentIntentId).lean();
+  if (!['mpesa', 'card'].includes(o.payment?.method) || !o.payment.paymentIntentId || o.payment.status === 'paid') return o;
+  let intent = await PaymentIntent.findById(o.payment.paymentIntentId).lean();
   if (!intent) return o;
+  // Card payments are confirmed with the gateway (webhooks and scheduled checks also do this); at most every 10 seconds.
+  if (o.payment.method === 'card' && intent.status === 'pending' && (!intent.lastQueriedAt || Date.now() - new Date(intent.lastQueriedAt).getTime() > 10_000)) {
+    const doc = await PaymentIntent.findById(intent._id);
+    if (doc) await verifyGatewayIntent(doc, false).catch(() => undefined);
+    intent = (await PaymentIntent.findById(intent._id).lean()) ?? intent;
+  }
   if (intent.status === 'succeeded') {
     o.payment.status = 'paid';
     o.payment.paidCents = intent.paidAmountCents ?? intent.amountCents;
     o.payment.receiptNumber = intent.receiptNumber;
     if (o.status === 'pending_payment') {
       o.status = 'placed';
-      o.history.push({ status: 'placed', at: new Date(), note: `Paid by M-Pesa ${intent.receiptNumber ?? ''}`.trim() });
+      o.history.push({ status: 'placed', at: new Date(), note: `Paid by ${o.payment.method === 'card' ? 'card' : 'M-Pesa'} ${intent.receiptNumber ?? ''}`.trim() });
     }
     await o.save();
     await newOrderNotice(o);
@@ -266,14 +340,16 @@ storefrontRoutes.post('/orders', orderLimiter, async (req, res) => {
   if (body.fulfilment === 'delivery' && !body.address) throw badRequest('Enter the delivery address');
   if (body.payment === 'on_delivery' && q.settings.payOnDelivery === false) throw unprocessable('Pay with M-Pesa to place this order', 'PAY_ON_DELIVERY_OFF');
   if (body.payment === 'mpesa' && (q.settings.mpesa === false || !req.capabilities!.modules.includes('mpesa'))) throw unprocessable('M-Pesa payment is not available', 'MPESA_OFF');
+  if (body.payment === 'card' && !(req.capabilities!.modules.includes('payments') && (await shopGateway(q.settings)))) throw unprocessable('Card payment is not available', 'CARD_OFF');
+  const payNow = body.payment !== 'on_delivery';
   const customer = await findOrCreateCustomer({ ...body.customer, phone }, body.marketingOptIn);
   const branchId = q.settings.branchId ?? (await Warehouse.findById(q.warehouseId, { branchId: 1 }).lean())?.branchId;
   const o = await OnlineOrder.create({
     number: await nextNumber('online-order', 'WEB'), clientRequestId: body.clientRequestId, trackingToken: crypto.randomBytes(12).toString('base64url'),
-    status: body.payment === 'mpesa' ? 'pending_payment' : 'placed', customer: { name: body.customer.name, phone, email: body.customer.email || undefined }, customerId: customer._id,
+    status: payNow ? 'pending_payment' : 'placed', customer: { name: body.customer.name, phone, email: body.customer.email || undefined }, customerId: customer._id,
     fulfilment: body.fulfilment, address: body.address, area: body.area, notes: body.notes, branchId, warehouseId: q.warehouseId,
     lines: q.lines, subtotalCents: q.subtotalCents, deliveryFeeCents: q.deliveryFeeCents, totalCents: q.totalCents,
-    payment: { method: body.payment, status: 'unpaid' }, history: [{ status: body.payment === 'mpesa' ? 'pending_payment' : 'placed', at: new Date() }],
+    payment: { method: body.payment, status: 'unpaid' }, history: [{ status: payNow ? 'pending_payment' : 'placed', at: new Date() }],
   });
   // Hold the stock while the order is open (only possible where this server owns the warehouse).
   try {
@@ -283,19 +359,36 @@ storefrontRoutes.post('/orders', orderLimiter, async (req, res) => {
   } catch (err: any) {
     if (err?.code !== 'STOCK_OWNED_ELSEWHERE') throw err;
   }
-  if (body.payment === 'mpesa') {
+  if (payNow) {
     try {
       await startOrderPayment(req, o, body.mpesaPhone || phone, '1');
     } catch (err: any) {
       // The order stays; the customer can retry the payment from the tracking page.
       o.payment!.status = 'failed';
       await o.save();
-      return res.status(201).json({ data: presentOrder(o), paymentError: err?.message ?? 'M-Pesa is not available right now' });
+      return res.status(201).json({ data: presentOrder(o), paymentError: err?.message ?? 'Payment is not available right now' });
     }
   } else {
     await newOrderNotice(o);
   }
   res.status(201).json({ data: presentOrder(o) });
+});
+
+/** Newsletter sign-up from the shop: a customer record with marketing consent (emails are matched, not duplicated). */
+storefrontRoutes.post('/subscribe', orderLimiter, async (req, res) => {
+  storeSettings(req);
+  const body = parse(z.object({ email: z.string().trim().toLowerCase().email().max(120) }), req.body);
+  const existing = await Customer.findOne({ email: body.email });
+  if (existing) {
+    if (!existing.marketingOptIn) {
+      existing.marketingOptIn = true;
+      existing.marketingOptInAt = new Date();
+      await existing.save();
+    }
+  } else {
+    await Customer.create({ code: await nextNumber('customer', 'C', 5), name: body.email.split('@')[0]!.slice(0, 60), email: body.email, kind: 'retail', source: 'shop newsletter', marketingOptIn: true, marketingOptInAt: new Date() });
+  }
+  res.status(201).json({ data: { subscribed: true } });
 });
 
 async function publicOrder(req: Request) {
@@ -315,7 +408,7 @@ storefrontRoutes.get('/orders/:number', async (req, res) => {
 storefrontRoutes.post('/orders/:number/pay', orderLimiter, async (req, res) => {
   const body = parse(z.object({ phone: z.string().max(20).optional() }), req.body ?? {});
   const o = await refreshPayment(await publicOrder(req));
-  if (o.payment.method !== 'mpesa' || o.payment.status === 'paid' || o.status === 'cancelled') throw unprocessable('This order does not need a payment', 'NOTHING_TO_PAY');
+  if (!['mpesa', 'card'].includes(o.payment.method) || o.payment.status === 'paid' || o.status === 'cancelled') throw unprocessable('This order does not need a payment', 'NOTHING_TO_PAY');
   await startOrderPayment(req, o, body.phone || o.payment.phone || o.customer.phone, String(Date.now()));
   res.json({ data: presentOrder(o) });
 });
@@ -327,6 +420,12 @@ storefrontRoutes.post('/orders/:number/simulate-payment', async (req, res) => {
   const intent = o.payment?.paymentIntentId ? await PaymentIntent.findById(o.payment.paymentIntentId).lean() : null;
   if (!intent) throw notFound('Payment');
   const cfg = await IntegrationConfig.findById(intent.configId).lean();
+  if (cfg?.provider === 'simulator' && intent.reference) {
+    SimulatorGateway.results.set(intent.reference, { status: 'succeeded', paidAmountCents: intent.amountCents, currency: intent.currency ?? undefined, receiptNumber: `SIM${Date.now().toString(36).toUpperCase()}`, message: 'Simulated payment' });
+    const doc = await PaymentIntent.findById(intent._id);
+    await verifyGatewayIntent(doc!, false);
+    return res.json({ data: presentOrder(await refreshPayment(o)) });
+  }
   if (cfg?.provider !== 'mock' || !intent.checkoutRequestId) throw notFound('Simulated payment');
   await handleStkCallback(req.tenant!._id, buildStkCallback(intent.checkoutRequestId, intent.merchantRequestId ?? 'mock', 0, intent.amountCents / 100, intent.phone ?? '254700000000'), 'simulator');
   res.json({ data: presentOrder(await refreshPayment(o)) });
@@ -400,7 +499,7 @@ async function deliveryProduct() {
 
 /** Hands the order over and records it as a sale (stock, receipt, eTIMS and accounts follow as for any sale). */
 onlineOrderRoutes.post('/online-orders/:id/complete', requirePermission('orders.manage'), requirePermission('sales.create'), async (req, res) => {
-  const body = parse(z.object({ tillId: objectId, payments: z.array(z.object({ method: z.enum(['cash', 'mpesa', 'card', 'bank', 'other']), amountCents: z.number().int().positive(), tenderedCents: z.number().int().optional(), reference: z.string().max(100).optional(), paymentIntentId: objectId.optional() })).max(5).default([]) }), req.body);
+  const body = parse(z.object({ tillId: objectId, payments: z.array(z.object({ method: z.enum(['cash', 'mpesa', 'card', 'bank', 'gateway', 'other']), amountCents: z.number().int().positive(), tenderedCents: z.number().int().optional(), reference: z.string().max(100).optional(), paymentIntentId: objectId.optional() })).max(5).default([]) }), req.body);
   const o = await OnlineOrder.findById(idParam(req.params.id));
   if (!o) throw notFound('Order');
   await refreshPayment(o);
@@ -412,7 +511,7 @@ onlineOrderRoutes.post('/online-orders/:id/complete', requirePermission('orders.
   if (o.deliveryFeeCents) lines.push({ productId: (await deliveryProduct())._id, qty: 1, unitPriceCents: o.deliveryFeeCents });
   let payments = body.payments;
   if (o.payment?.status === 'paid' && o.payment.paymentIntentId) {
-    payments = [{ method: 'mpesa', amountCents: o.totalCents!, paymentIntentId: o.payment.paymentIntentId as any }];
+    payments = [{ method: o.payment.method === 'card' ? 'gateway' : 'mpesa', amountCents: o.totalCents!, paymentIntentId: o.payment.paymentIntentId as any }];
     // The order's intent is released for its own sale only.
     await PaymentIntent.updateOne({ _id: o.payment.paymentIntentId }, { $unset: { onlineOrderId: 1 } });
   }

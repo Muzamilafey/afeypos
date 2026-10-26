@@ -1,3 +1,5 @@
+import type { StoreStudio } from '@afeypos/shared';
+
 /** The shop talks only to the public store API of the head-office server. */
 const BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ?? '';
 
@@ -30,12 +32,18 @@ export const asset = (src?: string | null) => (src ? (src.startsWith('http') ? s
 export interface StoreConfig {
   name: string; tagline: string; currency: string; logoUrl: string | null; announcement: string; contactPhone: string; hours: string;
   pickup: boolean; delivery: boolean; deliveryAreas: { name: string; feeCents: number }[]; deliveryFeeCents: number; freeDeliveryAboveCents: number;
-  minOrderCents: number; payOnDelivery: boolean; mpesa: boolean; branches: { id: string; name: string; address: string; phone: string }[]; categories: { id: string; name: string; color?: string }[];
+  minOrderCents: number; payOnDelivery: boolean; mpesa: boolean; card: boolean; studio: StoreStudio; branches: { id: string; name: string; address: string; phone: string }[]; categories: { id: string; name: string; color?: string }[];
 }
 
 export interface StoreProduct {
   id: string; name: string; sku: string; unit: string; priceCents: number; categoryId?: string; images: string[]; description: string; featured: boolean;
   allowFractional: boolean; inStock: boolean; available: number | null; ageRestricted: boolean;
+  /** "Was" price when the product is on offer. */
+  compareAtCents: number | null; badge: string | null; isNew: boolean;
 }
+
+export type ProductQuery = { q?: string; categoryId?: string; featured?: boolean; deals?: boolean; sort?: 'default' | 'new' | 'best' | 'price_asc' | 'price_desc' | 'name'; page?: number; limit?: number };
+export const listProducts = (query: ProductQuery) =>
+  api<{ data: StoreProduct[]; total: number }>('/products', { query: { ...query, featured: query.featured ? 1 : undefined, deals: query.deals ? 1 : undefined } });
 
 export const newRequestId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);

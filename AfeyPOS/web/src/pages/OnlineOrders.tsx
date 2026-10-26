@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -154,7 +155,7 @@ export function StoreSettingsPage() {
       <PageHeader title="Online shop" subtitle="The separate shopping website for your customers" actions={<Button onClick={save}>Save</Button>} />
       <Card>
         <Checkbox label="The online shop is open" checked={Boolean(s.enabled)} onChange={(v) => set('enabled', v)} />
-        <p className="mt-2 text-sm text-ink-500">Tick <strong>Sell on the online shop</strong> on each product to list it. Publish the shop website (see docs/ONLINE-SHOP.md) on its own address, for example <code>shop.yoursupermarket.co.ke</code>.</p>
+        <p className="mt-2 text-sm text-ink-500">Tick <strong>Sell on the online shop</strong> on each product to list it. Publish the shop website (see docs/ONLINE-SHOP.md) on its own address, for example <code>shop.yoursupermarket.co.ke</code>. Change its look, pages and payment accounts in <Link className="text-brand-600 underline" to="/settings/store-studio">Store studio</Link>.</p>
       </Card>
       <Card title="Fulfilment">
         <div className="grid gap-3 sm:grid-cols-2">

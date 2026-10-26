@@ -2,11 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --c-primary: #1f3d2b;
+  --c-accent: #e8a33d;
+  --c-soft: #f5f1ea;
+  --c-footer: #1f3328;
+  --r-box: 1.25rem;
+  --r-tile: 0.875rem;
+}
+
+@layer base {
+  body { @apply bg-white font-sans text-ink-800 antialiased; }
+  h1, h2, h3 { @apply text-primary; }
+}
+
 @layer components {
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50; }
-  .btn-primary { @apply btn bg-brand-600 text-white hover:bg-brand-700; }
-  .btn-light { @apply btn border border-ink-200 bg-white text-ink-800 hover:bg-ink-50; }
-  .input { @apply block w-full rounded-xl border border-ink-200 bg-white px-3 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200; }
-  .label { @apply mb-1 block text-sm font-medium text-ink-700; }
-  .card { @apply rounded-2xl border border-ink-200 bg-white; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-full px-6 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50; }
+  .btn-primary { @apply btn bg-primary text-white hover:brightness-110; }
+  .btn-accent { @apply btn bg-accent text-primary hover:brightness-105; }
+  .btn-light { @apply btn border border-ink-200 bg-white text-ink-800 hover:border-primary; }
+  .btn-sm { @apply px-4 py-2 text-xs; }
+  .input { @apply block w-full rounded-tile border border-ink-200 bg-white px-4 py-3 text-sm placeholder:text-ink-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-black/5; }
+  .label { @apply mb-1.5 block text-sm font-semibold text-ink-700; }
+  .card { @apply rounded-box border border-ink-100 bg-white; }
+  .tint { background: color-mix(in srgb, var(--c-primary) 8%, white); }
+  .tint-accent { background: color-mix(in srgb, var(--c-accent) 18%, white); }
+  .section-title { @apply text-2xl font-extrabold tracking-tight text-primary sm:text-[28px]; }
+  .link-more { @apply inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline; }
+  .chip { @apply inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide; }
 }

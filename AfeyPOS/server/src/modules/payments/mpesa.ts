@@ -71,14 +71,15 @@ const stkSchema = z.object({
 });
 
 /** Sends an STK Push and creates the pending intent (till checkout, account payments and online orders). */
-export async function startStk(opts: { tenant: any; clientRequestId: string; amountCents: number; phone: string; accountReference?: string; tillId?: unknown; branchId?: unknown; initiatedBy?: unknown; description?: string }) {
+export async function startStk(opts: { tenant: any; clientRequestId: string; amountCents: number; phone: string; accountReference?: string; tillId?: unknown; branchId?: unknown; initiatedBy?: unknown; description?: string; configId?: unknown }) {
   const existing = await PaymentIntent.findOne({ clientRequestId: opts.clientRequestId });
   if (existing) return { intent: existing, replay: true };
   const phone = normalizePhone(opts.phone);
   if (!phone || !isKenyanMobile(phone)) throw badRequest('Enter a valid Safaricom number, e.g. 0712345678');
   const till = opts.tillId ? await Till.findById(opts.tillId).lean() : null;
   const branchId = till?.branchId ?? (opts.branchId as any);
-  const cfg = await findActiveConfig('mpesa', branchId);
+  // The online shop may use its own Paybill / Till instead of the branch's.
+  const cfg = opts.configId ? await IntegrationConfig.findOne({ _id: opts.configId, kind: 'mpesa', enabled: true }) : await findActiveConfig('mpesa', branchId);
   if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
   const tenant = opts.tenant;
   const accountReference = (opts.accountReference || tenant.slug).replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'AFEYPOS';

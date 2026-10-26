@@ -144,41 +144,36 @@ const chargeSchema = z.object({
   description: z.string().trim().max(60).optional(),
 });
 
-router.post('/payments/gateways/:id/charge', requirePermission('sales.create'), async (req, res) => {
-  const body = parse(chargeSchema, req.body);
-  const existing = await PaymentIntent.findOne({ clientRequestId: body.clientRequestId }).lean();
-  if (existing) {
-    res.json({ data: presentIntent(existing), replay: true });
-    return;
-  }
-  const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
-  const cfg = (await gatewaysForBranch(till?.branchId)).find((c) => String(c._id) === String(idParam(req.params.id)));
-  if (!cfg) throw new AppError(409, 'GATEWAY_NOT_AVAILABLE', 'This payment gateway is not enabled for this branch');
+/** Starts a gateway payment (phone prompt or hosted checkout link) and its status checks. Used by the till and the online shop. */
+export async function startGatewayCharge(opts: {
+  tenant: any; cfg: any; clientRequestId: string; amountCents: number; flow: 'push' | 'link'; channel?: string; phone?: string; email?: string; customerName?: string;
+  description?: string; branchId?: unknown; tillId?: unknown; initiatedBy?: unknown; redirectUrl?: (reference: string) => string; onlineOrderId?: unknown;
+}) {
+  const { tenant, cfg } = opts;
   const info = PAYMENT_PROVIDER_INFO[cfg.provider as PaymentProviderKey];
-  if (!info.flows.includes(body.flow)) throw badRequest(`${info.label} does not support ${body.flow === 'link' ? 'payment links' : 'phone prompts'}`);
-  const tenant = req.tenant!;
-  if (body.flow === 'push' && info.channels.length && !info.channels.some((c) => c.value === body.channel)) throw badRequest('Select the customer’s mobile network');
-  const channel = body.flow === 'push' ? body.channel : undefined;
+  if (!info.flows.includes(opts.flow)) throw badRequest(`${info.label} does not support ${opts.flow === 'link' ? 'payment links' : 'phone prompts'}`);
+  if (opts.flow === 'push' && info.channels.length && !info.channels.some((c) => c.value === opts.channel)) throw badRequest('Select the customer’s mobile network');
+  const channel = opts.flow === 'push' ? opts.channel : undefined;
   const currency = paymentCurrency(info.key, channel, cfg.settings?.currency, tenant.settings?.currency ?? 'KES');
   let phone: string | undefined;
-  if (body.flow === 'push') {
-    if (!body.phone) throw badRequest('Enter the customer’s phone number');
-    phone = toMsisdn(body.phone, dialCode(currency, channel)) ?? undefined;
+  if (opts.flow === 'push') {
+    if (!opts.phone) throw badRequest('Enter the customer’s phone number');
+    phone = toMsisdn(opts.phone, dialCode(currency, channel)) ?? undefined;
     if (!phone) throw badRequest('Enter a valid phone number, e.g. 0712345678');
     // Mobile money moves whole units only.
-    if (body.amountCents % 100 !== 0) throw badRequest('Mobile money amounts must be whole units');
+    if (opts.amountCents % 100 !== 0) throw badRequest('Mobile money amounts must be whole units');
   }
-  const email = body.email || String(cfg.settings?.customerEmail || '') || `pos+${tenant.slug}@example.com`;
+  const email = opts.email || String(cfg.settings?.customerEmail || '') || `pos+${tenant.slug}@example.com`;
   const gateway = paymentGatewayFor(cfg);
   const reference = gateway.newReference?.() ?? new Types.ObjectId().toHexString() + Math.random().toString(16).slice(2, 10);
   const [intent] = await PaymentIntent.create([{
-    provider: cfg.provider, source: body.flow, status: 'pending', clientRequestId: body.clientRequestId, amountCents: body.amountCents, currency, channel,
-    phone, payerName: body.customerName, reference, branchId: till?.branchId, tillId: till?._id, configId: cfg._id, initiatedBy: req.auth!.userId,
+    provider: cfg.provider, source: opts.flow, status: 'pending', clientRequestId: opts.clientRequestId, amountCents: opts.amountCents, currency, channel,
+    phone, payerName: opts.customerName, reference, branchId: opts.branchId, tillId: opts.tillId, configId: cfg._id, initiatedBy: opts.initiatedBy, onlineOrderId: opts.onlineOrderId,
   }]);
   try {
     const out = await gateway.charge({
-      reference, amountCents: body.amountCents, currency, flow: body.flow, phone, email, customerName: body.customerName, channel,
-      description: body.description || `${tenant.name} payment`.slice(0, 60), callbackUrl: gatewayCallbackUrl(tenant._id, tenant.callbackToken, cfg._id), redirectUrl: returnUrl(reference),
+      reference, amountCents: opts.amountCents, currency, flow: opts.flow, phone, email, customerName: opts.customerName, channel,
+      description: opts.description || `${tenant.name} payment`.slice(0, 60), callbackUrl: gatewayCallbackUrl(tenant._id, tenant.callbackToken, cfg._id), redirectUrl: (opts.redirectUrl ?? returnUrl)(reference),
     });
     if (out.status === 'failed') {
       await PaymentIntent.updateOne({ _id: intent._id }, { $set: { status: 'failed', resultDesc: out.message, completedAt: new Date() } });
@@ -196,11 +191,25 @@ router.post('/payments/gateways/:id/charge', requirePermission('sales.create'), 
     throw new AppError(502, 'PAYMENT_PROVIDER_UNAVAILABLE', `Could not reach ${info.label}. Try again or use another payment method.`);
   }
   // Safety net when no webhook arrives: poll the provider, then expire.
-  const timeoutSec = body.flow === 'link' ? Number(cfg.settings?.linkTimeoutMinutes ?? 15) * 60 : (tenant.settings?.stkPendingTimeoutSeconds ?? 180);
+  const timeoutSec = opts.flow === 'link' ? Number(cfg.settings?.linkTimeoutMinutes ?? 15) * 60 : (tenant.settings?.stkPendingTimeoutSeconds ?? 180);
   for (const [n, delay] of [[1, 30], [2, 90]] as const) {
     if (delay < timeoutSec) await enqueue('payments.checkIntent', { intentId: String(intent._id) }, { runAt: new Date(Date.now() + delay * 1000), dedupeKey: `pay-check:${intent._id}:${n}` });
   }
   await enqueue('payments.checkIntent', { intentId: String(intent._id), final: true }, { runAt: new Date(Date.now() + timeoutSec * 1000), dedupeKey: `pay-check:${intent._id}:final` });
+  return { intent, currency, phone };
+}
+
+router.post('/payments/gateways/:id/charge', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(chargeSchema, req.body);
+  const existing = await PaymentIntent.findOne({ clientRequestId: body.clientRequestId }).lean();
+  if (existing) {
+    res.json({ data: presentIntent(existing), replay: true });
+    return;
+  }
+  const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
+  const cfg = (await gatewaysForBranch(till?.branchId)).find((c) => String(c._id) === String(idParam(req.params.id)));
+  if (!cfg) throw new AppError(409, 'GATEWAY_NOT_AVAILABLE', 'This payment gateway is not enabled for this branch');
+  const { intent, currency, phone } = await startGatewayCharge({ tenant: req.tenant!, cfg, clientRequestId: body.clientRequestId, amountCents: body.amountCents, flow: body.flow, channel: body.channel, phone: body.phone, email: body.email, customerName: body.customerName, description: body.description, branchId: till?.branchId, tillId: till?._id, initiatedBy: req.auth!.userId });
   await audit(req, { action: 'payment.charge_initiated', entity: 'PaymentIntent', entityId: intent._id, details: { provider: cfg.provider, flow: body.flow, amountCents: body.amountCents, currency, phone: phone?.replace(/\d(?=\d{3})/g, '*') } });
   res.status(201).json({ data: presentIntent(intent) });
 });
