@@ -323,7 +323,35 @@ export function MpesaPage() {
           { key: 'x', header: '', render: (r: any) => (r.status === 'pending' ? <Button size="sm" variant="secondary" onClick={() => api(`/payments/intents/${r.id}/query`, { body: {} }).then(() => list.refetch()).catch(toast.error)}>Check</Button> : null) },
         ]} />
       </div>
+      <SafaricomLog />
     </div>
+  );
+}
+
+const EVENT_OUTCOMES: Record<string, { label: string; tone: 'green' | 'amber' | 'red' | 'gray' }> = {
+  matched_expected: { label: 'Matched to the till', tone: 'green' },
+  matched_expected_later: { label: 'Matched to the till', tone: 'green' },
+  recorded: { label: 'Received, not matched (use it at the till)', tone: 'amber' },
+  duplicate: { label: 'Already recorded', tone: 'gray' },
+  unknown_shortcode: { label: 'Unknown Till/Paybill number: check the M-Pesa settings', tone: 'red' },
+  malformed: { label: 'Unreadable message', tone: 'red' },
+};
+
+/** What Safaricom actually sent (C2B confirmations, STK results): shows whether confirmations arrive at all. */
+function SafaricomLog() {
+  const q = useQuery({ queryKey: ['mpesa-events'], queryFn: () => api<{ data: any[] }>('/payments/mpesa/events', { query: { limit: 30 } }).then((r) => r.data), refetchInterval: 15_000 });
+  return (
+    <Card title="Messages from Safaricom" className="mt-4">
+      <p className="mb-2 text-sm text-ink-500">Every payment confirmation Safaricom sent to this server. If a customer paid the Till and nothing shows here, Safaricom is not sending confirmations: register the C2B URLs again (Settings → Integrations) for the store number of the Till.</p>
+      <DataTable rows={q.data} loading={q.isLoading} error={q.error} empty="Nothing received from Safaricom yet" columns={[
+        { key: 't', header: 'Time', render: (r: any) => dateTime(r.at) },
+        { key: 'k', header: 'Message', render: (r: any) => ({ c2b_confirmation: 'Paybill/Till payment', c2b_validation: 'Validation', stk_callback: 'Prompt result', stk_query: 'Prompt status' } as Record<string, string>)[r.kind] ?? r.kind },
+        { key: 'n', header: 'Till/Paybill', render: (r: any) => r.payload?.BusinessShortCode ?? '' },
+        { key: 'r', header: 'Receipt', render: (r: any) => r.payload?.TransID ?? '' },
+        { key: 'a', header: 'Amount', className: 'num', render: (r: any) => (r.payload?.TransAmount ? money(Math.round(Number(r.payload.TransAmount) * 100)) : '') },
+        { key: 'o', header: 'Result', render: (r: any) => { const o = EVENT_OUTCOMES[r.outcome ?? '']; return o ? <Badge tone={o.tone}>{o.label}</Badge> : <span className="text-xs text-ink-500">{r.outcome ?? ''}</span>; } },
+      ]} />
+    </Card>
   );
 }
 
