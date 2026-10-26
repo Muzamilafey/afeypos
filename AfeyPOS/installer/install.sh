@@ -156,7 +156,7 @@ else
   cp -a "$src/." "$rel/" && rm -rf "$DIR/tmp/src" "$DIR/tmp/app.tar.gz"
 fi
 # Keep the configuration (secrets) of the current version.
-[ -f "$DIR/app/server/.env" ] && cp -p "$DIR/app/server/.env" "$rel/server/.env"
+[ -f "$DIR/server/.env" ] && cp -p "$DIR/server/.env" "$rel/server/.env"
 mkdir -p /etc/afeypos
 
 # ---------- service user and database ----------
