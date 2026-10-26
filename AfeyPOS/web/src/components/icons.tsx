@@ -36,6 +36,7 @@ const paths: Record<string, string> = {
   check: 'M5 13l4 4L19 7',
   logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
   menu: 'M4 6h16M4 12h16M4 18h16',
+  play: 'M7 5v14l11-7z',
   sparkles: 'M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18',
   megaphone: 'M3 10v4h4l6 4V6L7 10zM16 9a4 4 0 0 1 0 6M19 7a7 7 0 0 1 0 10',
   image: 'M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15 9.5h.01',

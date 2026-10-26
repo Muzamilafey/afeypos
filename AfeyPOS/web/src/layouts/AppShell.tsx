@@ -192,9 +192,9 @@ export function AppShell() {
             </div>
           </div>
           <main className="flex-1 p-3 lg:p-4"><Outlet /></main>
-          <footer className="no-print flex justify-between border-t border-[#e1e4e8] px-4 py-2 text-[11px] text-ink-400 dark:border-ink-800">
+          {loc.pathname !== '/pos' && <footer className="no-print flex justify-between border-t border-[#e1e4e8] px-4 py-2 text-[11px] text-ink-400 dark:border-ink-800">
             <span>© {new Date().getFullYear()} {me.tenant.name}</span><span>Afey POS</span>
-          </footer>
+          </footer>}
         </div>
       </div>
     </QueryRefreshCtx.Provider>

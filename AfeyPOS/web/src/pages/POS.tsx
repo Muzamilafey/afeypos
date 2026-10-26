@@ -104,6 +104,8 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   const [lastSale, setLastSale] = useState<any>(null);
   const [error, setError] = useState<unknown>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [panel, setPanel] = useState<null | { kind: 'line'; focus: 'qty' | 'discount' } | { kind: 'cart' } | { kind: 'resume' } | { kind: 'browse' }>(null);
 
   useEffect(() => {
     try { localStorage.setItem(storeKey, JSON.stringify(carts)); } catch { /* ignore */ }
@@ -136,8 +138,11 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
       update((c) => {
         const ex = existing && c.lines.find((l) => l.key === existing.key);
         if (ex) return { ...c, lines: c.lines.map((l) => (l.key === ex.key ? { ...l, qty: lineQty, unitPriceCents: l.unitPriceCents === l.quotedCents ? qt.unitPriceCents : l.unitPriceCents, quotedCents: qt.unitPriceCents, promotion: qt.source === 'promotion' } : l)) };
-        return { ...c, lines: [...c.lines, { key: newRequestId(), product, unitCode, qty: lineQty, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, discountCents: 0, serials: [], promotion: qt.source === 'promotion' }] };
+        const key = newRequestId();
+        setSelectedKey(key);
+        return { ...c, lines: [...c.lines, { key, product, unitCode, qty: lineQty, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, discountCents: 0, serials: [], promotion: qt.source === 'promotion' }] };
       });
+      if (existing) setSelectedKey(existing.key);
     } catch (e) {
       setError(e);
     }
@@ -235,98 +240,179 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
 
   const needsAge = has('ageVerification') && cart.lines.some((l) => l.product.ageRestricted);
   const big = caps.checkout.touchMode;
+  const selected = cart.lines.find((l) => l.key === selectedKey) ?? cart.lines[cart.lines.length - 1];
+  const held = carts.map((c, i) => ({ c, i })).filter(({ i }) => i !== active);
+  const removeLine = (key: string) => update((c) => ({ ...c, lines: c.lines.filter((x) => x.key !== key) }));
+  const taxLabel = settings.pricesIncludeTax === false ? 'Tax' : `Tax${settings.defaultTaxRateBp ? ` (${settings.defaultTaxRateBp / 100}%)` : ''}`;
+  const tiles: { key: string; label: string; icon: string; tone: string; onClick: () => void; disabled?: boolean; hint?: string; count?: number }[] = [
+    { key: 'qty', label: 'Quantity', icon: 'plus', tone: 'text-emerald-600 bg-emerald-50', onClick: () => setPanel({ kind: 'line', focus: 'qty' }), disabled: !selected },
+    { key: 'ldisc', label: 'Line disc', icon: 'percent', tone: 'text-sky-600 bg-sky-50', onClick: () => setPanel({ kind: 'line', focus: 'discount' }), disabled: !selected || !can('sales.discount') },
+    { key: 'del', label: 'Delete', icon: 'trash', tone: 'text-red-600 bg-red-50', onClick: () => selected && removeLine(selected.key), disabled: !selected },
+    { key: 'hold', label: 'Hold', icon: 'pause', tone: 'text-amber-600 bg-amber-50', onClick: suspend, disabled: !cart.lines.length, hint: 'F8' },
+    { key: 'gdisc', label: 'Global disc', icon: 'tag', tone: 'text-violet-600 bg-violet-50', onClick: () => setPanel({ kind: 'cart' }), disabled: !cart.lines.length || !can('sales.discount') },
+    { key: 'resume', label: 'Resume', icon: 'play', tone: 'text-orange-600 bg-orange-50', onClick: () => setPanel({ kind: 'resume' }), disabled: !held.length, count: held.length },
+    { key: 'cust', label: cart.customer ? 'Customer ✓' : 'Customer', icon: 'user', tone: 'text-indigo-600 bg-indigo-50', onClick: () => setCustomerOpen(true), hint: 'F4' },
+    { key: 'clear', label: 'Clear', icon: 'x', tone: 'text-ink-600 bg-ink-100', onClick: () => removeCart(active), disabled: !cart.lines.length },
+  ];
 
   return (
-    <div className="-m-4 flex h-[calc(100vh-3.5rem)] flex-col lg:-m-6 lg:flex-row">
-      {/* left: search & products */}
-      <div className="flex min-w-0 flex-1 flex-col border-r border-ink-200 dark:border-ink-800">
-        <div className="flex items-center gap-2 border-b border-ink-200 bg-white p-3 dark:border-ink-800 dark:bg-ink-900">
-          <div className="relative flex-1">
-            <Icon name="barcode" className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-ink-400" />
-            <input ref={searchRef} autoFocus value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onScan(e.currentTarget.value); } }}
-              placeholder="Scan barcode or search name / SKU (F2)" aria-label="Scan or search products" className={cx('input pl-10', big && 'py-3 text-base')} />
+    // Fills the window under the shell's header (48px) and breadcrumb (42px), inside the page padding; the footer is hidden here.
+    <div className="flex flex-col gap-3 lg:h-[calc(100vh-122px)] lg:min-h-[520px] lg:flex-row">
+      {/* main: search, transaction lines, totals */}
+      <section className="card flex min-w-0 flex-1 flex-col overflow-hidden" aria-label="Current sale">
+        <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 px-4 py-3 dark:border-ink-800">
+          <div className="relative min-w-[240px] flex-1">
+            <Icon name="search" className="absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-ink-400" />
+            <input ref={searchRef} autoFocus value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onScan(e.currentTarget.value); } if (e.key === 'Escape') setSearch(''); }}
+              placeholder="Scan barcode or search name / SKU" aria-label="Scan or search products"
+              className={cx('w-full rounded-md border-2 border-ink-800 bg-white py-2.5 pl-11 pr-14 text-[15px] font-medium shadow-sm placeholder:font-normal placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-500/15 dark:border-ink-600 dark:bg-ink-900', big && 'py-3.5 text-base')} />
+            <kbd className="absolute right-3 top-1/2 -translate-y-1/2 rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 text-[11px] font-semibold text-ink-500 dark:border-ink-700 dark:bg-ink-800">F2</kbd>
+            {search.length >= 2 && (
+              <div className="absolute inset-x-0 top-full z-30 mt-1 max-h-[55vh] overflow-y-auto rounded-md border border-ink-100 bg-white shadow-xl dark:border-ink-700 dark:bg-ink-900" role="listbox" aria-label="Matching products">
+                {results.isFetching && <div className="p-3"><Spinner className="h-4 w-4" /></div>}
+                {results.data?.map((p) => (
+                  <button key={p._id} role="option" aria-selected="false" onClick={() => { addProduct(p); setSearch(''); searchRef.current?.focus(); }}
+                    className="flex w-full items-center gap-3 border-b border-ink-50 px-4 py-2.5 text-left last:border-0 hover:bg-brand-50 dark:border-ink-800 dark:hover:bg-ink-800">
+                    <span className="min-w-0 flex-1"><span className="block truncate font-semibold">{p.name}</span><span className="text-xs text-ink-500">{p.sku} · <span className={(p.stock?.qty ?? 0) <= 0 ? 'text-red-600' : ''}>In stock: {fmtQty(p.stock?.qty)} {p.baseUnit}</span></span></span>
+                    <span className="font-mono text-sm font-semibold">{money(p.prices?.[cart.priceList] ?? p.prices?.retail)}</span>
+                  </button>
+                ))}
+                {results.data && !results.data.length && <p className="px-4 py-3 text-sm text-ink-500">No products found. Press Enter to look the code up.</p>}
+              </div>
+            )}
           </div>
-          <Badge tone="green">{till.name}</Badge>
-        </div>
-        {categories.data && categories.data.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto border-b border-ink-200 bg-white px-3 py-2 dark:border-ink-800 dark:bg-ink-900">
-            <button onClick={() => setCategory(null)} className={cx('whitespace-nowrap rounded-full px-3 py-1.5 text-sm', !category ? 'bg-brand-600 text-white dark:bg-brand-100 dark:text-brand-900' : 'bg-ink-100 dark:bg-ink-800')}>All</button>
-            {categories.data.filter((c) => c.active !== false).map((c) => <button key={c._id} onClick={() => setCategory(c._id === category ? null : c._id)} className={cx('whitespace-nowrap rounded-full px-3 py-1.5 text-sm', category === c._id ? 'bg-brand-600 text-white dark:bg-brand-100 dark:text-brand-900' : 'bg-ink-100 dark:bg-ink-800')}>{c.name}</button>)}
-          </div>
-        )}
-        <div className="flex-1 overflow-y-auto p-3">
-          {error ? <div className="mb-3"><ErrorBox error={error} /></div> : null}
-          {results.isFetching && <Spinner />}
-          {(search.length >= 2 || category) && results.data && (
-            <div className={cx('grid gap-2', big ? 'grid-cols-2 sm:grid-cols-3 xl:grid-cols-4' : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3')}>
-              {results.data.map((p) => (
-                <button key={p._id} onClick={() => { addProduct(p); searchRef.current?.focus(); }} className={cx('card text-left transition hover:border-brand-500', big ? 'p-4' : 'p-3')}>
-                  <div className="line-clamp-2 font-medium">{p.name}</div>
-                  <div className="mt-1 flex items-center justify-between text-sm">
-                    <span className="text-ink-500">{p.sku}</span>
-                    <span className="font-semibold">{money(p.prices?.[cart.priceList] ?? p.prices?.retail)}</span>
-                  </div>
-                  <div className={cx('mt-1 text-xs', (p.stock?.qty ?? 0) <= 0 ? 'text-red-600' : 'text-ink-500')}>In stock: {fmtQty(p.stock?.qty)} {p.baseUnit}</div>
-                </button>
-              ))}
-              {!results.data.length && <p className="text-sm text-ink-500">No products found.</p>}
-            </div>
-          )}
-          {!search && !category && <div className="flex h-full flex-col items-center justify-center text-center text-ink-400"><Icon name="barcode" className="mb-2 h-12 w-12" /><p>Scan an item or pick a category</p><p className="mt-2 text-xs">F2 search · F4 customer · F8 suspend · F9 pay</p></div>}
-        </div>
-      </div>
-
-      {/* right: cart */}
-      <div className="flex w-full flex-col bg-white dark:bg-ink-900 lg:w-[440px]">
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-ink-200 px-2 py-2 dark:border-ink-800">
-          {carts.map((c, i) => (
-            <button key={c.id} onClick={() => setActive(i)} className={cx('flex items-center gap-1 whitespace-nowrap rounded-md px-2.5 py-1 text-xs', i === active ? 'bg-brand-600 text-white dark:bg-brand-100 dark:text-brand-900' : 'bg-ink-100 dark:bg-ink-800')}>
-              {c.label}{c.lines.length ? ` (${c.lines.length})` : ''}
-            </button>
-          ))}
-          <button onClick={suspend} title="Suspend sale (F8)" className="rounded-md px-2 py-1 text-xs text-ink-600 hover:bg-ink-100 dark:hover:bg-ink-800"><Icon name="pause" className="h-4 w-4" /></button>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 border-b border-ink-200 px-3 py-2 dark:border-ink-800">
-          <button onClick={() => setCustomerOpen(true)} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-ink-50 px-3 py-2 text-left text-sm hover:bg-ink-100 dark:bg-ink-800">
-            <Icon name="user" className="h-4 w-4" />
-            <span className="truncate">{cart.customer ? cart.customer.name : 'Walk-in customer (F4)'}</span>
-          </button>
+          <Button variant="secondary" onClick={() => setPanel({ kind: 'browse' })}><Icon name="grid" className="h-4 w-4" />Browse</Button>
           {caps.checkout.showPriceListSelector && caps.priceLists.length > 1 && (
             <select aria-label="Price list" className="input w-auto py-2" value={cart.priceList} onChange={(e) => { const c = { ...cart, priceList: e.target.value as PriceListKey }; requoteAll(c); }}>
               {caps.priceLists.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           )}
+          <Badge tone="green">{till.name}</Badge>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {!cart.lines.length && <div className="p-8 text-center text-sm text-ink-400">Cart is empty</div>}
-          <ul className="divide-y divide-ink-100 dark:divide-ink-800">
-            {cart.lines.map((l) => (
-              <CartLine key={l.key} line={l} allowFraction={caps.checkout.allowFractionalQty && l.product.allowFractional} showUnits={l.product.units.length > 1} canDiscount={can('sales.discount')}
-                onChange={(patch) => setLine(l.key, patch)} onRemove={() => update((c) => ({ ...c, lines: c.lines.filter((x) => x.key !== l.key) }))} />
-            ))}
-          </ul>
+
+        <div className="flex items-center gap-3 px-5 pb-2 pt-4">
+          <Icon name="cart" className="h-5 w-5 text-brand-500" />
+          <h2 className="text-[15px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-white">Transaction lines</h2>
+          <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-bold text-brand-600 dark:bg-brand-500/15 dark:text-brand-200">{fmtQty(totals.items)} {totals.items === 1 ? 'ITEM' : 'ITEMS'}</span>
+          <button type="button" onClick={() => setCustomerOpen(true)} className="ml-auto flex max-w-[45%] items-center gap-1.5 truncate rounded-full bg-ink-50 px-3 py-1 text-xs font-semibold text-ink-600 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300"><Icon name="user" className="h-3.5 w-3.5" /><span className="truncate">{cart.customer ? cart.customer.name : 'Walk-in customer (F4)'}</span></button>
+          <span className="text-xs font-semibold text-ink-400">{cart.label}</span>
         </div>
-        <div className="border-t border-ink-200 p-3 dark:border-ink-800">
-          {cart.lines.length > 0 && can('sales.discount') && (
-            <div className="mb-2 flex items-center gap-2 text-sm">
-              <span className="text-ink-500">Cart discount</span>
-              <MoneyInput className="w-28 py-1" value={cart.cartDiscountCents} onChange={(v) => update((c) => ({ ...c, cartDiscountCents: v ?? 0 }))} aria-label="Cart discount" />
-              {has('promotions') && <Input className="w-28 py-1" placeholder="Coupon" value={cart.couponCode} onChange={(e) => update((c) => ({ ...c, couponCode: e.target.value.toUpperCase() }))} onBlur={() => requoteAll(cart)} aria-label="Coupon code" />}
+        {error ? <div className="px-5 pb-2"><ErrorBox error={error} /></div> : null}
+
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full min-w-[600px] text-sm">
+            <thead className="sticky top-0 z-10 bg-[#f7f8fa] dark:bg-ink-950">
+              <tr className="text-[11px] font-bold uppercase tracking-[0.12em] text-ink-500">
+                <th className="px-5 py-3 text-left">Item description</th>
+                <th className="px-3 py-3 text-center">Unit</th>
+                <th className="px-3 py-3 text-right">Price</th>
+                <th className="px-3 py-3 text-center">Quantity</th>
+                <th className="px-3 py-3 text-right">Discount</th>
+                <th className="px-5 py-3 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cart.lines.map((l) => (
+                <SaleRow key={l.key} line={l} selected={selected?.key === l.key} allowFraction={caps.checkout.allowFractionalQty && l.product.allowFractional} big={big}
+                  onSelect={() => setSelectedKey(l.key)} onChange={(patch) => setLine(l.key, patch)} onRemove={() => removeLine(l.key)} onEdit={() => { setSelectedKey(l.key); setPanel({ kind: 'line', focus: 'qty' }); }} />
+              ))}
+            </tbody>
+          </table>
+          {!cart.lines.length && (
+            <div className="flex h-[60%] flex-col items-center justify-center px-6 text-center text-ink-400">
+              <Icon name="barcode" className="mb-3 h-14 w-14" />
+              <p className="font-semibold text-ink-500">Scan an item to start the sale</p>
+              <p className="mt-1 text-xs">F2 search · F4 customer · F8 hold · F9 pay</p>
             </div>
           )}
-          {needsAge && <div className="mb-2 rounded-lg bg-amber-50 p-2 text-sm dark:bg-amber-900/30"><Checkbox label={`Customer is ${Math.max(...cart.lines.map((l) => l.product.minAge ?? 18))}+ (ID checked)`} checked={cart.ageVerified} onChange={(v) => update((c) => ({ ...c, ageVerified: v }))} /></div>}
-          <dl className="space-y-1 text-sm">
-            <div className="flex justify-between"><dt className="text-ink-500">Items</dt><dd className="tabular-nums">{fmtQty(totals.items)}</dd></div>
-            {totals.discount > 0 && <div className="flex justify-between text-red-600"><dt>Discounts</dt><dd className="tabular-nums">-{money(totals.discount)}</dd></div>}
-            <div className="flex justify-between"><dt className="text-ink-500">{settings.pricesIncludeTax === false ? 'Tax' : 'Incl. tax'}</dt><dd className="tabular-nums">{money(totals.tax)}</dd></div>
-            <div className="flex justify-between text-2xl font-semibold"><dt>Total</dt><dd className="tabular-nums" data-testid="cart-total">{money(totals.total)}</dd></div>
-          </dl>
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            <Button variant="secondary" size={big ? 'lg' : 'md'} onClick={() => removeCart(active)} disabled={!cart.lines.length}><Icon name="trash" className="h-4 w-4" />Clear</Button>
-            <Button size={big ? 'xl' : 'lg'} className="col-span-2" disabled={!cart.lines.length || (needsAge && !cart.ageVerified)} onClick={() => setPaying(true)}>Pay {money(totals.total)}</Button>
+        </div>
+
+        <div className="grid grid-cols-2 border-t border-ink-100 dark:border-ink-800 md:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,1.6fr)]">
+          {[
+            { k: 'Gross', v: money(totals.linesGross), c: '' },
+            { k: 'Discount', v: money(totals.discount), c: 'text-red-600' },
+            { k: taxLabel, v: money(totals.tax), c: '' },
+            { k: 'Payable', v: money(totals.total), c: 'text-brand-600', strong: true },
+          ].map((x) => (
+            <div key={x.k} className="min-w-0 border-r border-ink-100 px-4 py-3 dark:border-ink-800">
+              <div className={cx('text-[11px] font-bold uppercase tracking-[0.12em]', x.strong ? 'text-brand-600' : 'text-ink-500')}>{x.k}</div>
+              <div className={cx('mt-1 truncate font-mono text-[15px] font-semibold tabular-nums', x.c)}>{x.v}</div>
+            </div>
+          ))}
+          <div className="col-span-2 flex min-w-0 flex-col items-end justify-center bg-[#f7f8fa] px-5 py-3 dark:bg-ink-950/60 md:col-span-1">
+            <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-ink-500">Total payable</div>
+            <div className="font-black leading-none tracking-tight text-ink-900 dark:text-white" data-testid="cart-total"><span className="whitespace-nowrap text-3xl tabular-nums 2xl:text-4xl">{money(totals.total)}</span></div>
           </div>
         </div>
-      </div>
+      </section>
+
+      {/* actions */}
+      <aside className="flex w-full flex-col gap-3 lg:w-[320px] 2xl:w-[400px]" aria-label="Sale actions">
+        <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2.5 overflow-y-auto">
+          {tiles.map((t) => (
+            <button key={t.key} type="button" onClick={t.onClick} disabled={t.disabled}
+              className={cx('card relative flex min-h-[76px] flex-col items-center justify-center gap-1.5 transition hover:-translate-y-px hover:shadow-md disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none', big ? 'py-6' : 'py-3')}>
+              {t.hint && <kbd className="absolute right-2 top-2 rounded border border-ink-200 bg-ink-50 px-1 text-[10px] font-semibold text-ink-400 dark:border-ink-700 dark:bg-ink-800">{t.hint}</kbd>}
+              <span className={cx('flex h-9 w-9 items-center justify-center rounded-full', t.tone)}><Icon name={t.icon} className="h-[18px] w-[18px]" /></span>
+              <span className="text-[13px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-ink-100">{t.label}</span>
+              {t.count !== undefined && <span className="-mt-2 text-[11px] font-semibold text-ink-400">({t.count})</span>}
+            </button>
+          ))}
+        </div>
+        {needsAge && <div className="card p-3 text-sm"><Checkbox label={`Customer is ${Math.max(...cart.lines.map((l) => l.product.minAge ?? 18))}+ (ID checked)`} checked={cart.ageVerified} onChange={(v) => update((c) => ({ ...c, ageVerified: v }))} /></div>}
+        <button type="button" aria-label={`Pay ${money(totals.total)}`} disabled={!cart.lines.length || (needsAge && !cart.ageVerified)} onClick={() => setPaying(true)}
+          className="group flex shrink-0 flex-col items-center justify-center gap-1.5 rounded-lg bg-brand-500 px-6 py-5 text-white shadow-lg shadow-brand-500/25 ring-4 ring-brand-500/20 transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:bg-brand-300 disabled:shadow-none disabled:ring-0 dark:disabled:bg-brand-800">
+          <span className="text-2xl font-black uppercase tracking-wide 2xl:text-3xl">Finalize &amp; Pay</span>
+          <span className="rounded-full bg-white/20 px-3 py-1 text-sm font-bold">F9 · {money(totals.total)}</span>
+        </button>
+      </aside>
+
+      {panel?.kind === 'line' && selected && (
+        <LineModal line={selected} focus={panel.focus} allowFraction={caps.checkout.allowFractionalQty && selected.product.allowFractional} canDiscount={can('sales.discount')}
+          onClose={() => { setPanel(null); searchRef.current?.focus(); }} onSave={(patch) => { setLine(selected.key, patch); setPanel(null); searchRef.current?.focus(); }} onRemove={() => { removeLine(selected.key); setPanel(null); }} />
+      )}
+      {panel?.kind === 'cart' && (
+        <Modal open onClose={() => setPanel(null)} title="Global discount" icon="tag" subtitle="Taken off the whole sale and shared across the items." size="sm" footer={<Button onClick={() => { setPanel(null); requoteAll(cart); searchRef.current?.focus(); }}>Done</Button>}>
+          <div className="space-y-3">
+            <Field label="Discount on the sale"><MoneyInput value={cart.cartDiscountCents} onChange={(v) => update((c) => ({ ...c, cartDiscountCents: v ?? 0 }))} aria-label="Cart discount" autoFocus /></Field>
+            {has('promotions') && <Field label="Coupon code"><Input value={cart.couponCode} onChange={(e) => update((c) => ({ ...c, couponCode: e.target.value.toUpperCase() }))} aria-label="Coupon code" /></Field>}
+          </div>
+        </Modal>
+      )}
+      {panel?.kind === 'resume' && (
+        <Modal open onClose={() => setPanel(null)} title="Held sales" icon="play" subtitle="Pick a sale to continue it. The current sale stays on hold." size="sm">
+          <ul className="divide-y divide-ink-100 dark:divide-ink-800">
+            {held.map(({ c, i }) => (
+              <li key={c.id} className="flex items-center gap-3 py-2.5">
+                <div className="min-w-0 flex-1"><div className="font-semibold">{c.label}</div><div className="text-xs text-ink-500">{c.lines.length} line(s){c.customer ? ` · ${c.customer.name}` : ''}</div></div>
+                <Button size="sm" onClick={() => { setActive(i); setPanel(null); searchRef.current?.focus(); }}>Resume</Button>
+                <Button size="sm" variant="ghost" aria-label={`Discard ${c.label}`} onClick={() => removeCart(i)}><Icon name="trash" className="h-4 w-4" /></Button>
+              </li>
+            ))}
+          </ul>
+        </Modal>
+      )}
+      {panel?.kind === 'browse' && (
+        <Modal open onClose={() => { setPanel(null); setCategory(null); }} title="Browse products" icon="grid" size="xl">
+          {categories.data && categories.data.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {categories.data.filter((c) => c.active !== false).map((c) => <button key={c._id} onClick={() => setCategory(c._id === category ? null : c._id)} className={cx('rounded-full px-3.5 py-1.5 text-sm font-semibold', category === c._id ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>{c.name}</button>)}
+            </div>
+          )}
+          {!category ? <p className="text-sm text-ink-500">Choose a category.</p> : results.isFetching ? <Spinner /> : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+              {results.data?.map((p) => (
+                <button key={p._id} onClick={() => addProduct(p)} className="card p-3 text-left transition hover:border-brand-500">
+                  <div className="line-clamp-2 font-semibold">{p.name}</div>
+                  <div className="mt-1 flex items-center justify-between text-sm"><span className="text-ink-500">{p.sku}</span><span className="font-semibold">{money(p.prices?.[cart.priceList] ?? p.prices?.retail)}</span></div>
+                  <div className={cx('mt-1 text-xs', (p.stock?.qty ?? 0) <= 0 ? 'text-red-600' : 'text-ink-500')}>In stock: {fmtQty(p.stock?.qty)} {p.baseUnit}</div>
+                </button>
+              ))}
+              {results.data && !results.data.length && <p className="text-sm text-ink-500">No products in this category.</p>}
+            </div>
+          )}
+        </Modal>
+      )}
 
       {customerOpen && <CustomerPicker onClose={() => setCustomerOpen(false)} onPick={(c) => { setCustomerOpen(false); const next = { ...cart, customer: c, priceList: (c?.priceList as PriceListKey) && caps.priceLists.includes(c?.priceList as PriceListKey) ? (c!.priceList as PriceListKey) : cart.priceList }; requoteAll(next); }} />}
       {paying && (
@@ -338,36 +424,54 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   );
 }
 
-function CartLine({ line, allowFraction, showUnits, canDiscount, onChange, onRemove }: { line: Line; allowFraction: boolean; showUnits: boolean; canDiscount: boolean; onChange: (p: Partial<Line>) => void; onRemove: () => void }) {
-  const [open, setOpen] = useState(false);
+/** One row of the transaction lines table: click to select it, quantity stepper inline. */
+function SaleRow({ line, selected, allowFraction, big, onSelect, onChange, onRemove, onEdit }: { line: Line; selected: boolean; allowFraction: boolean; big: boolean; onSelect: () => void; onChange: (p: Partial<Line>) => void; onRemove: () => void; onEdit: () => void }) {
   const step = allowFraction ? 0.5 : 1;
   const total = lineAmount(line.qty, line.unitPriceCents) - line.discountCents;
   return (
-    <li className="px-3 py-2">
-      <div className="flex items-start gap-2">
-        <button className="min-w-0 flex-1 text-left" onClick={() => setOpen((o) => !o)}>
-          <div className="truncate text-sm font-medium">{line.product.name}</div>
-          <div className="text-xs text-ink-500">{money(line.unitPriceCents)} / {line.unitCode}{line.promotion && <span className="ml-1 text-emerald-600">promo</span>}{line.unitPriceCents !== line.quotedCents && <span className="ml-1 text-amber-600">price changed</span>}</div>
-        </button>
-        <div className="flex items-center gap-1">
-          <button aria-label="Decrease" className="rounded bg-ink-100 p-1.5 dark:bg-ink-800" onClick={() => line.qty - step > 0 ? onChange({ qty: roundQty(line.qty - step) }) : onRemove()}><Icon name="minus" className="h-3.5 w-3.5" /></button>
-          <input aria-label="Quantity" className="w-14 rounded border border-ink-200 bg-transparent px-1 py-1 text-center text-sm tabular-nums dark:border-ink-700" value={line.qty} inputMode="decimal"
+    <tr onClick={onSelect} onDoubleClick={onEdit} aria-selected={selected}
+      className={cx('cursor-pointer border-b border-ink-50 transition dark:border-ink-800', selected ? 'bg-brand-50/70 shadow-[inset_3px_0_0_theme(colors.brand.500)] dark:bg-brand-500/10' : 'hover:bg-[#f7f8fa] dark:hover:bg-ink-800/40')}>
+      <td className={cx('px-5', big ? 'py-4' : 'py-3')}>
+        <div className="text-[15px] font-extrabold uppercase text-ink-900 dark:text-white">{line.product.name}</div>
+        <div className="mt-0.5 text-xs font-medium uppercase tracking-wide text-ink-400">SKU: {line.product.sku}{line.promotion && <span className="ml-2 normal-case text-emerald-600">promo</span>}{line.unitPriceCents !== line.quotedCents && <span className="ml-2 normal-case text-amber-600">price changed</span>}</div>
+      </td>
+      <td className="px-3 text-center"><span className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] font-bold uppercase text-ink-600 dark:border-ink-700">{line.unitCode}</span></td>
+      <td className="px-3 text-right font-mono tabular-nums">{money(line.unitPriceCents)}</td>
+      <td className="px-3" onClick={(e) => e.stopPropagation()}>
+        <div className="mx-auto flex w-fit items-center rounded-full border border-ink-200 bg-white shadow-sm dark:border-ink-700 dark:bg-ink-900">
+          <button type="button" aria-label="Decrease" className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-ink-100 dark:hover:bg-ink-800" onClick={() => (line.qty - step > 0 ? onChange({ qty: roundQty(line.qty - step) }) : onRemove())}><Icon name="minus" className="h-4 w-4" /></button>
+          <input aria-label="Quantity" className="w-12 bg-transparent text-center font-bold tabular-nums focus:outline-none" value={line.qty} inputMode="decimal" onFocus={onSelect}
             onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n > 0) onChange({ qty: allowFraction ? roundQty(n) : Math.round(n) }); }} />
-          <button aria-label="Increase" className="rounded bg-ink-100 p-1.5 dark:bg-ink-800" onClick={() => onChange({ qty: roundQty(line.qty + step) })}><Icon name="plus" className="h-3.5 w-3.5" /></button>
+          <button type="button" aria-label="Increase" className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-ink-100 dark:hover:bg-ink-800" onClick={() => onChange({ qty: roundQty(line.qty + step) })}><Icon name="plus" className="h-4 w-4" /></button>
         </div>
-        <div className="w-24 text-right text-sm font-semibold tabular-nums">{money(total)}</div>
-      </div>
-      {open && (
-        <div className="mt-2 grid grid-cols-2 gap-2 rounded-lg bg-ink-50 p-2 dark:bg-ink-800/50">
-          {showUnits && <Field label="Unit"><Select value={line.unitCode} onChange={(e) => onChange({ unitCode: e.target.value })} options={line.product.units.map((u) => ({ value: u.code, label: `${u.name} (${u.factor} ${line.product.baseUnit})` }))} /></Field>}
-          <Field label="Unit price"><MoneyInput value={line.unitPriceCents} onChange={(v) => onChange({ unitPriceCents: v ?? 0 })} /></Field>
-          {canDiscount && <Field label="Line discount"><MoneyInput value={line.discountCents} onChange={(v) => onChange({ discountCents: v ?? 0 })} /></Field>}
-          {line.product.trackSerials && <Field label={`Serial / IMEI (${line.qty})`} className="col-span-2"><Input value={line.serials.join(', ')} onChange={(e) => onChange({ serials: e.target.value.split(/[,\s]+/).filter(Boolean) })} placeholder="Scan serial numbers" /></Field>}
-          {line.product.requiresPrescription && <Field label="Prescription reference" className="col-span-2"><Input value={line.prescriptionRef ?? ''} onChange={(e) => onChange({ prescriptionRef: e.target.value })} /></Field>}
-          <Button size="sm" variant="ghost" className="col-span-2 text-red-600" onClick={onRemove}>Remove item</Button>
-        </div>
-      )}
-    </li>
+      </td>
+      <td className="px-3 text-right font-mono tabular-nums text-red-600">{line.discountCents ? `-${money(line.discountCents)}` : <span className="text-ink-300">—</span>}</td>
+      <td className="px-5 text-right font-mono text-[15px] font-bold tabular-nums">{money(total)}</td>
+    </tr>
+  );
+}
+
+/** Edit the selected line: quantity, unit, price, discount, serials, prescription. */
+function LineModal({ line, focus, allowFraction, canDiscount, onClose, onSave, onRemove }: { line: Line; focus: 'qty' | 'discount'; allowFraction: boolean; canDiscount: boolean; onClose: () => void; onSave: (p: Partial<Line>) => void; onRemove: () => void }) {
+  const [d, setD] = useState({ qty: String(line.qty), unitCode: line.unitCode, unitPriceCents: line.unitPriceCents as number | null, discountCents: line.discountCents as number | null, serials: line.serials.join(', '), prescriptionRef: line.prescriptionRef ?? '' });
+  const save = () => {
+    const n = Number(d.qty);
+    if (!Number.isFinite(n) || n <= 0) return;
+    onSave({ qty: allowFraction ? roundQty(n) : Math.round(n), unitCode: d.unitCode !== line.unitCode ? d.unitCode : undefined, unitPriceCents: d.unitPriceCents ?? 0, discountCents: d.discountCents ?? 0, serials: d.serials.split(/[,\s]+/).filter(Boolean), prescriptionRef: d.prescriptionRef || undefined });
+  };
+  return (
+    <Modal open onClose={onClose} title={line.product.name} subtitle={`SKU ${line.product.sku} · ${money(line.unitPriceCents)} per ${line.unitCode}`} icon="box" size="md"
+      footer={<><Button variant="ghost" className="mr-auto text-red-600" onClick={onRemove}><Icon name="trash" className="h-4 w-4" />Remove item</Button><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={save}>Apply</Button></>}>
+      <form className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); save(); }}>
+        <Field label="Quantity"><Input autoFocus={focus === 'qty'} inputMode="decimal" value={d.qty} onChange={(e) => setD({ ...d, qty: e.target.value })} /></Field>
+        {line.product.units.length > 1 && <Field label="Unit"><Select value={d.unitCode} onChange={(e) => setD({ ...d, unitCode: e.target.value })} options={line.product.units.map((u) => ({ value: u.code, label: `${u.name} (${u.factor} ${line.product.baseUnit})` }))} /></Field>}
+        <Field label="Unit price"><MoneyInput value={d.unitPriceCents} onChange={(v) => setD({ ...d, unitPriceCents: v })} /></Field>
+        {canDiscount && <Field label="Line discount"><MoneyInput autoFocus={focus === 'discount'} value={d.discountCents} onChange={(v) => setD({ ...d, discountCents: v })} /></Field>}
+        {line.product.trackSerials && <Field label={`Serial / IMEI (${d.qty})`} className="sm:col-span-2"><Input value={d.serials} onChange={(e) => setD({ ...d, serials: e.target.value })} placeholder="Scan serial numbers" /></Field>}
+        {line.product.requiresPrescription && <Field label="Prescription reference" className="sm:col-span-2"><Input value={d.prescriptionRef} onChange={(e) => setD({ ...d, prescriptionRef: e.target.value })} /></Field>}
+        <button type="submit" className="hidden" />
+      </form>
+    </Modal>
   );
 }
 
