@@ -11,7 +11,9 @@ import { cx, QueryRefreshCtx, useToast } from '../components/ui';
 import { applyTheme, getWorkstation, setWorkstation } from '../lib/workstation';
 import { connectRealtime, disconnectRealtime, useRealtime } from '../lib/realtime';
 
-const GROUPS: Record<string, string> = { sell: 'Sales', stock: 'Stock', buy: 'Suppliers & purchasing', parties: 'Customers & marketing', people: 'People', finance: 'Finance', admin: 'Administration' };
+const GROUPS: Record<string, string> = { sell: 'Sales', stock: 'Inventory', buy: 'Suppliers & purchasing', parties: 'Customers & marketing', people: 'People', finance: 'Finance', admin: 'Administration' };
+
+const GROUP_ICONS: Record<string, string> = { sell: 'cart', stock: 'box', buy: 'truck', parties: 'users', people: 'user', finance: 'wallet', admin: 'settings' };
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
 
@@ -39,6 +41,7 @@ export function AppShell() {
   const [menu, setMenu] = useState(false);
   const [search, setSearch] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
+  const alerts = useQuery({ queryKey: ['stock-alert-count'], queryFn: () => api<{ data: { counts: { total: number } } }>('/inventory/alerts', { query: { summary: 'true' } }).then((r) => r.data.counts.total), enabled: Boolean(me) && can('inventory.read') && has('inventory'), refetchInterval: 120_000 });
   const dashboard = useQuery({ queryKey: ['dashboard'], queryFn: () => api<{ data: any }>('/reports/dashboard').then((r) => r.data), enabled: Boolean(me) && can('reports.read') && has('reports'), refetchInterval: 60_000 });
 
   useEffect(() => {
@@ -65,6 +68,15 @@ export function AppShell() {
     return best;
   }, [me, loc.pathname]);
 
+  // Sidebar groups fold open and closed (remembered on this computer); the group of the open page stays open.
+  const [folded, setFolded] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem('afey.nav.folded') ?? '{}'); } catch { return {}; }
+  });
+  const toggleGroup = (g: string) => setFolded((f) => {
+    const next = { ...f, [g]: !f[g] };
+    try { localStorage.setItem('afey.nav.folded', JSON.stringify(next)); } catch { /* ignore */ }
+    return next;
+  });
   const pwa = usePwa();
   // Checkout rules can hide pages from cashiers: send them to checkout instead.
   const blocked = me?.blockedPaths ?? [];
@@ -106,6 +118,14 @@ export function AppShell() {
     else if (can('products.read')) nav(`/products?q=${encodeURIComponent(q)}`);
     else if (can('customers.read')) nav(`/customers?q=${encodeURIComponent(q)}`);
   };
+  const badges: Record<string, number> = { stockAlerts: alerts.data ?? 0 };
+  const child = (n: { key: string; path: string; label: string }) => (
+    <NavLink key={n.key} to={n.path} end={n.path === '/inventory' || n.path === '/settings'} onClick={close}
+      className={({ isActive }) => cx('flex items-center gap-2 border-l-[3px] py-[7px] pl-11 pr-3 text-[12.5px] transition-colors', isActive ? 'border-brand-500 bg-side-active font-semibold text-white' : 'border-transparent text-side-text hover:bg-side-hover hover:text-white')}>
+      <span className="truncate">{n.label}</span>
+      {badges[n.key] ? <span className="ml-auto min-w-[20px] rounded-full bg-brand-500 px-1.5 text-center text-[10px] font-bold leading-5 text-white" aria-label={`${badges[n.key]} alerts`}>{badges[n.key]}</span> : null}
+    </NavLink>
+  );
   const item = (n: { key: string; path: string; icon: string; label: string }, end = false) => (
     <NavLink key={n.key} to={n.path} end={end || n.path === '/inventory' || n.path === '/settings'} onClick={close} title={mini ? n.label : undefined}
       className={({ isActive }) => cx('flex items-center gap-2.5 border-l-[3px] py-[7px] text-[12.5px] transition-colors', mini ? 'justify-center px-0' : 'pl-4 pr-3', isActive ? 'border-brand-500 bg-side-active font-semibold text-white' : 'border-transparent text-side-text hover:bg-side-hover hover:text-white')}>
@@ -140,12 +160,23 @@ export function AppShell() {
             {label('Menu')}
             {!isBlocked('/') && item({ key: 'dashboard', path: '/', icon: 'home', label: 'Dashboard' }, true)}
             {!isBlocked('/support') && item({ key: 'support', path: '/support', icon: 'headset', label: 'Support' })}
-            {groups.map(({ g, items }) => (
-              <div key={g}>
-                {label(GROUPS[g])}
-                {items.map((n) => item(n))}
-              </div>
-            ))}
+            {groups.map(({ g, items }) => {
+              if (mini) return <div key={g}>{label(GROUPS[g])}{items.map((n) => item(n))}</div>;
+              const here = current?.group === g && current.key !== 'dashboard';
+              const openGroup = here || !folded[g];
+              return (
+                <div key={g} className="mt-1">
+                  <button type="button" onClick={() => toggleGroup(g)} aria-expanded={openGroup}
+                    className={cx('flex w-full items-center gap-2.5 py-2 pl-4 pr-3 text-left text-[13px] font-semibold transition-colors hover:bg-side-hover hover:text-white', here ? 'text-white' : 'text-side-text')}>
+                    <Icon name={GROUP_ICONS[g] ?? 'grid'} className="h-[17px] w-[17px] shrink-0" />
+                    <span className="flex-1 truncate">{GROUPS[g]}</span>
+                    {here && <span className="h-1.5 w-1.5 rounded-full bg-brand-500" aria-hidden="true" />}
+                    <Icon name="chevron" className={cx('h-3 w-3 shrink-0 transition-transform', openGroup ? '-rotate-90' : 'rotate-90')} />
+                  </button>
+                  {openGroup && <div className="border-l border-white/5 ml-0">{items.map((n) => child(n))}</div>}
+                </div>
+              );
+            })}
             {label('You')}
             {item({ key: 'account', path: '/account', icon: 'user', label: 'My account' })}
             {!mini && d && <>

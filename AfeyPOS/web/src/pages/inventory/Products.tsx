@@ -100,6 +100,10 @@ export function ProductEditPage() {
   const has = (f: ProductField) => caps.productFields.includes(f);
   const locs = useLocations();
   const cats = useQuery({ queryKey: ['categories'], queryFn: () => api<{ data: any[] }>('/categories').then((r) => r.data) });
+  const brands = useQuery({ queryKey: ['brands'], queryFn: () => api<{ data: any[] }>('/brands').then((r) => r.data) });
+  // Units from Inventory > Units, plus the standard ones.
+  const unitList = useQuery({ queryKey: ['units'], queryFn: () => api<{ data: any[] }>('/units').then((r) => r.data) });
+  const unitOptions = [...new Map([...STANDARD_UNITS.map((u) => [u.code, `${u.name} (${u.code})`] as const), ...(unitList.data ?? []).filter((u) => u.active !== false && !u.unlisted).map((u) => [u.code, `${u.name} (${u.code})`] as const)]).entries()].map(([value, label]) => ({ value, label }));
   const existing = useQuery({ queryKey: ['product', id], queryFn: () => api<{ data: any }>(`/products/${id}`).then((r) => r.data), enabled: !isNew });
   const [p, setP] = useState<ProductForm>(emptyProduct(caps.units[0]));
   const [opening, setOpening] = useState<{ qty: string; costCents: number | null; batchNo: string; expiryDate: string; serials: string }>({ qty: '', costCents: null, batchNo: '', expiryDate: '', serials: '' });
@@ -119,8 +123,8 @@ export function ProductEditPage() {
     setBusy(true);
     setError(null);
     try {
-      const body: ProductForm = { ...p, categoryId: p.categoryId || null, plu: p.plu || null, prices: Object.fromEntries(Object.entries(p.prices).filter(([, v]) => v !== null && v !== undefined)) };
-      for (const k of ['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants', 'stock', 'brandId', 'parentId'] as const) delete body[k];
+      const body: ProductForm = { ...p, categoryId: p.categoryId || null, brandId: p.brandId || null, plu: p.plu || null, prices: Object.fromEntries(Object.entries(p.prices).filter(([, v]) => v !== null && v !== undefined)) };
+      for (const k of ['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants', 'stock', 'parentId'] as const) delete body[k];
       if (isNew && opening.qty && Number(opening.qty) > 0) {
         const wh = locs.data?.warehouses.find((w) => w.isDefault) ?? locs.data?.warehouses[0];
         body.openingStock = [{ warehouseId: wh?._id, qty: Number(opening.qty), unitCostCents: opening.costCents ?? p.costCents, batchNo: opening.batchNo || undefined, expiryDate: opening.expiryDate || undefined, serials: opening.serials ? opening.serials.split(/[,\s]+/).filter(Boolean) : undefined }];
@@ -143,8 +147,9 @@ export function ProductEditPage() {
             <Field label="Name" className="sm:col-span-2"><Input value={p.name} onChange={(e) => set('name', e.target.value)} /></Field>
             <Field label="SKU / code"><Input value={p.sku} onChange={(e) => set('sku', e.target.value)} /></Field>
             <Field label="Category"><Select value={p.categoryId} onChange={(e) => set('categoryId', e.target.value)} placeholder="None" options={(cats.data ?? []).map((c) => ({ value: c._id, label: c.name }))} /></Field>
+            <Field label="Brand"><Select value={p.brandId ?? ''} onChange={(e) => set('brandId', e.target.value)} placeholder="None" options={(brands.data ?? []).map((b) => ({ value: b._id, label: b.name }))} /></Field>
             <Field label="Type"><Select value={p.type} onChange={(e) => set('type', e.target.value)} options={[{ value: 'stock', label: 'Stocked item' }, { value: 'service', label: 'Service' }, { value: 'non_stock', label: 'Non-stock item' }]} /></Field>
-            <Field label="Base unit (stock is counted in this unit)"><Select value={p.baseUnit} onChange={(e) => set('baseUnit', e.target.value)} options={STANDARD_UNITS.map((u) => ({ value: u.code, label: `${u.name} (${u.code})` }))} /></Field>
+            <Field label="Base unit (stock is counted in this unit)"><Select value={p.baseUnit} onChange={(e) => set('baseUnit', e.target.value)} options={unitOptions.some((u) => u.value === p.baseUnit) ? unitOptions : [{ value: p.baseUnit, label: p.baseUnit }, ...unitOptions]} /></Field>
             {ATTRIBUTE_FIELDS.filter(has).map((f) => (
               <Field key={f} label={FIELD_LABELS[f]!} hint={FIELD_HINTS[f]}>
                 {FIELD_OPTIONS[f] ? (
@@ -242,7 +247,7 @@ export function ProductEditPage() {
               const upd = (patch: any) => set('units', [p.units.find((x: any) => x.code === p.baseUnit), ...units.map((x: any, j: number) => (j === i ? { ...x, ...patch } : x))].filter(Boolean));
               return (
                 <div key={i} className="mb-2 grid gap-2 sm:grid-cols-6">
-                  <Input placeholder="Code" value={u.code} onChange={(e) => upd({ code: e.target.value })} />
+                  <Input placeholder="Code" list="afey-units" value={u.code} onChange={(e) => { const known = unitList.data?.find((x) => x.code === e.target.value); upd({ code: e.target.value, ...(known && !u.name ? { name: known.name } : {}) }); }} />
                   <Input placeholder="Name" value={u.name} onChange={(e) => upd({ name: e.target.value })} />
                   <Input placeholder={`Factor (${p.baseUnit})`} type="number" step="any" value={u.factor} onChange={(e) => upd({ factor: Number(e.target.value) })} />
                   {caps.priceLists.slice(0, 2).map((pl) => <MoneyInput key={pl} placeholder={`${pl} price`} value={u.prices?.[pl]} onChange={(v) => upd({ prices: { ...u.prices, [pl]: v } })} />)}
@@ -250,6 +255,7 @@ export function ProductEditPage() {
                 </div>
               );
             })}
+            <datalist id="afey-units">{unitOptions.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}</datalist>
             <Button size="sm" variant="secondary" onClick={() => set('units', [...(p.units.length ? p.units : [{ code: p.baseUnit, name: p.baseUnit, factor: 1, prices: {} }]), { code: '', name: '', factor: 1, prices: {} }])}>Add unit</Button>
           </Card>
         )}

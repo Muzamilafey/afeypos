@@ -4,7 +4,7 @@ const port = Number(process.env.E2E_PORT ?? 4100);
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['checkout.spec.ts', 'mpesa.spec.ts', 'gateway.spec.ts', 'staff.spec.ts', 'hr.spec.ts', 'ledger-crm.spec.ts', 'shop.spec.ts', 'suppliers.spec.ts', 'roles.spec.ts', 'receipts.spec.ts', 'till-rules.spec.ts', 'vouchers-loyalty.spec.ts'],
+  testMatch: ['checkout.spec.ts', 'mpesa.spec.ts', 'gateway.spec.ts', 'staff.spec.ts', 'hr.spec.ts', 'ledger-crm.spec.ts', 'shop.spec.ts', 'suppliers.spec.ts', 'roles.spec.ts', 'receipts.spec.ts', 'till-rules.spec.ts', 'vouchers-loyalty.spec.ts', 'inventory-menu.spec.ts'],
   timeout: 60_000,
   workers: 1,
   reporter: [['list']],

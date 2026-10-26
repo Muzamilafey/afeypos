@@ -18,7 +18,7 @@ test('gift vouchers and the loyalty program, from the back office to the till', 
   await page.reload();
 
   // Gift voucher: a KES 100 promotion voucher.
-  await page.getByRole('link', { name: 'Gift vouchers', exact: true }).click();
+  await page.getByRole('link', { name: 'Vouchers', exact: true }).click();
   await page.getByRole('button', { name: 'Issue vouchers' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Value of each voucher').fill('100');

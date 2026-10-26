@@ -12,6 +12,14 @@ const brandSchema = new Schema({ name: { type: String, required: true } }, { tim
 brandSchema.index({ tenantId: 1, name: 1 }, { unique: true });
 export const Brand = tenantModel('Brand', brandSchema);
 
+/** Units of measure offered when setting up products (pc, kg, litre, carton...). Products keep their own conversions. */
+const unitSchema = new Schema(
+  { code: { type: String, required: true, trim: true, lowercase: true }, name: { type: String, required: true, trim: true }, allowFractional: { type: Boolean, default: false }, active: { type: Boolean, default: true } },
+  { timestamps: true },
+);
+unitSchema.index({ tenantId: 1, code: 1 }, { unique: true });
+export const UnitOfMeasure = tenantModel('UnitOfMeasure', unitSchema);
+
 const priceMapSchema = new Schema(
   { retail: Number, wholesale: Number, contractor: Number },
   { _id: false },

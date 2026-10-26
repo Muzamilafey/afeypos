@@ -28,6 +28,7 @@ import { SyncPage } from './pages/settings/Sync';
 import { ReceiptSettingsPage } from './pages/settings/Receipts';
 import { CheckoutRulesPage } from './pages/settings/CheckoutRules';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
+import { BarcodeVerifyPage, BrandsPage, CategoriesPage, StockAlertsPage, UnitsPage } from './pages/inventory/Catalog';
 import { EtimsPage } from './pages/Etims';
 
 function Protected({ children }: { children: ReactNode }) {
@@ -66,6 +67,11 @@ export function App() {
         <Route path="products" element={<Gate perm="products.read"><ProductsPage /></Gate>} />
         <Route path="products/:id" element={<Gate perm="products.read"><ProductEditPage /></Gate>} />
         <Route path="inventory" element={<Gate perm="inventory.read"><StockLevelsPage /></Gate>} />
+        <Route path="inventory/units" element={<Gate perm="products.read"><UnitsPage /></Gate>} />
+        <Route path="inventory/categories" element={<Gate perm="products.read"><CategoriesPage /></Gate>} />
+        <Route path="inventory/brands" element={<Gate perm="products.read"><BrandsPage /></Gate>} />
+        <Route path="inventory/alerts" element={<Gate perm="inventory.read"><StockAlertsPage /></Gate>} />
+        <Route path="inventory/barcode-verify" element={<Gate perm="products.read"><BarcodeVerifyPage /></Gate>} />
         <Route path="inventory/movements" element={<Gate perm="inventory.read"><MovementsPage /></Gate>} />
         <Route path="inventory/adjustments" element={<Gate perm="inventory.adjust"><AdjustmentsPage /></Gate>} />
         <Route path="inventory/transfers" element={<Gate perm="inventory.transfer" module="stockTransfers"><TransfersPage /></Gate>} />

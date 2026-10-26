@@ -2,11 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { Types } from 'mongoose';
 import { normalizeIsbn, PRICE_LISTS, parseVariableWeightBarcode, PRODUCT_FIELDS, type VariableWeightConfig } from '@afeypos/shared';
-import { Brand, Category, CustomerPrice, Product, Promotion, StockLevel, Warehouse } from '../../models/index.js';
+import { Brand, Category, CustomerPrice, Product, Promotion, StockLevel, UnitOfMeasure, Warehouse } from '../../models/index.js';
 import { escapeRegex, idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { requireModule, requirePermission } from '../../http/auth.js';
 import { withTransaction } from '../../db/connection.js';
-import { badRequest, notFound } from '../../lib/errors.js';
+import { AppError, badRequest, notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { applyMovement } from '../inventory/stock.js';
 import { quotePrice } from './pricing.js';
@@ -93,26 +93,139 @@ function normalizeProduct(p: ProductInput, caps: { productFields: readonly strin
 }
 
 
-// ---- categories & brands ----
-router.get('/categories', requirePermission('products.read'), async (_req, res) => {
-  res.json({ data: await Category.find({}).sort({ sortOrder: 1, name: 1 }).lean() });
+// ---- categories, brands and units ----
+/** Products per category / brand, for the lists (and to refuse deleting what is in use). */
+async function countBy(field: 'categoryId' | 'brandId') {
+  const rows = await Product.aggregate([{ $match: { [field]: { $ne: null } } }, { $group: { _id: `$${field}`, n: { $sum: 1 } } }]);
+  return new Map(rows.map((r) => [String(r._id), r.n as number]));
+}
+
+router.get('/categories', requirePermission('products.read'), async (req, res) => {
+  const rows = await Category.find({}).sort({ sortOrder: 1, name: 1 }).lean();
+  if (req.query.withCounts !== 'true') return void res.json({ data: rows });
+  const n = await countBy('categoryId');
+  res.json({ data: rows.map((c) => ({ ...c, productCount: n.get(String(c._id)) ?? 0 })) });
 });
 router.post('/categories', requirePermission('products.manage'), async (req, res) => {
   const body = parse(z.object({ name: z.string().trim().min(1).max(80), parentId: objectId.nullish(), color: z.string().max(20).optional(), sortOrder: z.number().int().default(0) }), req.body);
+  if (await Category.exists({ name: body.name })) throw new AppError(409, 'DUPLICATE', `A category called "${body.name}" already exists`);
   res.status(201).json({ data: await Category.create(body) });
 });
 router.patch('/categories/:id', requirePermission('products.manage'), async (req, res) => {
   const body = parse(z.object({ name: z.string().trim().min(1).max(80), parentId: objectId.nullish(), color: z.string().max(20), sortOrder: z.number().int(), active: z.boolean() }).partial(), req.body);
+  if (body.parentId && String(body.parentId) === String(req.params.id)) throw badRequest('A category cannot be inside itself');
   const c = await Category.findOneAndUpdate({ _id: idParam(req.params.id) }, { $set: body }, { new: true });
   if (!c) throw notFound('Category');
   res.json({ data: c });
 });
-router.get('/brands', requirePermission('products.read'), async (_req, res) => {
-  res.json({ data: await Brand.find({}).sort({ name: 1 }).lean() });
+router.delete('/categories/:id', requirePermission('products.manage'), async (req, res) => {
+  const id = idParam(req.params.id);
+  const used = await Product.countDocuments({ categoryId: id });
+  if (used) throw new AppError(409, 'IN_USE', `${used} product(s) are in this category: move them first, or hide the category instead`);
+  if (await Category.exists({ parentId: id })) throw new AppError(409, 'IN_USE', 'Other categories are inside this one');
+  const c = await Category.findOneAndDelete({ _id: id });
+  if (!c) throw notFound('Category');
+  await recordTombstone(Category.collection.collectionName, id);
+  await audit(req, { action: 'category.deleted', entity: 'Category', entityId: id, details: { name: c.name } });
+  res.json({ ok: true });
+});
+
+router.get('/brands', requirePermission('products.read'), async (req, res) => {
+  const rows = await Brand.find({}).sort({ name: 1 }).lean();
+  if (req.query.withCounts !== 'true') return void res.json({ data: rows });
+  const n = await countBy('brandId');
+  res.json({ data: rows.map((b) => ({ ...b, productCount: n.get(String(b._id)) ?? 0 })) });
 });
 router.post('/brands', requirePermission('products.manage'), async (req, res) => {
   const body = parse(z.object({ name: z.string().trim().min(1).max(80) }), req.body);
+  if (await Brand.exists({ name: body.name })) throw new AppError(409, 'DUPLICATE', `A brand called "${body.name}" already exists`);
   res.status(201).json({ data: await Brand.create(body) });
+});
+router.patch('/brands/:id', requirePermission('products.manage'), async (req, res) => {
+  const body = parse(z.object({ name: z.string().trim().min(1).max(80) }), req.body);
+  const b = await Brand.findOneAndUpdate({ _id: idParam(req.params.id) }, { $set: body }, { new: true });
+  if (!b) throw notFound('Brand');
+  res.json({ data: b });
+});
+router.delete('/brands/:id', requirePermission('products.manage'), async (req, res) => {
+  const id = idParam(req.params.id);
+  const used = await Product.countDocuments({ brandId: id });
+  if (used) throw new AppError(409, 'IN_USE', `${used} product(s) have this brand: change them first`);
+  const b = await Brand.findOneAndDelete({ _id: id });
+  if (!b) throw notFound('Brand');
+  await recordTombstone(Brand.collection.collectionName, id);
+  await audit(req, { action: 'brand.deleted', entity: 'Brand', entityId: id, details: { name: b.name } });
+  res.json({ ok: true });
+});
+
+const DEFAULT_UNITS = [
+  { code: 'pc', name: 'Piece', allowFractional: false }, { code: 'kg', name: 'Kilogram', allowFractional: true }, { code: 'g', name: 'Gram', allowFractional: true },
+  { code: 'l', name: 'Litre', allowFractional: true }, { code: 'ml', name: 'Millilitre', allowFractional: true }, { code: 'pkt', name: 'Packet', allowFractional: false },
+  { code: 'ctn', name: 'Carton', allowFractional: false }, { code: 'dz', name: 'Dozen', allowFractional: false }, { code: 'bale', name: 'Bale', allowFractional: false },
+  { code: 'crate', name: 'Crate', allowFractional: false }, { code: 'm', name: 'Metre', allowFractional: true }, { code: 'bag', name: 'Bag', allowFractional: false },
+];
+
+/** Units of measure, with how many products use each as their base or extra unit. Common units are added once. */
+router.get('/units', requirePermission('products.read'), async (_req, res) => {
+  if (!(await UnitOfMeasure.exists({}))) await UnitOfMeasure.insertMany(DEFAULT_UNITS, { ordered: false }).catch(() => undefined);
+  const [units, base, extra] = await Promise.all([
+    UnitOfMeasure.find({}).sort({ code: 1 }).lean(),
+    Product.aggregate([{ $group: { _id: '$baseUnit', n: { $sum: 1 } } }]),
+    Product.aggregate([{ $unwind: '$units' }, { $group: { _id: '$units.code', n: { $sum: 1 } } }]),
+  ]);
+  const usage = new Map<string, number>();
+  for (const r of [...base, ...extra]) usage.set(String(r._id).toLowerCase(), (usage.get(String(r._id).toLowerCase()) ?? 0) + r.n);
+  const known = new Set(units.map((u) => u.code));
+  // Units products already use but that are not in the list yet.
+  const unlisted = [...usage.keys()].filter((c) => !known.has(c)).map((code) => ({ _id: null, code, name: code, allowFractional: false, active: true, unlisted: true }));
+  res.json({ data: [...units, ...unlisted].map((u) => ({ ...u, productCount: usage.get(u.code) ?? 0 })) });
+});
+const unitBody = z.object({ code: z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{1,12}$/, 'Short code: letters and digits, e.g. kg, ctn24'), name: z.string().trim().min(1).max(40), allowFractional: z.boolean().default(false), active: z.boolean().default(true) });
+router.post('/units', requirePermission('products.manage'), async (req, res) => {
+  const body = parse(unitBody, req.body);
+  if (await UnitOfMeasure.exists({ code: body.code })) throw new AppError(409, 'DUPLICATE', `Unit "${body.code}" already exists`);
+  res.status(201).json({ data: await UnitOfMeasure.create(body) });
+});
+router.patch('/units/:id', requirePermission('products.manage'), async (req, res) => {
+  const body = parse(unitBody.omit({ code: true }).partial(), req.body);
+  const u = await UnitOfMeasure.findOneAndUpdate({ _id: idParam(req.params.id) }, { $set: body }, { new: true });
+  if (!u) throw notFound('Unit');
+  res.json({ data: u });
+});
+router.delete('/units/:id', requirePermission('products.manage'), async (req, res) => {
+  const u = await UnitOfMeasure.findById(idParam(req.params.id));
+  if (!u) throw notFound('Unit');
+  const used = await Product.countDocuments({ $or: [{ baseUnit: u.code }, { 'units.code': u.code }] });
+  if (used) throw new AppError(409, 'IN_USE', `${used} product(s) use "${u.code}": hide it instead`);
+  await u.deleteOne();
+  await recordTombstone(UnitOfMeasure.collection.collectionName, u._id);
+  res.json({ ok: true });
+});
+
+/**
+ * Barcode check: is the code well formed (EAN-13, EAN-8, UPC-A check digit), is it a scale barcode, and which
+ * product (and unit) it belongs to. Used by Barcode verify before printing labels or receiving stock.
+ */
+router.get('/barcodes/verify', requirePermission('products.read'), async (req, res) => {
+  const { code } = parse(z.object({ code: z.string().trim().min(1).max(64) }), req.query);
+  const digits = /^\d+$/.test(code);
+  const gtinOk = (c: string) => {
+    const d = c.split('').map(Number);
+    const check = d.pop()!;
+    const sum = d.reverse().reduce((a, n, i) => a + n * (i % 2 === 0 ? 3 : 1), 0);
+    return (10 - (sum % 10)) % 10 === check;
+  };
+  const format = !digits ? 'Code 128 / text' : code.length === 13 ? 'EAN-13' : code.length === 8 ? 'EAN-8' : code.length === 12 ? 'UPC-A' : code.length === 14 ? 'GTIN-14' : 'Numeric';
+  const checkDigit = digits && [8, 12, 13, 14].includes(code.length) ? gtinOk(code) : null;
+  const isbn = normalizeIsbn(code);
+  const scale = req.capabilities!.modules.includes('weighedItems') ? parseVariableWeightBarcode(code, req.tenant!.settings!.variableWeight as unknown as VariableWeightConfig) : null;
+  const matches = await Product.find({ $or: [{ 'barcodes.code': code }, { sku: code }, { plu: code }, ...(isbn && isbn !== code ? [{ 'barcodes.code': isbn }] : [])] }, { name: 1, sku: 1, barcodes: 1, baseUnit: 1, prices: 1, active: 1 }).limit(5).lean();
+  const scaleProduct = !matches.length && scale ? await Product.findOne({ plu: { $in: [scale.itemCode, String(Number(scale.itemCode))] } }, { name: 1, sku: 1, baseUnit: 1, prices: 1, active: 1 }).lean() : null;
+  res.json({ data: {
+    code, format, checkDigitValid: checkDigit, isbn: isbn && isbn !== code ? isbn : null, scale: scale ? { ...scale, product: scaleProduct } : null,
+    products: matches.map((p) => ({ ...p, unitCode: p.barcodes?.find((b) => b.code === code)?.unitCode ?? p.baseUnit })),
+    duplicate: matches.filter((p) => p.barcodes?.some((b) => b.code === code)).length > 1,
+  } });
 });
 
 // ---- products ----

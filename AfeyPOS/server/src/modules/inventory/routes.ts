@@ -37,6 +37,42 @@ router.get('/inventory/levels', requirePermission('inventory.read'), async (req,
   res.json({ data: r.data, total: r.total[0]?.n ?? 0, page: q.page, limit: q.limit });
 });
 
+/**
+ * Stock alerts: out of stock, at or below the reorder level, and (with batch tracking) expired or expiring
+ * batches. ?summary=true returns only the counts (the menu badge).
+ */
+router.get('/inventory/alerts', requirePermission('inventory.read'), async (req, res) => {
+  const q = parse(z.object({ warehouseId: objectId.optional(), expiringWithinDays: z.coerce.number().int().min(1).max(365).default(30), summary: z.enum(['true']).optional() }), req.query);
+  const match: Record<string, unknown> = {};
+  if (q.warehouseId) match.warehouseId = q.warehouseId;
+  const levels = await StockLevel.aggregate([
+    { $match: match },
+    { $lookup: { from: 'products', localField: 'productId', foreignField: '_id', as: 'product', pipeline: [{ $match: { tenantId: req.tenant!._id, active: { $ne: false }, trackStock: { $ne: false } } }, { $project: { name: 1, sku: 1, baseUnit: 1, reorderLevel: 1, reorderQty: 1 } }] } },
+    { $unwind: '$product' },
+    { $match: { $or: [{ qty: { $lte: 0 } }, { $expr: { $and: [{ $gt: ['$product.reorderLevel', 0] }, { $lte: ['$qty', '$product.reorderLevel'] }] } }] } },
+    { $lookup: { from: 'warehouses', localField: 'warehouseId', foreignField: '_id', as: 'warehouse', pipeline: [{ $project: { name: 1 } }] } },
+    { $project: { productId: 1, warehouseId: 1, qty: 1, product: 1, warehouse: { $first: '$warehouse.name' } } },
+    { $sort: { qty: 1, 'product.name': 1 } },
+    { $limit: 2000 },
+  ]);
+  // Products that were never stocked have no stock record at all: they are out of stock too.
+  const stocked = await StockLevel.distinct('productId', match);
+  const never = await Product.find({ _id: { $nin: stocked }, active: { $ne: false }, trackStock: { $ne: false }, type: { $in: ['stock', null] } }, { name: 1, sku: 1, baseUnit: 1, reorderLevel: 1, reorderQty: 1 }).limit(500).lean();
+  const out = [...levels.filter((l) => l.qty <= 0), ...never.map((p) => ({ _id: `none:${p._id}`, productId: p._id, qty: 0, product: p, warehouse: '—' }))];
+  const low = levels.filter((l) => l.qty > 0);
+  let expired: any[] = [];
+  let expiring: any[] = [];
+  if (req.capabilities!.modules.includes('batchExpiry')) {
+    const now = new Date();
+    const batches = await StockBatch.find({ ...match, qty: { $gt: 0 }, expiryDate: { $ne: null, $lte: new Date(now.getTime() + q.expiringWithinDays * 86400_000) } }).sort({ expiryDate: 1 }).populate('productId', 'name sku baseUnit').limit(1000).lean();
+    expired = batches.filter((b) => b.expiryDate && b.expiryDate <= now);
+    expiring = batches.filter((b) => b.expiryDate && b.expiryDate > now);
+  }
+  const counts = { outOfStock: out.length, low: low.length, expired: expired.length, expiring: expiring.length, total: out.length + low.length + expired.length + expiring.length };
+  if (q.summary) return void res.json({ data: { counts } });
+  res.json({ data: { counts, outOfStock: out, low, expired, expiring, expiringWithinDays: q.expiringWithinDays } });
+});
+
 router.get('/inventory/movements', requirePermission('inventory.read'), async (req, res) => {
   const q = parse(pagination.extend({ productId: objectId.optional(), warehouseId: objectId.optional(), type: z.string().optional(), from: z.coerce.date().optional(), to: z.coerce.date().optional() }), req.query);
   const filter: Record<string, unknown> = {};
