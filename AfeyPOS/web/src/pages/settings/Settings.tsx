@@ -12,7 +12,7 @@ import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
 import { StaffAccessPanel } from './StaffAccess';
-import { BridgePairingCard, FingerprintReadersCard } from './ThisComputer';
+import { BridgePairingCard, FingerprintReadersCard, ReceiptPrinterCard } from './ThisComputer';
 
 export function BusinessSettingsPage() {
   const { me, reload } = useAuth();
@@ -133,10 +133,8 @@ function WorkstationSettings() {
     <Card title="This computer">
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Till"><Select value={w.tillId ?? ''} onChange={(e) => update({ tillId: e.target.value || undefined })} placeholder="Not set" options={(locs.data?.tills ?? []).map((t) => ({ value: t._id, label: t.name }))} /></Field>
-        <Field label="Receipt width (characters)"><Select value={String(w.receiptWidth ?? 42)} onChange={(e) => update({ receiptWidth: Number(e.target.value) })} options={[{ value: '32', label: '58 mm (32)' }, { value: '42', label: '80 mm (42)' }, { value: '48', label: '80 mm (48)' }]} /></Field>
-        <Checkbox label="Print receipt automatically after each sale" checked={Boolean(w.autoPrint)} onChange={(v) => update({ autoPrint: v })} />
       </div>
-      <p className="mt-3 text-xs text-ink-500">USB/keyboard-wedge barcode scanners work in the checkout search box without configuration. Receipt printers are configured under Hardware.</p>
+      <p className="mt-3 text-xs text-ink-500">USB/keyboard-wedge barcode scanners work in the checkout search box without configuration. Receipt printing (straight to the printer, paper size, automatic printing) is set under <Link className="text-brand-600 hover:underline" to="/settings/hardware">Hardware</Link>.</p>
     </Card>
   );
 }
@@ -659,6 +657,7 @@ export function HardwarePage() {
           <li>Scales, customer displays, RFID and fingerprint readers need the device bridge on the till PC; see docs/HARDWARE.md. Not every model has been tested.</li>
         </ul>
       </Card>
+      <ReceiptPrinterCard />
       <BridgePairingCard />
       <FingerprintReadersCard />
       <div className="card"><DataTable rows={q.data} loading={q.isLoading} empty="No devices configured" columns={[

@@ -7,6 +7,7 @@ import { useList, useLocations } from '../../lib/hooks';
 import { dateTime, money, paymentLabel, qty } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { ReturnWizard } from './Returns';
+import { printReceipt } from '../../lib/printing';
 import { OverrideModal } from '../POS';
 import { EmailDocButton, PdfButton } from '../../components/DocumentActions';
 import { Button, Card, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, useConfirm, useToast } from '../../components/ui';
@@ -62,7 +63,7 @@ export function SaleDetailPage() {
   return (
     <div>
       <PageHeader title={`Sale ${s.number}`} subtitle={dateTime(s.completedAt)} actions={<>
-        <Button variant="secondary" onClick={() => openPrintable(`/sales/${s._id}/receipt?format=html`).catch(toast.error)}>Reprint</Button>
+        <Button variant="secondary" onClick={() => printReceipt(s._id, { reprint: true }).then((how) => how === 'printer' && toast.success('Receipt printed')).catch(toast.error)}>Reprint</Button>
         <Button variant="secondary" onClick={() => openPrintable(`/sales/${s._id}/invoice`).catch(toast.error)}>A4 invoice</Button>
         <PdfButton kind="invoice" id={s._id} label="Invoice PDF" size="md" />
         <EmailDocButton kind="invoice" id={s._id} defaultTo={s.customer?.email} what="Invoice" label="Email invoice" size="md" />

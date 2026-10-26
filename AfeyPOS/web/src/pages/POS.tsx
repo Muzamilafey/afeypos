@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { allocateProportionally, calculateTax, lineAmount, mergeCheckoutRules, roundQty, type PriceListKey } from '@afeypos/shared';
-import { api, ApiError, newRequestId, openPrintable } from '../lib/api';
+import { allocateProportionally, calculateTax, CARD_NETWORKS, KENYA_BANKS, lineAmount, mergeCheckoutRules, roundQty, type PriceListKey } from '@afeypos/shared';
+import { PosTile, type PosTileKind } from '../components/PosTiles';
+import { api, ApiError, newRequestId } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useLocations } from '../lib/hooks';
 import { getWorkstation, setWorkstation } from '../lib/workstation';
 import { bridgeConfigured, fingerprint } from '../lib/bridge';
 import { money, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
 import { useRealtime } from '../lib/realtime';
+import { printReceipt } from '../lib/printing';
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
@@ -104,6 +106,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   // Removing scanned items may need a supervisor (Checkout rules); the action runs once approved and recorded.
   const [removal, setRemoval] = useState<{ kind: 'remove' | 'reduce' | 'clear'; lines: { productId: string; name: string; qty: number; amountCents: number }[]; then: () => void } | null>(null);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
+  const [voucherOpen, setVoucherOpen] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
   const [lastSale, setLastSale] = useState<any>(null);
   const [error, setError] = useState<unknown>(null);
@@ -281,13 +284,14 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   const pay = (method: string) => cart.lines.length && !(needsAge && !cart.ageVerified) && setPaying(method);
   const cantPay = !cart.lines.length || (needsAge && !cart.ageVerified);
   // Main tiles: ways to pay and the sale's customer. Editing the sale is under More.
-  const tiles: { key: string; label: string; icon?: string; logo?: string; tone: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string }[] = [
-    { key: 'mpesa', label: 'M-Pesa', logo: '/brand/mpesa.svg', tone: '', onClick: () => pay('mpesa'), disabled: cantPay || !has('mpesa'), title: has('mpesa') ? undefined : 'Turn on M-Pesa in Settings > Integrations' },
-    { key: 'cash', label: 'Cash', icon: 'wallet', tone: 'text-emerald-700 bg-emerald-50', onClick: () => pay('cash'), disabled: cantPay, hint: 'F9' },
-    { key: 'card', label: 'Card', icon: 'card', tone: 'text-sky-700 bg-sky-50', onClick: () => pay('card'), disabled: cantPay },
-    { key: 'loyalty', label: 'Loyalty card', icon: 'star', tone: 'text-amber-700 bg-amber-50', onClick: () => setLoyaltyOpen(true), disabled: !has('loyalty'), title: has('loyalty') ? undefined : 'Turn on the Loyalty module in Settings' },
-    { key: 'cust', label: cart.customer ? 'Customer ✓' : 'Customer', icon: 'user', tone: 'text-indigo-600 bg-indigo-50', onClick: () => setCustomerOpen(true), hint: 'F4' },
-    { key: 'hold', label: 'Hold sale', icon: 'pause', tone: 'text-orange-600 bg-orange-50', onClick: suspend, disabled: !cart.lines.length || !rules.items.holdAllowed, hint: 'F8', title: rules.items.holdAllowed ? undefined : 'Holding sales is turned off in Checkout rules' },
+  const tiles: { kind: PosTileKind; label: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string; badge?: string }[] = [
+    { kind: 'mpesa', label: 'M-Pesa payment', onClick: () => pay('mpesa'), disabled: cantPay || !has('mpesa'), title: has('mpesa') ? undefined : 'Turn on M-Pesa in Settings > Integrations' },
+    { kind: 'cash', label: 'Cash payment', onClick: () => pay('cash'), disabled: cantPay, hint: 'F9' },
+    { kind: 'card', label: 'Card payment', onClick: () => pay('card'), disabled: cantPay },
+    { kind: 'loyalty', label: 'Loyalty card', onClick: () => setLoyaltyOpen(true), disabled: !has('loyalty'), title: has('loyalty') ? undefined : 'Turn on the Loyalty module in Settings' },
+    { kind: 'voucher', label: 'Voucher', onClick: () => setVoucherOpen(true), disabled: !cart.lines.length || !has('promotions'), title: has('promotions') ? undefined : 'Turn on Promotions to accept vouchers', badge: cart.couponCode || undefined },
+    { kind: 'customer', label: cart.customer ? `Customer: ${cart.customer.name}` : 'Customer', onClick: () => setCustomerOpen(true), hint: 'F4', badge: cart.customer ? '✓' : undefined },
+    { kind: 'hold', label: 'Hold sale', onClick: suspend, disabled: !cart.lines.length || !rules.items.holdAllowed, hint: 'F8', title: rules.items.holdAllowed ? undefined : 'Holding sales is turned off in Checkout rules' },
   ];
   const more: { key: string; label: string; icon: string; tone: string; onClick: () => void; disabled?: boolean; count?: number; lock?: boolean }[] = [
     { key: 'qty', label: 'Quantity', icon: 'plus', tone: 'text-emerald-600 bg-emerald-50', onClick: () => setPanel({ kind: 'line', focus: 'qty' }), disabled: !selected },
@@ -394,21 +398,12 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
       <aside className="flex w-full flex-col gap-3 lg:w-[320px] 2xl:w-[400px]" aria-label="Sale actions">
         {pickupDue && <div role="alert" className="flex items-center gap-2 rounded-lg bg-amber-100 px-3 py-2 text-[13px] font-semibold text-amber-900 dark:bg-amber-900/40 dark:text-amber-100"><Icon name="alert" className="h-4 w-4 shrink-0" />Cash pickup due: hand cash over to a supervisor.</div>}
         <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2.5 overflow-y-auto">
-          {tiles.map((t) => (
-            <button key={t.key} type="button" onClick={t.onClick} disabled={t.disabled} title={t.title} aria-label={['mpesa', 'cash', 'card'].includes(t.key) ? `${t.label} payment` : undefined}
-              className={cx('card relative flex min-h-[76px] flex-col items-center justify-center gap-1.5 transition hover:-translate-y-px hover:shadow-md disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none', big ? 'py-6' : 'py-3', t.key === 'mpesa' && 'ring-1 ring-inset ring-emerald-200 dark:ring-emerald-900')}>
-              {t.hint && <kbd className="absolute right-2 top-2 rounded border border-ink-200 bg-ink-50 px-1 text-[10px] font-semibold text-ink-400 dark:border-ink-700 dark:bg-ink-800">{t.hint}</kbd>}
-              {t.logo
-                ? <img src={t.logo} alt="" className="h-9 w-auto max-w-[80%] object-contain" draggable={false} />
-                : <span className={cx('flex h-9 w-9 items-center justify-center rounded-full', t.tone)}><Icon name={t.icon!} className="h-[18px] w-[18px]" /></span>}
-              <span className="text-[13px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-ink-100">{t.logo ? 'Pay with M-Pesa' : t.label}</span>
-            </button>
-          ))}
+          {tiles.map((t) => <PosTile key={t.kind} {...t} big={big} />)}
           <button type="button" onClick={() => setPanel({ kind: 'more' })} aria-haspopup="dialog"
-            className="card col-span-2 flex min-h-[56px] items-center justify-center gap-2 transition hover:-translate-y-px hover:shadow-md">
+            className="card flex min-h-[56px] items-center justify-center gap-2 transition hover:-translate-y-px hover:shadow-md">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300"><Icon name="grid" className="h-4 w-4" /></span>
             <span className="text-[13px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-ink-100">More</span>
-            <span className="text-xs font-semibold text-ink-400">quantity · discounts · delete · resume{held.length ? ` (${held.length})` : ''} · clear</span>
+            {held.length > 0 && <span className="rounded-full bg-orange-100 px-1.5 text-[11px] font-bold text-orange-700">{held.length}</span>}
           </button>
         </div>
         {needsAge && <div className="card p-3 text-sm"><Checkbox label={`Customer is ${Math.max(...cart.lines.map((l) => l.product.minAge ?? 18))}+ (ID checked)`} checked={cart.ageVerified} onChange={(v) => update((c) => ({ ...c, ageVerified: v }))} /></div>}
@@ -496,6 +491,16 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
             searchRef.current?.focus();
           }} />
       )}
+      {voucherOpen && <VoucherModal current={cart.couponCode} onClose={() => { setVoucherOpen(false); searchRef.current?.focus(); }} onApply={async (code) => {
+        const next = { ...cart, couponCode: code };
+        await requoteAll(next);
+        setVoucherOpen(false);
+        const applied = next.lines.length > 0 && code ? (await Promise.all(next.lines.map((l) => quote(l.product, l.unitCode, l.qty, next).catch(() => null)))).some((q) => q?.source === 'promotion') : false;
+        if (!code) toast.info('Voucher removed');
+        else if (applied) toast.success(`Voucher ${code} applied`);
+        else toast.error(`Voucher ${code} does not apply to these items (or has expired)`);
+        searchRef.current?.focus();
+      }} />}
       {loyaltyOpen && <LoyaltyCardModal onClose={() => { setLoyaltyOpen(false); searchRef.current?.focus(); }} onFound={(c) => {
         setLoyaltyOpen(false);
         const next = { ...cart, customer: c, priceList: (c.priceList as PriceListKey) && caps.priceLists.includes(c.priceList as PriceListKey) ? (c.priceList as PriceListKey) : cart.priceList };
@@ -594,6 +599,20 @@ function CustomerPicker({ onClose, onPick }: { onClose: () => void; onPick: (c: 
   );
 }
 
+/** Voucher / coupon code: prices are re-quoted with it and the checkout re-checks it on the server. */
+function VoucherModal({ current, onClose, onApply }: { current: string; onClose: () => void; onApply: (code: string) => Promise<void> }) {
+  const [code, setCode] = useState(current);
+  const [busy, setBusy] = useState(false);
+  const apply = async (c: string) => { setBusy(true); try { await onApply(c.trim().toUpperCase()); } finally { setBusy(false); } };
+  return (
+    <Modal open onClose={onClose} title="Pay with voucher" icon="tag" subtitle="Scan or type the voucher code. Its discount is applied to the items it covers." size="sm"
+      footer={<>{current && <Button variant="ghost" onClick={() => apply('')}>Remove voucher</Button>}<Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} disabled={!code.trim()} onClick={() => apply(code)}>Apply voucher</Button></>}>
+      <Field label="Voucher code"><Input autoFocus value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} onKeyDown={(e) => { if (e.key === 'Enter' && code.trim()) apply(code); }} placeholder="e.g. KARIBU10" /></Field>
+      <p className="mt-2 text-xs text-ink-500">Vouchers are created as coupon promotions under Promotions.</p>
+    </Modal>
+  );
+}
+
 /** Scan or type a loyalty card (the customer's code) or phone number to put the customer on the sale. */
 function LoyaltyCardModal({ onClose, onFound }: { onClose: () => void; onFound: (c: NonNullable<Cart['customer']>) => void }) {
   const [code, setCode] = useState('');
@@ -624,7 +643,7 @@ function LoyaltyCardModal({ onClose, onFound }: { onClose: () => void; onFound: 
 function PaymentModal({ cart, total, till, shift, initialMethod, onClose, onDone }: { cart: Cart; total: number; till: { _id: string }; shift: any; initialMethod?: string; onClose: () => void; onDone: (sale: any) => void }) {
   const { has, can, me } = useAuth();
   const terminals: { name: string; bank: string; terminalId: string }[] = me?.tenant.settings?.cardTerminals ?? [];
-  const [card, setCard] = useState({ terminal: terminals[0]?.name ?? '', type: 'Visa', last4: '', approval: '' });
+  const [card, setCard] = useState({ terminal: terminals[0]?.name ?? '', type: 'Visa', issuer: '', last4: '', approval: '' });
   const toast = useToast();
   // Stable id for this payment attempt: retries after a network error replay instead of double-selling.
   const [requestId] = useState(newRequestId);
@@ -679,7 +698,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, onClose, onDone
     if (method === 'card') {
       // Bank card machine: the approval code on the slip proves the payment; the machine and card are recorded.
       if (!/^[A-Za-z0-9]{4,12}$/.test(card.approval.trim())) { setError(new ApiError(400, 'CARD_APPROVAL', 'Enter the approval code printed on the card machine slip')); return; }
-      const ref = [card.terminal, `${card.type}${card.last4 ? ` ****${card.last4}` : ''}`, `AUTH ${card.approval.trim().toUpperCase()}`].filter(Boolean).join(' · ').slice(0, 100);
+      const ref = [card.terminal, `${card.type}${card.last4 ? ` ****${card.last4}` : ''}`, card.issuer, `AUTH ${card.approval.trim().toUpperCase()}`].filter(Boolean).join(' · ').slice(0, 100);
       setPayments((ps) => [...ps, { method, amountCents: a, reference: ref, label: `Card ${card.type}${card.last4 ? ` ****${card.last4}` : ''}` }]);
       setCard({ ...card, last4: '', approval: '' });
       setError(null);
@@ -748,10 +767,11 @@ function PaymentModal({ cart, total, till, shift, initialMethod, onClose, onDone
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}
               {method === 'card' && (
                 <div className="space-y-3 rounded-lg border border-sky-100 bg-sky-50/50 p-3 dark:border-sky-900 dark:bg-sky-950/20">
-                  <p className="text-xs text-ink-600 dark:text-ink-300"><b>1.</b> Key <b>{money(Math.min(amount ?? 0, remaining))}</b> into the card machine. <b>2.</b> The customer taps or inserts the card. <b>3.</b> Enter the approval code from the slip.</p>
+                  <p className="text-xs text-ink-600 dark:text-ink-300">Cards from every bank in Kenya and abroad (Visa, Mastercard, UnionPay, Amex…) work on any bank's card machine. <b>1.</b> Key <b>{money(Math.min(amount ?? 0, remaining))}</b> into the card machine. <b>2.</b> The customer taps or inserts the card. <b>3.</b> Enter the approval code from the slip.</p>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {terminals.length > 0 && <Field label="Card machine"><Select value={card.terminal} onChange={(e) => setCard({ ...card, terminal: e.target.value })} options={terminals.map((t) => ({ value: t.name, label: `${t.name}${t.bank ? ` (${t.bank})` : ''}` }))} /></Field>}
-                    <Field label="Card"><Select value={card.type} onChange={(e) => setCard({ ...card, type: e.target.value })} options={['Visa', 'Mastercard', 'Amex', 'UnionPay', 'Other card'].map((v) => ({ value: v, label: v }))} /></Field>
+                    <Field label="Card"><Select value={card.type} onChange={(e) => setCard({ ...card, type: e.target.value })} options={[...CARD_NETWORKS, 'Other card'].map((v) => ({ value: v, label: v }))} /></Field>
+                    <Field label="Card's bank (optional)"><Select value={card.issuer} onChange={(e) => setCard({ ...card, issuer: e.target.value })} options={[{ value: '', label: 'Not recorded' }, ...KENYA_BANKS.map((b) => ({ value: b, label: b }))]} /></Field>
                     <Field label="Last 4 digits (optional)"><Input inputMode="numeric" maxLength={4} value={card.last4} onChange={(e) => setCard({ ...card, last4: e.target.value.replace(/\D/g, '').slice(0, 4) })} /></Field>
                     <Field label="Approval code"><Input autoFocus value={card.approval} maxLength={12} placeholder="From the slip" onChange={(e) => setCard({ ...card, approval: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') addPayment(); }} /></Field>
                   </div>
@@ -855,10 +875,10 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
   }, [initial._id, waited]);
   const print = async () => {
     try {
-      await api(`/sales/${sale._id}/print`, { body: { tillId } });
-      toast.success('Sent to receipt printer');
-    } catch {
-      await openPrintable(`/sales/${sale._id}/receipt?format=html`).catch((e) => toast.error(e));
+      const how = await printReceipt(sale._id, { tillId });
+      if (how === 'printer') toast.success('Receipt printed');
+    } catch (e: any) {
+      toast.error(`Printer not reached (${e?.message ?? 'error'}): used the print window instead`);
     }
   };
   useEffect(() => {

@@ -14,6 +14,7 @@ let base: string;
 let server: ReturnType<typeof createBridgeServer>;
 const calls: { path: string; body: any }[] = [];
 const sim = new SimulatorAdapter();
+let saved: any = null;
 
 beforeAll(async () => {
   printer = net.createServer((s) => s.on('data', (d) => received.push(d)));
@@ -30,7 +31,7 @@ beforeAll(async () => {
     if (url.endsWith('/challenge')) return new Response(JSON.stringify({ data: { nonce: body.email ? 'n1' : 'n2', templates: body.email ? [enrolled] : [{ ...enrolled, template: 'other', userId: 'u9' }, { ...enrolled, userId: 'u7' }] } }), { status: 200 });
     return new Response(JSON.stringify({ data: { overrideToken: 'tok' } }), { status: 200 });
   }) as unknown as typeof fetch;
-  server = createBridgeServer(cfg, { fingerprint: sim, fetchImpl: fakeFetch });
+  server = createBridgeServer(cfg, { fingerprint: sim, fetchImpl: fakeFetch, savePrinters: (p) => { saved = p; } });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -46,6 +47,23 @@ describe('device bridge', () => {
     expect((await fetch(`${base}/status`)).status).toBe(401);
     expect((await fetch(`${base}/status`, { headers: { ...H, Origin: 'https://evil.example' } })).status).toBe(403);
     expect((await fetch(`${base}/status`, { headers: { ...H, Origin: 'http://pos.local' } })).status).toBe(200);
+  });
+
+  it('lists printers, saves the receipt printer chosen in Afey POS and prints a test page', async () => {
+    const list = await (await fetch(`${base}/printers`, { headers: H })).json();
+    expect(Object.keys(list.configured)).toContain('receipt');
+    expect(Array.isArray(list.system)).toBe(true);
+    const port = (printer.address() as AddressInfo).port;
+    const bad = await fetch(`${base}/printers/set`, { method: 'POST', headers: H, body: JSON.stringify({ name: 'receipt', printer: { type: 'device', path: '/etc/passwd' } }) });
+    expect(bad.status).toBe(400);
+    const ok = await fetch(`${base}/printers/set`, { method: 'POST', headers: H, body: JSON.stringify({ name: 'receipt', printer: { type: 'network', host: '127.0.0.1', port } }) });
+    expect(ok.status).toBe(200);
+    expect(saved.receipt).toEqual({ type: 'network', host: '127.0.0.1', port });
+    received.length = 0;
+    expect((await fetch(`${base}/printers/test`, { method: 'POST', headers: H, body: '{}' })).status).toBe(200);
+    await new Promise((res) => setTimeout(res, 50));
+    expect(Buffer.concat(received).toString('latin1')).toContain('Printer test OK');
+    received.length = 0;
   });
 
   it('prints raw ESC/POS to a network printer and kicks the drawer', async () => {

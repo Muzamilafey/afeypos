@@ -4,7 +4,9 @@ import path from 'node:path';
 export type PrinterConfig =
   | { type: 'network'; host: string; port?: number }
   | { type: 'windows-share'; share: string }
-  | { type: 'device'; path: string };
+  | { type: 'device'; path: string }
+  /** A printer installed on this computer: Windows (raw spooler job by name) or Linux/macOS CUPS (lp -o raw). */
+  | { type: 'system'; name: string };
 
 export interface SerialConfig {
   port: string;
@@ -27,11 +29,20 @@ export interface BridgeConfig {
   fingerprint?: { vendor: 'simulator' | 'zkteco' | 'secugen' | 'helper'; options?: Record<string, unknown> };
 }
 
-export function loadConfig(file = process.env.AFEY_BRIDGE_CONFIG ?? path.resolve('config.json')): BridgeConfig {
+export const configPath = () => process.env.AFEY_BRIDGE_CONFIG ?? path.resolve('config.json');
+
+export function loadConfig(file = configPath()): BridgeConfig {
   const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<BridgeConfig>;
   const cfg = { port: 9123, host: '127.0.0.1', allowedOrigins: [], printers: {}, ...raw } as BridgeConfig;
   if (!cfg.pairingToken || cfg.pairingToken.length < 24 || /REPLACE/.test(cfg.pairingToken)) throw new Error('Set a pairingToken of at least 24 random characters in config.json');
   if (!cfg.server?.url) throw new Error('Set server.url in config.json');
   if (cfg.host !== '127.0.0.1' && cfg.host !== 'localhost') console.warn('[bridge] Listening on a non-loopback address exposes devices to the network.');
   return cfg;
+}
+
+/** Saves the printers chosen in Afey POS (Hardware > This computer) back to config.json, keeping everything else. */
+export function savePrinters(printers: Record<string, PrinterConfig>, file = configPath()) {
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw.printers = printers;
+  fs.writeFileSync(file, `${JSON.stringify(raw, null, 2)}\n`);
 }

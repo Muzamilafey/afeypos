@@ -6,6 +6,12 @@ export interface Workstation {
   theme?: 'light' | 'dark' | 'system';
   receiptWidth?: number;
   autoPrint?: boolean;
+  /**
+   * How receipts print on this computer. dialog: the browser's print window. silent: the browser prints at once
+   * (Chrome/Edge started with --kiosk-printing). bridge: straight to the printer chosen in the device bridge.
+   * network: the server sends it to the till's network printer.
+   */
+  printMode?: 'dialog' | 'silent' | 'bridge' | 'network';
   /** Afey device bridge on this PC, e.g. http://127.0.0.1:9123, and its pairing token. */
   bridgeUrl?: string;
   bridgeToken?: string;

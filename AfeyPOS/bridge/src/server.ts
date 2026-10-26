@@ -1,7 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
-import type { BridgeConfig } from './config.js';
-import { DRAWER_KICK, printRaw } from './adapters/printer.js';
+import { savePrinters, type BridgeConfig, type PrinterConfig } from './config.js';
+import { DRAWER_KICK, listDevicePrinters, listSystemPrinters, printRaw } from './adapters/printer.js';
 import { displayFrame, readScale, writeSerial } from './adapters/serial.js';
 import { createFingerprintAdapter, type FingerprintAdapter } from './adapters/fingerprint.js';
 
@@ -30,7 +30,20 @@ async function readJson(req: http.IncomingMessage, limit = 2_000_000): Promise<a
 export interface BridgeDeps {
   fingerprint?: FingerprintAdapter;
   fetchImpl?: typeof fetch;
+  /** Persists printer choices (config.json by default). */
+  savePrinters?: (printers: Record<string, PrinterConfig>) => void;
 }
+
+/** A printer setting sent from the web app, checked before it is used or saved. */
+function parsePrinter(p: any): PrinterConfig {
+  if (p?.type === 'network' && typeof p.host === 'string' && /^[\w.-]{1,253}$/.test(p.host)) return { type: 'network', host: p.host, port: Number.isInteger(p.port) ? p.port : 9100 };
+  if (p?.type === 'system' && typeof p.name === 'string' && p.name.length <= 120) return { type: 'system', name: p.name };
+  if (p?.type === 'windows-share' && typeof p.share === 'string' && /^\\\\[\w.-]+\\[\w .$-]+$/.test(p.share)) return { type: 'windows-share', share: p.share };
+  if (p?.type === 'device' && typeof p.path === 'string' && /^(\/dev\/(usb\/lp\d+|tty\w+|lp\d+)|\\\\\.\\(COM\d+|LPT\d))$/.test(p.path)) return { type: 'device', path: p.path };
+  throw Object.assign(new Error('Invalid printer setting'), { status: 400 });
+}
+
+const TEST_PAGE = Buffer.concat([Buffer.from([0x1b, 0x40, 0x1b, 0x61, 0x01, 0x1b, 0x45, 0x01]), Buffer.from('Afey POS\n'), Buffer.from([0x1b, 0x45, 0x00]), Buffer.from(`Printer test OK\n${new Date().toLocaleString()}\n\n\n\n`), Buffer.from([0x1d, 0x56, 0x42, 0x00])]);
 
 /**
  * Localhost-only HTTP API. Every request must come from an allowed POS origin and carry the pairing token,
@@ -79,6 +92,22 @@ export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
       const printer = cfg.printers[b.printer ?? 'receipt'];
       if (!printer) throw Object.assign(new Error('Printer not configured'), { status: 404 });
       await printRaw(printer, Buffer.from(String(b.base64), 'base64'));
+      return { ok: true };
+    },
+    /** Printers this computer knows about, for picking the receipt printer in Afey POS. */
+    'GET /printers': async () => ({ configured: cfg.printers, system: await listSystemPrinters(), devices: listDevicePrinters() }),
+    /** Sets a printer (e.g. "receipt") and saves it, so printing needs no dialog from then on. */
+    'POST /printers/set': async (b) => {
+      const name = String(b.name ?? 'receipt');
+      if (!/^[a-z][\w-]{0,30}$/.test(name)) throw Object.assign(new Error('Invalid printer name'), { status: 400 });
+      cfg.printers = { ...cfg.printers, [name]: parsePrinter(b.printer) };
+      (deps.savePrinters ?? savePrinters)(cfg.printers);
+      return { ok: true, printers: cfg.printers };
+    },
+    'POST /printers/test': async (b) => {
+      const printer = b.printer ? parsePrinter(b.printer) : cfg.printers[b.name ?? 'receipt'];
+      if (!printer) throw Object.assign(new Error('Printer not configured'), { status: 404 });
+      await printRaw(printer, TEST_PAGE);
       return { ok: true };
     },
     'POST /drawer/open': async (b) => {

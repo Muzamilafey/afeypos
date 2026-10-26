@@ -1,7 +1,8 @@
+import { printReceipt } from '../../lib/printing';
 import { useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { api, ApiError, newRequestId, openPrintable } from '../../lib/api';
+import { api, ApiError, newRequestId } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useList, useLocations } from '../../lib/hooks';
 import { dateTime, money, qty } from '../../lib/format';
@@ -23,7 +24,7 @@ export const RETURN_REASONS = [
 const reasonLabel = (code?: string) => RETURN_REASONS.find((r) => r.value === code)?.label ?? 'Not given';
 const methodLabel: Record<string, string> = { cash: 'Cash', mpesa: 'M-Pesa', card: 'Card', account: 'Customer account', credit_note: 'Store credit' };
 
-const printNote = (id: string) => openPrintable(`/returns/${id}/receipt?format=html`);
+const printNote = (id: string) => printReceipt(id, { kind: 'return' });
 
 export function ReturnsPage() {
   const toast = useToast();

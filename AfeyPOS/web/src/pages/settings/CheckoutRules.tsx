@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { CASHIER_PAGE_OPTIONS, type CheckoutRules } from '@afeypos/shared';
+import { CASHIER_PAGE_OPTIONS, KENYA_BANKS, type CheckoutRules } from '@afeypos/shared';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Button, Card, cx, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, useToast } from '../../components/ui';
@@ -24,7 +24,7 @@ function Toggle({ label, help, checked, onChange }: { label: string; help?: Reac
 }
 
 const pctInput = (bp: number) => String(bp / 100);
-const BANKS = ['Equity', 'KCB', 'Co-operative Bank', 'NCBA', 'Absa', 'Stanbic', 'I&M', 'DTB', 'Family Bank', 'Standard Chartered', 'Other'];
+const BANKS = KENYA_BANKS.filter((b) => b !== 'SACCO card' && b !== 'Foreign bank card');
 
 export function CheckoutRulesPage() {
   const toast = useToast();
@@ -104,7 +104,7 @@ export function CheckoutRulesPage() {
         </Card>
 
         <Card className="lg:col-span-2" title={<span className="flex items-center gap-2"><Icon name="card" className="h-4 w-4 text-emerald-600" />Card machines (bank POS / PDQ)</span>}
-          actions={<Button size="sm" variant="secondary" disabled={terminals.length >= 30} onClick={() => { setTerminals([...terminals, { name: '', bank: 'Equity', terminalId: '' }]); setDirty(true); }}><Icon name="plus" className="h-3.5 w-3.5" />Add card machine</Button>}>
+          actions={<Button size="sm" variant="secondary" disabled={terminals.length >= 30} onClick={() => { setTerminals([...terminals, { name: '', bank: 'Equity Bank', terminalId: '' }]); setDirty(true); }}><Icon name="plus" className="h-3.5 w-3.5" />Add card machine</Button>}>
           <p className="mb-3 text-xs text-ink-500">Bank card machines work on their own: the cashier keys the amount into the machine, the customer taps or inserts the card, and the cashier enters the approval code shown on the slip. Listing your machines here lets the till record which one took each payment, for reconciliation with the bank. Online card payments go through <Link className="text-brand-600 hover:underline" to="/settings/integrations">Integrations</Link> (Pesapal and others).</p>
           {terminals.length === 0 ? <p className="text-sm text-ink-500">No card machines listed: the till still takes card payments with an approval code.</p> : (
             <div className="space-y-2">
