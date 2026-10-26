@@ -5,6 +5,7 @@
   "description": "Afey POS online shop: the customer-facing shopping website, connected to the head-office server",
   "type": "module",
   "scripts": {
+    "predev": "npm run build --prefix ../packages/shared",
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",

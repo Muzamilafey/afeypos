@@ -23,7 +23,8 @@
     "test": "npm run build:shared && npm run test --workspaces --if-present",
     "test:e2e": "npm run test:e2e -w @afeypos/web",
     "start": "npm run start -w @afeypos/server",
-    "dev:shop": "npm run dev -w @afeypos/shop"
+    "dev:shop": "npm run dev -w @afeypos/shop",
+    "postinstall": "npm run build:shared"
   },
   "engines": {
     "node": ">=22.9"
