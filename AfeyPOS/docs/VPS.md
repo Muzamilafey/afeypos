@@ -284,6 +284,8 @@ afeypos reset-password owner@afey.co.ke 'NewPassw0rd!'
 | Install stops with *command replSetGetStatus requires authentication* | Another MongoDB with a password is on that port. Re-run the install command: it now gives Afey POS its own database on a free port. Or use your MongoDB with a login (A4b) |
 | *The MongoDB … is not a replica set* | Use Afey POS's own database (leave out `--mongo-uri`), or turn that MongoDB into a replica set (A4b) |
 | *rejected the username or password* | Check `MONGODB_USERNAME`, `MONGODB_PASSWORD` and `MONGODB_AUTH_SOURCE` (where the user was created, usually `admin`) |
+| *Job for caddy.service failed* | Usually another web server (nginx, Apache) already holds ports 80/443: `sudo ss -ltnp '( sport = :80 or sport = :443 )'`. Re-run the install command: it now adds Afey POS to that nginx or Apache (with a certbot certificate) instead of starting Caddy, and keeps your other sites. Caddy's own error: `journalctl -u caddy -n 50` |
+| Editing `.env` has no effect | The live file is `/opt/afeypos/app/server/.env` (not the one in `/opt/afeypos-src`). After editing: `sudo afeypos restart` |
 | `https://pos.afey.co.ke` does not open | `nslookup pos.afey.co.ke` must show the VPS IP; `ufw status` must allow 80 and 443; `journalctl -u caddy -n 50` |
 | The shop stays *Offline* | On the shop PC open `https://pos.afey.co.ke/health` in a browser. **Branch sync** shows the last error. Wrong token → issue a new one at head office and rerun B3 with it |
 | Branch sync shows "ENCRYPTION_KEY differs from head office" | The shop was installed with another key: rerun B3 with `$env:AFEY_ENCRYPTION_KEY` set to the VPS key, on an empty database |

@@ -287,7 +287,80 @@ else
 fi
 
 # ---------- HTTPS ----------
-if [ -n "$DOMAIN" ] && [ "$NO_SERVICE" = 0 ]; then
+# Who already listens on the web ports (another site's nginx or Apache)? Afey POS then joins that web server
+# instead of starting Caddy, which could not take the ports. HTTPS problems never stop the install: Afey POS
+# itself is already running, and the commands to finish are printed.
+web_port_owner() {
+  command -v ss >/dev/null || return 0
+  ss -ltnpH 2>/dev/null | awk '$4 ~ /:(80|443)$/' | grep -o 'users:(("[^"]*"' | head -n1 | sed 's/users:(("//; s/"//'
+}
+https_with_nginx() {
+  say "nginx already serves ports 80/443: adding $DOMAIN to nginx"
+  local site=/etc/nginx/sites-available/afeypos.conf names="$DOMAIN${SHOP_HOST:+ $SHOP_HOST}" v6=""
+  # IPv6 only where the server has it (nginx refuses to start on [::] otherwise).
+  [ -s /proc/net/if_inet6 ] && v6="    listen [::]:80;"
+  [ -d /etc/nginx/sites-available ] || site=/etc/nginx/conf.d/afeypos.conf
+  cat > "$site" <<EOF
+# Afey POS (written by the Afey POS installer)
+map \$http_upgrade \$afeypos_connection { default upgrade; '' close; }
+server {
+    listen 80;
+$v6
+    server_name $names;
+    client_max_body_size 20m;
+    location / {
+        proxy_pass http://127.0.0.1:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$afeypos_connection;
+        proxy_read_timeout 120s;
+    }
+}
+EOF
+  [ -d /etc/nginx/sites-enabled ] && ln -sf "$site" /etc/nginx/sites-enabled/afeypos.conf
+  if ! nginx -t >/dev/null 2>&1; then nginx -t || true; note "nginx rejected the configuration above; fix it, then: sudo systemctl reload nginx"; return 1; fi
+  systemctl reload nginx
+  command -v certbot >/dev/null || apt-get install -y -qq certbot python3-certbot-nginx >/dev/null 2>&1 || true
+  if command -v certbot >/dev/null && certbot --nginx --non-interactive --agree-tos --register-unsafely-without-email --redirect $(for n in $names; do printf -- '-d %s ' "$n"; done) >/dev/null 2>&1; then
+    note "HTTPS certificate installed (certbot renews it automatically)"
+  else
+    note "Could not get the certificate yet (is DNS for $DOMAIN pointing here?). When it is: sudo certbot --nginx -d $DOMAIN"
+    return 1
+  fi
+}
+https_with_apache() {
+  say "Apache already serves ports 80/443: adding $DOMAIN to Apache"
+  a2enmod proxy proxy_http proxy_wstunnel headers rewrite >/dev/null
+  cat > /etc/apache2/sites-available/afeypos.conf <<EOF
+# Afey POS (written by the Afey POS installer)
+<VirtualHost *:80>
+    ServerName $DOMAIN
+$([ -n "$SHOP_HOST" ] && echo "    ServerAlias $SHOP_HOST")
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto expr=%{REQUEST_SCHEME}
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule /(.*) ws://127.0.0.1:$PORT/\$1 [P,L]
+    ProxyPass / http://127.0.0.1:$PORT/
+    ProxyPassReverse / http://127.0.0.1:$PORT/
+    LimitRequestBody 20971520
+</VirtualHost>
+EOF
+  a2ensite afeypos >/dev/null
+  if ! apache2ctl configtest >/dev/null 2>&1; then apache2ctl configtest || true; note "Apache rejected the configuration; fix it, then: sudo systemctl reload apache2"; return 1; fi
+  systemctl reload apache2
+  command -v certbot >/dev/null || apt-get install -y -qq certbot python3-certbot-apache >/dev/null 2>&1 || true
+  if command -v certbot >/dev/null && certbot --apache --non-interactive --agree-tos --register-unsafely-without-email --redirect -d "$DOMAIN" ${SHOP_HOST:+-d "$SHOP_HOST"} >/dev/null 2>&1; then
+    note "HTTPS certificate installed (certbot renews it automatically)"
+  else
+    note "Could not get the certificate yet (is DNS for $DOMAIN pointing here?). When it is: sudo certbot --apache -d $DOMAIN"
+    return 1
+  fi
+}
+https_with_caddy() {
   say "Setting up HTTPS for $DOMAIN (Caddy)"
   if ! command -v caddy >/dev/null; then
     if command -v apt-get >/dev/null; then
@@ -297,17 +370,44 @@ if [ -n "$DOMAIN" ] && [ "$NO_SERVICE" = 0 ]; then
         curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
         curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
         apt-get update -qq && apt-get install -y -qq caddy >/dev/null
-      } || note "Install Caddy yourself: https://caddyserver.com/docs/install"
-    else (command -v dnf >/dev/null && dnf install -y -q caddy >/dev/null) || note "Install Caddy yourself: https://caddyserver.com/docs/install"; fi
+      } || true
+    else (command -v dnf >/dev/null && dnf install -y -q caddy >/dev/null) || true; fi
   fi
-  if command -v caddy >/dev/null; then
-    hosts="$DOMAIN"; [ -n "$SHOP_HOST" ] && hosts="$DOMAIN, $SHOP_HOST"
-    # Live updates (websockets) pass through reverse_proxy as they are; uploads up to 20 MB.
-    printf '%s {\n\tencode gzip\n\trequest_body {\n\t\tmax_size 20MB\n\t}\n\treverse_proxy 127.0.0.1:%s\n}\n' "$hosts" "$PORT" > /etc/caddy/Caddyfile
-    systemctl enable --now caddy >/dev/null 2>&1 || true
-    systemctl reload caddy 2>/dev/null || systemctl restart caddy
-    note "Caddy gets the certificate automatically once DNS for $DOMAIN points here"
+  command -v caddy >/dev/null || { note "Install Caddy yourself: https://caddyserver.com/docs/install, then run this installer again"; return 1; }
+  # Our site goes in its own file; other sites in the Caddyfile are kept. Caddy's stock example site
+  # (port 80, the "Caddy works!" page) is replaced, since it would hold port 80.
+  local hosts="$DOMAIN${SHOP_HOST:+, $SHOP_HOST}"
+  mkdir -p /etc/caddy/sites
+  # Live updates (websockets) pass through reverse_proxy as they are; uploads up to 20 MB.
+  printf '# Afey POS (written by the Afey POS installer)\n%s {\n\tencode gzip\n\trequest_body {\n\t\tmax_size 20MB\n\t}\n\treverse_proxy 127.0.0.1:%s\n}\n' "$hosts" "$PORT" > /etc/caddy/sites/afeypos.caddy
+  # Also replaced: the whole-file Caddyfile older Afey POS installers wrote (it would define the site twice).
+  local old_afey='^[^{\n]+ \{\n\tencode gzip\n\trequest_body \{\n\t\tmax_size 20MB\n\t\}\n\treverse_proxy 127\.0\.0\.1:[0-9]+\n\}\n?$'
+  if [ ! -s /etc/caddy/Caddyfile ] || grep -q '^# Afey POS' /etc/caddy/Caddyfile || grep -q 'root \* /usr/share/caddy' /etc/caddy/Caddyfile || grep -Pzq "$old_afey" /etc/caddy/Caddyfile; then
+    printf '# Sites are in /etc/caddy/sites/\nimport sites/*.caddy\n' > /etc/caddy/Caddyfile
+  elif ! grep -q 'import sites/\*\.caddy' /etc/caddy/Caddyfile; then
+    printf '\nimport sites/*.caddy\n' >> /etc/caddy/Caddyfile
   fi
+  if ! caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -n 5 || true
+    note "The Caddy configuration is invalid (see above): /etc/caddy/Caddyfile"; return 1
+  fi
+  systemctl enable caddy >/dev/null 2>&1 || true
+  if ! systemctl restart caddy; then
+    journalctl -u caddy -n 15 --no-pager 2>/dev/null | sed 's/^/    /' || true
+    note "Caddy did not start (see the log above)"; return 1
+  fi
+  note "Caddy gets the certificate automatically once DNS for $DOMAIN points here"
+}
+HTTPS_OK=1
+if [ -n "$DOMAIN" ] && [ "$NO_SERVICE" = 0 ]; then
+  owner="$(web_port_owner || true)"
+  case "$owner" in
+    ""|caddy) https_with_caddy || HTTPS_OK=0 ;;
+    nginx) https_with_nginx || HTTPS_OK=0 ;;
+    apache2|httpd) https_with_apache || HTTPS_OK=0 ;;
+    *) note "Ports 80/443 are used by \"$owner\", so HTTPS for $DOMAIN cannot be set up automatically. Point that web server at http://127.0.0.1:$PORT, or stop it and run this installer again."; HTTPS_OK=0 ;;
+  esac
+  [ "$HTTPS_OK" = 1 ] || note "Afey POS itself is running: http://127.0.0.1:$PORT. Only HTTPS for $DOMAIN still needs the fix above (docs/VPS.md, Troubleshooting)."
 fi
 
 # ---------- remember options, helper command ----------
@@ -331,6 +431,7 @@ echo
 if [ "$ok" = 1 ]; then
   printf '\033[32mAfey POS is running.\033[0m\n'
   note "Open $url (or http://localhost:$PORT here) and create the owner account."
+  [ "$HTTPS_OK" = 1 ] || printf '\033[33mHTTPS for %s is not ready yet:\033[0m see the note under "HTTPS" above.\n' "$DOMAIN"
 else
   printf '\033[33mAfey POS did not answer yet.\033[0m Check: afeypos status   and   afeypos logs\n'
 fi
