@@ -54,7 +54,29 @@ $mongoBin = Split-Path $mongodPath
 Write-Host "mongod: $mongodPath"
 
 Step 'Configuring MongoDB as a single-node replica set'
+# Afey POS runs its own MongoDB service (AfeyMongoDB). Another MongoDB on this PC (often the "MongoDB" service on
+# 27017, perhaps with a password) is left alone: ours keeps its remembered port if free, else the first free port
+# from 27018.
 New-Item -ItemType Directory -Force -Path $MongoDataDir, "$MongoDataDir\db", "$MongoDataDir\log" | Out-Null
+$cfgPath = Join-Path $MongoDataDir 'mongod.cfg'
+function Test-PortInUse([int]$p) { [bool](Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue) }
+$svc = Get-Service -Name 'AfeyMongoDB' -ErrorAction SilentlyContinue
+if ($svc -and $svc.Status -ne 'Stopped') { Stop-Service AfeyMongoDB -Force; Start-Sleep -Seconds 2 }
+$mongoPort = 0
+if (Test-Path $cfgPath) {
+  $m = Select-String -Path $cfgPath -Pattern '^\s*port:\s*(\d+)' | Select-Object -First 1
+  if ($m) { $mongoPort = [int]$m.Matches[0].Groups[1].Value }
+}
+if (-not $mongoPort) { $mongoPort = 27018 }
+# MongoDB's own Windows service uses 27017 when it runs (it may be stopped right now): never share that port.
+$otherMongo = Get-Service -Name 'MongoDB' -ErrorAction SilentlyContinue
+if ($otherMongo -and $mongoPort -eq 27017) { $mongoPort = 27018 }
+if (Test-PortInUse $mongoPort) {
+  Write-Host "Port $mongoPort is used by another program (another MongoDB?); Afey POS keeps its own database on a free port"
+  $mongoPort = 27018
+  while (Test-PortInUse $mongoPort) { $mongoPort++; if ($mongoPort -gt 27100) { Fail 'No free port for the Afey POS database between 27018 and 27100' } }
+}
+Write-Host "Database port: $mongoPort"
 $cfg = @"
 storage:
   dbPath: $MongoDataDir\db
@@ -64,18 +86,32 @@ systemLog:
   logAppend: true
 net:
   bindIp: 127.0.0.1
-  port: 27017
+  port: $mongoPort
 replication:
   replSetName: rs0
 "@
-Set-Content -Path "$MongoDataDir\mongod.cfg" -Value $cfg -Encoding ASCII
-$svc = Get-Service -Name 'AfeyMongoDB' -ErrorAction SilentlyContinue
+Set-Content -Path $cfgPath -Value $cfg -Encoding ASCII
+# New-Service passes the quoted program path intact (sc.exe create mangles embedded quotes in Windows PowerShell 5.1).
+$bin = "`"$mongodPath`" --config `"$cfgPath`" --service"
 if (-not $svc) {
-  & sc.exe create AfeyMongoDB binPath= "`"$mongodPath`" --config `"$MongoDataDir\mongod.cfg`" --service" start= auto DisplayName= "Afey POS MongoDB" | Out-Null
-  & sc.exe failure AfeyMongoDB reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+  New-Service -Name 'AfeyMongoDB' -BinaryPathName $bin -DisplayName 'Afey POS MongoDB' -StartupType Automatic | Out-Null
+} else {
+  # Upgrades: point the existing service at this mongod and configuration.
+  Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\AfeyMongoDB' -Name ImagePath -Value $bin
 }
-Start-Service AfeyMongoDB
-Start-Sleep -Seconds 5
+& sc.exe failure AfeyMongoDB reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+try { Start-Service AfeyMongoDB } catch {
+  Get-Content "$MongoDataDir\log\mongod.log" -Tail 20 -ErrorAction SilentlyContinue
+  Fail "The Afey POS database service did not start: $($_.Exception.Message) (see the log above)"
+}
+# Our own database must be the one answering before going on.
+$up = $false
+for ($i = 0; $i -lt 30; $i++) { if (Test-PortInUse $mongoPort) { $up = $true; break }; Start-Sleep -Seconds 1 }
+if (-not $up) {
+  Get-Content "$MongoDataDir\log\mongod.log" -Tail 20 -ErrorAction SilentlyContinue
+  Fail "The Afey POS database did not start on port $mongoPort (see the log above)"
+}
+$mongoUri = "mongodb://127.0.0.1:$mongoPort/afeypos?replicaSet=rs0"
 
 Step 'Configuring, installing and building Afey POS (a few minutes the first time)'
 # An upgrade replaces files the running server uses: stop it first.
@@ -83,7 +119,7 @@ Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 # scripts\setup.mjs writes server\.env (new secrets the first time, existing values kept afterwards),
 # runs npm ci and the build, and initialises the database replica set.
-$setupArgs = @('scripts\setup.mjs', '--mode', $Mode, '--port', "$Port", '--data-dir', $DataDir)
+$setupArgs = @('scripts\setup.mjs', '--mode', $Mode, '--port', "$Port", '--data-dir', $DataDir, '--mongo-uri', $mongoUri)
 if ($PublicUrl) { $setupArgs += @('--public-url', $PublicUrl) }
 if ($ShopHost) { $setupArgs += @('--shop-host', $ShopHost) }
 if ($HqUrl) { $setupArgs += @('--hq-url', $HqUrl) }
