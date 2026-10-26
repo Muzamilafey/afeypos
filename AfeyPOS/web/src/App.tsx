@@ -26,6 +26,7 @@ import { AuditPage, ExpensesPage, MpesaPage, OnlinePaymentsPage, PromotionsPage,
 import { AccountPage, BusinessSettingsPage, HardwarePage, IntegrationsPage, LocationsPage, UsersPage } from './pages/settings/Settings';
 import { SyncPage } from './pages/settings/Sync';
 import { ReceiptSettingsPage } from './pages/settings/Receipts';
+import { CheckoutRulesPage } from './pages/settings/CheckoutRules';
 import { EtimsPage } from './pages/Etims';
 
 function Protected({ children }: { children: ReactNode }) {
@@ -98,6 +99,7 @@ export function App() {
         <Route path="audit" element={<Gate perm="audit.read"><AuditPage /></Gate>} />
         <Route path="settings" element={<Gate perm="settings.manage"><BusinessSettingsPage /></Gate>} />
         <Route path="settings/receipts" element={<Gate perm="settings.manage" module="pos"><ReceiptSettingsPage /></Gate>} />
+        <Route path="settings/checkout-rules" element={<Gate perm="settings.manage" module="pos"><CheckoutRulesPage /></Gate>} />
         <Route path="settings/users" element={<Gate perm="users.manage"><UsersPage /></Gate>} />
         <Route path="settings/roles" element={<Gate perm="users.manage"><RolesPage /></Gate>} />
         <Route path="settings/locations" element={<Gate perm="branches.manage"><LocationsPage /></Gate>} />

@@ -8,6 +8,7 @@ import { IpayGateway } from './ipay.js';
 import { KopoKopoGateway } from './kopokopo.js';
 import { PawapayGateway } from './pawapay.js';
 import { PaystackGateway } from './paystack.js';
+import { PesapalGateway } from './pesapal.js';
 import { SimulatorGateway } from './simulator.js';
 import { ZenoPayGateway } from './zenopay.js';
 import type { GatewayConfig, PaymentGateway } from './types.js';
@@ -23,6 +24,7 @@ const FACTORIES: Partial<Record<PaymentProviderKey, (cfg: GatewayConfig) => Paym
   kopokopo: (c) => new KopoKopoGateway(c),
   hubtel: (c) => new HubtelGateway(c),
   ipay: (c) => new IpayGateway(c),
+  pesapal: (c) => new PesapalGateway(c),
   zenopay: (c) => new ZenoPayGateway(c),
   africastalking: (c) => new AfricasTalkingGateway(c),
   simulator: () => new SimulatorGateway(),

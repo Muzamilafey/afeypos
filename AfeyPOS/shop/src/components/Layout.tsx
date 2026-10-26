@@ -61,7 +61,9 @@ function SearchBox({ className = '' }: { className?: string }) {
   const nav = useNavigate();
   const loc = useLocation();
   const [q, setQ] = useState('');
-  useEffect(() => setQ(new URLSearchParams(loc.search).get('q') ?? ''), [loc.search]);
+  useEffect(() => {
+    setQ(new URLSearchParams(loc.search).get('q') ?? '');
+  }, [loc.search]);
   return (
     <form role="search" className={`relative ${className}`} onSubmit={(e) => { e.preventDefault(); nav(`/shop${q ? `?q=${encodeURIComponent(q)}` : ''}`); }}>
       <input className="w-full rounded-full border border-ink-200 bg-ink-50 py-3 pl-5 pr-14 text-sm placeholder:text-ink-400 focus:border-primary focus:bg-white focus:outline-none" type="search" placeholder="Search for products, brands and more…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search products" />
@@ -164,7 +166,10 @@ function Footer() {
 export function Layout({ children }: { children: ReactNode }) {
   const { preview } = useStore();
   const loc = useLocation();
-  useEffect(() => window.scrollTo(0, 0), [loc.pathname]);
+  // Braces matter: a returned value would be taken as the cleanup (extensions can make scrollTo return a Promise).
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [loc.pathname]);
   return (
     <div className="flex min-h-screen flex-col">
       {preview && <div className="fixed bottom-3 left-3 z-50 rounded-full bg-black/75 px-3 py-1 text-xs font-semibold text-white">Studio preview</div>}

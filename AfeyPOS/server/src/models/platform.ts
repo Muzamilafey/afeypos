@@ -19,6 +19,10 @@ const tenantSettingsSchema = new Schema(
     receiptFooter: { type: String, default: 'Thank you for shopping with us!' },
     /** Receipt template, paper and fields (Settings > Receipts; see RECEIPT_DEFAULTS in shared). */
     receipt: Schema.Types.Mixed,
+    /** What cashiers may do alone (Settings > Checkout rules; see CHECKOUT_RULE_DEFAULTS in shared). */
+    checkoutRules: Schema.Types.Mixed,
+    /** Bank card machines (PDQ) at the tills: the cashier picks one and keys in its approval code. */
+    cardTerminals: { type: [{ name: String, bank: String, terminalId: String, _id: false }], default: [] },
     variableWeight: {
       enabled: { type: Boolean, default: false },
       prefixes: { type: [String], default: ['20', '21', '22', '23', '24', '25', '26', '27', '28', '29'] },

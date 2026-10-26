@@ -66,6 +66,13 @@ export function AppShell() {
   }, [me, loc.pathname]);
 
   const pwa = usePwa();
+  // Checkout rules can hide pages from cashiers: send them to checkout instead.
+  const blocked = me?.blockedPaths ?? [];
+  const isBlocked = (path: string) => blocked.some((b) => (b === '/' ? path === '/' : path === b || path.startsWith(`${b}/`)));
+  useEffect(() => {
+    if (me && isBlocked(loc.pathname)) nav('/pos', { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, loc.pathname]);
   if (!me) return null;
   const groups = Object.keys(GROUPS).map((g) => ({ g, items: me.navigation.filter((n) => n.group === g && n.key !== 'dashboard') })).filter((x) => x.items.length);
   const dark = theme === 'dark' || (theme === 'system' && document.documentElement.classList.contains('dark'));
@@ -118,7 +125,7 @@ export function AppShell() {
   const pos = loc.pathname === '/pos';
   const goBack = () => {
     if ((window.history.state?.idx ?? 0) > 0) nav(-1);
-    else nav(can('sales.read') ? '/sales' : '/', { replace: true });
+    else nav(me?.navigation.find((n) => n.key !== 'pos')?.path ?? '/', { replace: true });
   };
 
   return (
@@ -131,8 +138,8 @@ export function AppShell() {
           </div>
           <nav className="flex-1 overflow-y-auto pb-3 [scrollbar-width:thin]" aria-label="Main">
             {label('Menu')}
-            {item({ key: 'dashboard', path: '/', icon: 'home', label: 'Dashboard' }, true)}
-            {item({ key: 'support', path: '/support', icon: 'headset', label: 'Support' })}
+            {!isBlocked('/') && item({ key: 'dashboard', path: '/', icon: 'home', label: 'Dashboard' }, true)}
+            {!isBlocked('/support') && item({ key: 'support', path: '/support', icon: 'headset', label: 'Support' })}
             {groups.map(({ g, items }) => (
               <div key={g}>
                 {label(GROUPS[g])}

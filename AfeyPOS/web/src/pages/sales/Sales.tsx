@@ -7,6 +7,7 @@ import { useList, useLocations } from '../../lib/hooks';
 import { dateTime, money, paymentLabel, qty } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { ReturnWizard } from './Returns';
+import { OverrideModal } from '../POS';
 import { EmailDocButton, PdfButton } from '../../components/DocumentActions';
 import { Button, Card, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, useConfirm, useToast } from '../../components/ui';
 
@@ -127,19 +128,33 @@ function ShiftModal({ shift, onClose, onChanged }: { shift: any; onClose: () => 
   const [counted, setCounted] = useState('');
   const [cash, setCash] = useState({ type: 'cash_out', amount: '', reason: '' });
   const [error, setError] = useState<unknown>(null);
+  const [approval, setApproval] = useState<{ permission: string; message: string } | null>(null);
   const s = summary.data;
+  // Blind close (Checkout rules): the cashier counts without seeing the expected cash or the variance.
+  const blind = Boolean(s?.blind);
+  const close = async (overrideToken?: string) => {
+    setError(null);
+    try {
+      await api(`/shifts/${shift._id}/close`, { body: { countedCashCents: Math.round(Number(counted) * 100), overrideToken } });
+      onChanged(); onClose();
+    } catch (e: any) {
+      if (e?.code === 'OVERRIDE_REQUIRED') setApproval({ permission: e.details?.permission ?? 'shifts.manage', message: e.message });
+      else setError(e);
+    }
+  };
   return (
     <Modal open onClose={onClose} title={`Shift ${shift.number}`} size="lg">
       {!s ? <Loading /> : (
         <div className="space-y-4 text-sm">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div><div className="label">Sales</div>{s.sales.count} · {money(s.sales.totalCents)}</div>
-            <div><div className="label">Expected cash</div><span className="text-lg font-semibold">{money(s.expectedCashCents)}</span></div>
+            <div><div className="label">Expected cash</div><span className="text-lg font-semibold">{blind ? 'Hidden (blind count)' : money(s.expectedCashCents)}</span></div>
             <div><div className="label">Voids</div>{s.voids.count} · {money(s.voids.totalCents)}</div>
             <div><div className="label">Discounts</div>{money(s.sales.discountCents)}</div>
           </div>
           <div><div className="label">By payment method</div>{Object.entries(s.paymentsByMethod).map(([k, v]: any) => <div key={k} className="flex justify-between"><span>{paymentLabel(k)}</span><span>{money(v.totalCents)}</span></div>)}</div>
-          <div><div className="label">Cash movements</div>{Object.entries(s.cashMovements).map(([k, v]: any) => <div key={k} className="flex justify-between"><span>{k.replace('_', ' ')}</span><span>{money(v.totalCents)}</span></div>)}</div>
+          {s.pickupDue && <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">Too much cash in the drawer: hand cash over to a supervisor (cash pickup).</p>}
+          {!blind && <div><div className="label">Cash movements</div>{Object.entries(s.cashMovements ?? {}).map(([k, v]: any) => <div key={k} className="flex justify-between"><span>{k.replace('_', ' ')}</span><span>{money(v.totalCents)}</span></div>)}</div>}
           {shift.status === 'open' && (
             <>
               {can('cash.movement') && (
@@ -152,15 +167,16 @@ function ShiftModal({ shift, onClose, onChanged }: { shift: any; onClose: () => 
               )}
               <div className="flex items-end gap-2 border-t border-ink-100 pt-3 dark:border-ink-800">
                 <Field label="Counted cash in drawer"><Input inputMode="decimal" value={counted} onChange={(e) => setCounted(e.target.value)} /></Field>
-                <Button onClick={async () => { try { await api(`/shifts/${shift._id}/close`, { body: { countedCashCents: Math.round(Number(counted) * 100) } }); onChanged(); onClose(); } catch (e) { setError(e); } }} disabled={counted === ''}>Close shift</Button>
+                <Button onClick={() => close()} disabled={counted === ''}>Close shift</Button>
               </div>
-              {counted !== '' && <p>Variance: <strong>{money(Math.round(Number(counted) * 100) - s.expectedCashCents)}</strong></p>}
+              {counted !== '' && !blind && <p>Variance: <strong>{money(Math.round(Number(counted) * 100) - s.expectedCashCents)}</strong></p>}
             </>
           )}
-          {shift.status === 'closed' && <p>Counted {money(shift.countedCashCents)} · variance <strong className={shift.varianceCents < 0 ? 'text-red-600' : ''}>{money(shift.varianceCents)}</strong></p>}
+          {shift.status === 'closed' && <p>Counted {money(shift.countedCashCents)}{blind ? '' : ' · variance '}{!blind && <strong className={shift.varianceCents < 0 ? 'text-red-600' : ''}>{money(shift.varianceCents)}</strong>}</p>}
           <ErrorBox error={error} />
         </div>
       )}
+      {approval && <OverrideModal permission={approval.permission} message={approval.message} onClose={() => setApproval(null)} onApproved={(token) => { setApproval(null); close(token); }} />}
     </Modal>
   );
 }

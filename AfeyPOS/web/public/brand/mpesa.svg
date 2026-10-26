@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 64" role="img" aria-label="M-PESA">
+  <!-- Stand-in mark. Replace this file with the official M-PESA logo from Safaricom's brand assets (same name). -->
+  <rect width="220" height="64" rx="12" fill="#fff"/>
+  <text x="14" y="45" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="38" font-weight="900" fill="#4caf50" letter-spacing="-1">M</text>
+  <rect x="56" y="12" width="22" height="40" rx="4" fill="#e53935"/>
+  <rect x="60" y="17" width="14" height="24" rx="1.5" fill="#fff"/>
+  <circle cx="67" cy="46" r="2.4" fill="#fff"/>
+  <text x="84" y="45" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="38" font-weight="900" fill="#4caf50" letter-spacing="-1">PESA</text>
+</svg>

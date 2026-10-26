@@ -312,5 +312,11 @@ gatewayCallbackRoutes.all('/:tenantId/:token/gw/:configId', async (req, res) => 
     res.status(500).json({ received: false });
     return;
   }
+  // Pesapal expects its IPN echoed back; otherwise it keeps retrying.
+  const q = { ...(req.query as Record<string, any>), ...(req.body && typeof req.body === 'object' ? req.body : {}) };
+  if (q.OrderTrackingId) {
+    res.json({ orderNotificationType: q.OrderNotificationType ?? 'IPNCHANGE', orderTrackingId: q.OrderTrackingId, orderMerchantReference: q.OrderMerchantReference, status: 200 });
+    return;
+  }
   res.json({ received: true });
 });

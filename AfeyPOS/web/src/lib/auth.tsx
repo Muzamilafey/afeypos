@@ -1,15 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Capabilities, ModuleKey, NavItem, Permission } from '@afeypos/shared';
+import type { Capabilities, CheckoutRules, ModuleKey, NavItem, Permission } from '@afeypos/shared';
 import { api, onExpired, setAccessToken, tryRestoreSession } from './api';
 import { configureFormat } from './format';
 
 export interface Me {
   user: { id: string; name: string; email: string; roles: string[]; branchIds: string[]; kind: string; twoFactorEnabled?: boolean; hasPin?: boolean; emailVerified?: boolean };
-  tenant: { id: string; name: string; slug: string; businessType: string; status: string; settings: any; enabledModules: ModuleKey[]; disabledModules: ModuleKey[] };
+  tenant: { id: string; name: string; slug: string; businessType: string; status: string; settings: any; checkoutRules?: CheckoutRules; enabledModules: ModuleKey[]; disabledModules: ModuleKey[] };
   deploymentMode: 'standalone' | 'hq' | 'branch';
   capabilities: Capabilities;
   permissions: Permission[];
   navigation: NavItem[];
+  /** Pages hidden from a plain cashier by Checkout rules. */
+  blockedPaths?: string[];
 }
 
 interface AuthState {

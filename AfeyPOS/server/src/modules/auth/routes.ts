@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { supervisorCoversBranch, userPermissions } from '../../lib/access.js';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
-import { navigationFor, type Permission } from '@afeypos/shared';
+import { CASHIER_PAGE_OPTIONS, isPlainCashier, mergeCheckoutRules, NAVIGATION, navigationFor, type Permission } from '@afeypos/shared';
 import { AttendanceRecord, Session, Till, User, IdempotencyRecord } from '../../models/index.js';
 import { authenticateCard } from '../staff/cards.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
@@ -165,13 +165,17 @@ router.get('/me', async (req, res) => {
     id: a.userId, name: a.name, email: a.email, roles: a.roles, branchIds: a.branchIds, kind: a.kind,
     twoFactorEnabled: Boolean(u?.twoFactor?.enabled), emailVerified: Boolean(u?.emailVerifiedAt), hasPin: Boolean(u?.pinHash), phone: u?.phone,
   };
+  // Checkout rules: pages a plain cashier may open (Checkout itself always stays).
+  const rules = mergeCheckoutRules(t.settings?.checkoutRules, t.settings ?? {});
+  const blockedPaths = isPlainCashier(a.roles) ? CASHIER_PAGE_OPTIONS.filter((p) => !rules.cashierPages.includes(p.key)).map((p) => (p.key === 'dashboard' ? '/' : p.key === 'support' ? '/support' : NAVIGATION.find((n) => n.key === p.key)?.path)).filter((x): x is string => Boolean(x)) : [];
   res.json({
     user,
-    tenant: { id: t._id, name: t.name, slug: t.slug, businessType: caps.businessType, status: t.status, settings: t.settings, enabledModules: t.enabledModules, disabledModules: t.disabledModules },
+    tenant: { id: t._id, name: t.name, slug: t.slug, businessType: caps.businessType, status: t.status, settings: t.settings, checkoutRules: rules, enabledModules: t.enabledModules, disabledModules: t.disabledModules },
     deploymentMode: env().DEPLOYMENT_MODE,
     capabilities: caps,
     permissions: [...a.permissions],
-    navigation: navigationFor(caps, a.permissions),
+    navigation: navigationFor(caps, a.permissions).filter((n) => !blockedPaths.includes(n.path)),
+    blockedPaths,
   });
 });
 

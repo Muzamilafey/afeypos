@@ -22,7 +22,9 @@ export function ShopPage() {
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{ data: StoreProduct[]; total: number } | null>(null);
   const [error, setError] = useState('');
-  useEffect(() => setPage(1), [q, categoryId, deals, sort]);
+  useEffect(() => {
+    setPage(1);
+  }, [q, categoryId, deals, sort]);
   useEffect(() => {
     let live = true;
     listProducts({ q, categoryId: categoryId || undefined, deals, sort, page, limit: 20 })

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { allocateProportionally, calculateTax, lineAmount, roundQty, type PriceListKey } from '@afeypos/shared';
+import { allocateProportionally, calculateTax, lineAmount, mergeCheckoutRules, roundQty, type PriceListKey } from '@afeypos/shared';
 import { api, ApiError, newRequestId, openPrintable } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useLocations } from '../lib/hooks';
@@ -17,7 +17,7 @@ interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
   taxRateBp: number | null; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>;
 }
-interface Line { key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean }
+interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean }
 interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string }
 interface Payment { method: string; amountCents: number; tenderedCents?: number; reference?: string; paymentIntentId?: string; label?: string }
 
@@ -45,7 +45,7 @@ export function POSPage() {
     );
   }
   if (shift.isLoading) return <div className="p-10"><Spinner /></div>;
-  const requireShift = me?.tenant.settings?.requireOpenShift !== false;
+  const requireShift = (me?.tenant.checkoutRules ?? mergeCheckoutRules(undefined, me?.tenant.settings ?? {})).shifts.required;
   if (requireShift && !shift.data) return <OpenShift tillId={tillId} tillName={till.name} onOpened={() => shift.refetch()} onChangeTill={() => { setWorkstation({ tillId: undefined }); setTillId(''); }} />;
   return <Checkout till={till} shift={shift.data} />;
 }
@@ -74,6 +74,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   const qc = useQueryClient();
   const caps = me!.capabilities;
   const settings = me!.tenant.settings ?? {};
+  const rules = me!.tenant.checkoutRules ?? mergeCheckoutRules(undefined, settings);
   const storeKey = `afey.carts.${till._id}`;
   const [carts, setCartsState] = useState<Cart[]>(() => {
     try {
@@ -99,13 +100,16 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   const scanChain = useRef<Promise<void>>(Promise.resolve());
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<string | null>(null);
-  const [paying, setPaying] = useState(false);
+  const [paying, setPaying] = useState<false | string>(false);
+  // Removing scanned items may need a supervisor (Checkout rules); the action runs once approved and recorded.
+  const [removal, setRemoval] = useState<{ kind: 'remove' | 'reduce' | 'clear'; lines: { productId: string; name: string; qty: number; amountCents: number }[]; then: () => void } | null>(null);
+  const [loyaltyOpen, setLoyaltyOpen] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
   const [lastSale, setLastSale] = useState<any>(null);
   const [error, setError] = useState<unknown>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [panel, setPanel] = useState<null | { kind: 'line'; focus: 'qty' | 'discount' } | { kind: 'cart' } | { kind: 'resume' } | { kind: 'browse' }>(null);
+  const [panel, setPanel] = useState<null | { kind: 'line'; focus: 'qty' | 'discount' } | { kind: 'cart' } | { kind: 'resume' } | { kind: 'browse' } | { kind: 'more' }>(null);
 
   useEffect(() => {
     try { localStorage.setItem(storeKey, JSON.stringify(carts)); } catch { /* ignore */ }
@@ -173,9 +177,27 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
     searchRef.current?.focus();
   };
 
+  const needsApproval = (kind: 'remove' | 'reduce' | 'clear') => !can('sales.items.remove') && (kind === 'clear' ? rules.items.clearNeedsApproval : kind === 'reduce' ? rules.items.reduceQtyNeedsApproval : rules.items.removeNeedsApproval);
+  /** Records the removal (always) and runs it; asks for a supervisor first when the rules say so. */
+  const guardRemoval = (kind: 'remove' | 'reduce' | 'clear', lines: Line[] | { line: Line; qty: number }[], then: () => void) => {
+    const rows = lines.map((x) => ('line' in x ? { l: x.line, q: x.qty } : { l: x, q: x.qty })).map(({ l, q }) => ({ productId: l.product._id, name: l.product.name, qty: q, amountCents: lineAmount(q, l.unitPriceCents) }));
+    if (!rows.length) return then();
+    if (needsApproval(kind)) {
+      setRemoval({ kind, lines: rows, then });
+      return;
+    }
+    api('/pos/item-removals', { body: { tillId: till._id, kind, lines: rows } }).catch(() => undefined);
+    then();
+  };
+
   const setLine = async (key: string, patch: Partial<Line>) => {
     const line = cart.lines.find((l) => l.key === key);
     if (!line) return;
+    if (patch.qty !== undefined && patch.qty < line.qty && !patch.__approved) {
+      guardRemoval('reduce', [{ line, qty: roundQty(line.qty - patch.qty) }], () => setLine(key, { ...patch, __approved: true }));
+      return;
+    }
+    delete patch.__approved;
     const next = { ...line, ...patch };
     if (patch.qty !== undefined || patch.unitCode !== undefined) {
       try {
@@ -217,10 +239,16 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   }, [cart, settings.defaultTaxRateBp, settings.pricesIncludeTax]);
 
   const suspend = () => {
-    if (!cart.lines.length) return;
+    if (!cart.lines.length || !rules.items.holdAllowed) return;
     setCarts((cs) => [...cs, newCart(cs.length + 1, caps.checkout.defaultPriceList)]);
     setActive(carts.length);
     toast.info(`${cart.label} suspended`);
+  };
+  /** The cashier clears a sale (or discards a held one): recorded, and may need a supervisor. */
+  const clearCart = (i: number) => {
+    const c = carts[i];
+    if (!c?.lines.length) return removeCart(i);
+    guardRemoval('clear', c.lines, () => removeCart(i));
   };
   const removeCart = (i: number) => {
     setCarts((cs) => (cs.length === 1 ? [newCart(1, caps.checkout.defaultPriceList)] : cs.filter((_, j) => j !== i)));
@@ -232,27 +260,43 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
       if (e.key === 'F2') { e.preventDefault(); searchRef.current?.focus(); }
       if (e.key === 'F4') { e.preventDefault(); setCustomerOpen(true); }
       if (e.key === 'F8') { e.preventDefault(); suspend(); }
-      if (e.key === 'F9' || e.key === 'F12') { e.preventDefault(); if (cart.lines.length) setPaying(true); }
+      if (e.key === 'F9' || e.key === 'F12') { e.preventDefault(); if (cart.lines.length) setPaying('cash'); }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   });
 
+  // Cash pickup warning (Checkout rules): the server only says whether one is due, even in blind mode.
+  const pickup = useQuery({ queryKey: ['pickup', shift?._id], queryFn: () => api<{ data: { pickupDue?: boolean } }>(`/shifts/${shift._id}/summary`).then((r) => Boolean(r.data.pickupDue)), enabled: Boolean(shift?._id) && rules.shifts.maxCashInDrawerCents > 0, refetchInterval: 120_000 });
+  const pickupDue = Boolean(pickup.data);
   const needsAge = has('ageVerification') && cart.lines.some((l) => l.product.ageRestricted);
   const big = caps.checkout.touchMode;
   const selected = cart.lines.find((l) => l.key === selectedKey) ?? cart.lines[cart.lines.length - 1];
   const held = carts.map((c, i) => ({ c, i })).filter(({ i }) => i !== active);
-  const removeLine = (key: string) => update((c) => ({ ...c, lines: c.lines.filter((x) => x.key !== key) }));
+  const removeLine = (key: string) => {
+    const line = cart.lines.find((x) => x.key === key);
+    if (line) guardRemoval('remove', [line], () => update((c) => ({ ...c, lines: c.lines.filter((x) => x.key !== key) })));
+  };
   const taxLabel = settings.pricesIncludeTax === false ? 'Tax' : `Tax${settings.defaultTaxRateBp ? ` (${settings.defaultTaxRateBp / 100}%)` : ''}`;
-  const tiles: { key: string; label: string; icon: string; tone: string; onClick: () => void; disabled?: boolean; hint?: string; count?: number }[] = [
-    { key: 'qty', label: 'Quantity', icon: 'plus', tone: 'text-emerald-600 bg-emerald-50', onClick: () => setPanel({ kind: 'line', focus: 'qty' }), disabled: !selected },
-    { key: 'ldisc', label: 'Line disc', icon: 'percent', tone: 'text-sky-600 bg-sky-50', onClick: () => setPanel({ kind: 'line', focus: 'discount' }), disabled: !selected || !can('sales.discount') },
-    { key: 'del', label: 'Delete', icon: 'trash', tone: 'text-red-600 bg-red-50', onClick: () => selected && removeLine(selected.key), disabled: !selected },
-    { key: 'hold', label: 'Hold', icon: 'pause', tone: 'text-amber-600 bg-amber-50', onClick: suspend, disabled: !cart.lines.length, hint: 'F8' },
-    { key: 'gdisc', label: 'Global disc', icon: 'tag', tone: 'text-violet-600 bg-violet-50', onClick: () => setPanel({ kind: 'cart' }), disabled: !cart.lines.length || !can('sales.discount') },
-    { key: 'resume', label: 'Resume', icon: 'play', tone: 'text-orange-600 bg-orange-50', onClick: () => setPanel({ kind: 'resume' }), disabled: !held.length, count: held.length },
+  const pay = (method: string) => cart.lines.length && !(needsAge && !cart.ageVerified) && setPaying(method);
+  const cantPay = !cart.lines.length || (needsAge && !cart.ageVerified);
+  // Main tiles: ways to pay and the sale's customer. Editing the sale is under More.
+  const tiles: { key: string; label: string; icon?: string; logo?: string; tone: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string }[] = [
+    { key: 'mpesa', label: 'M-Pesa', logo: '/brand/mpesa.svg', tone: '', onClick: () => pay('mpesa'), disabled: cantPay || !has('mpesa'), title: has('mpesa') ? undefined : 'Turn on M-Pesa in Settings > Integrations' },
+    { key: 'cash', label: 'Cash', icon: 'wallet', tone: 'text-emerald-700 bg-emerald-50', onClick: () => pay('cash'), disabled: cantPay, hint: 'F9' },
+    { key: 'card', label: 'Card', icon: 'card', tone: 'text-sky-700 bg-sky-50', onClick: () => pay('card'), disabled: cantPay },
+    { key: 'loyalty', label: 'Loyalty card', icon: 'star', tone: 'text-amber-700 bg-amber-50', onClick: () => setLoyaltyOpen(true), disabled: !has('loyalty'), title: has('loyalty') ? undefined : 'Turn on the Loyalty module in Settings' },
     { key: 'cust', label: cart.customer ? 'Customer ✓' : 'Customer', icon: 'user', tone: 'text-indigo-600 bg-indigo-50', onClick: () => setCustomerOpen(true), hint: 'F4' },
-    { key: 'clear', label: 'Clear', icon: 'x', tone: 'text-ink-600 bg-ink-100', onClick: () => removeCart(active), disabled: !cart.lines.length },
+    { key: 'hold', label: 'Hold sale', icon: 'pause', tone: 'text-orange-600 bg-orange-50', onClick: suspend, disabled: !cart.lines.length || !rules.items.holdAllowed, hint: 'F8', title: rules.items.holdAllowed ? undefined : 'Holding sales is turned off in Checkout rules' },
+  ];
+  const more: { key: string; label: string; icon: string; tone: string; onClick: () => void; disabled?: boolean; count?: number; lock?: boolean }[] = [
+    { key: 'qty', label: 'Quantity', icon: 'plus', tone: 'text-emerald-600 bg-emerald-50', onClick: () => setPanel({ kind: 'line', focus: 'qty' }), disabled: !selected },
+    { key: 'ldisc', label: 'Line discount', icon: 'percent', tone: 'text-sky-600 bg-sky-50', onClick: () => setPanel({ kind: 'line', focus: 'discount' }), disabled: !selected || !can('sales.discount') },
+    { key: 'del', label: 'Delete item', icon: 'trash', tone: 'text-red-600 bg-red-50', onClick: () => { setPanel(null); if (selected) removeLine(selected.key); }, disabled: !selected, lock: needsApproval('remove') },
+    { key: 'gdisc', label: 'Sale discount', icon: 'tag', tone: 'text-violet-600 bg-violet-50', onClick: () => setPanel({ kind: 'cart' }), disabled: !cart.lines.length || !can('sales.discount') },
+    { key: 'resume', label: 'Resume held', icon: 'play', tone: 'text-orange-600 bg-orange-50', onClick: () => setPanel({ kind: 'resume' }), disabled: !held.length, count: held.length },
+    { key: 'browse', label: 'Browse products', icon: 'grid', tone: 'text-teal-600 bg-teal-50', onClick: () => setPanel({ kind: 'browse' }) },
+    { key: 'clear', label: 'Clear sale', icon: 'x', tone: 'text-ink-600 bg-ink-100', onClick: () => { setPanel(null); clearCart(active); }, disabled: !cart.lines.length, lock: needsApproval('clear') },
   ];
 
   return (
@@ -348,19 +392,27 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
 
       {/* actions */}
       <aside className="flex w-full flex-col gap-3 lg:w-[320px] 2xl:w-[400px]" aria-label="Sale actions">
+        {pickupDue && <div role="alert" className="flex items-center gap-2 rounded-lg bg-amber-100 px-3 py-2 text-[13px] font-semibold text-amber-900 dark:bg-amber-900/40 dark:text-amber-100"><Icon name="alert" className="h-4 w-4 shrink-0" />Cash pickup due: hand cash over to a supervisor.</div>}
         <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2.5 overflow-y-auto">
           {tiles.map((t) => (
-            <button key={t.key} type="button" onClick={t.onClick} disabled={t.disabled}
-              className={cx('card relative flex min-h-[76px] flex-col items-center justify-center gap-1.5 transition hover:-translate-y-px hover:shadow-md disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none', big ? 'py-6' : 'py-3')}>
+            <button key={t.key} type="button" onClick={t.onClick} disabled={t.disabled} title={t.title} aria-label={['mpesa', 'cash', 'card'].includes(t.key) ? `${t.label} payment` : undefined}
+              className={cx('card relative flex min-h-[76px] flex-col items-center justify-center gap-1.5 transition hover:-translate-y-px hover:shadow-md disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none', big ? 'py-6' : 'py-3', t.key === 'mpesa' && 'ring-1 ring-inset ring-emerald-200 dark:ring-emerald-900')}>
               {t.hint && <kbd className="absolute right-2 top-2 rounded border border-ink-200 bg-ink-50 px-1 text-[10px] font-semibold text-ink-400 dark:border-ink-700 dark:bg-ink-800">{t.hint}</kbd>}
-              <span className={cx('flex h-9 w-9 items-center justify-center rounded-full', t.tone)}><Icon name={t.icon} className="h-[18px] w-[18px]" /></span>
-              <span className="text-[13px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-ink-100">{t.label}</span>
-              {t.count !== undefined && <span className="-mt-2 text-[11px] font-semibold text-ink-400">({t.count})</span>}
+              {t.logo
+                ? <img src={t.logo} alt="" className="h-9 w-auto max-w-[80%] object-contain" draggable={false} />
+                : <span className={cx('flex h-9 w-9 items-center justify-center rounded-full', t.tone)}><Icon name={t.icon!} className="h-[18px] w-[18px]" /></span>}
+              <span className="text-[13px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-ink-100">{t.logo ? 'Pay with M-Pesa' : t.label}</span>
             </button>
           ))}
+          <button type="button" onClick={() => setPanel({ kind: 'more' })} aria-haspopup="dialog"
+            className="card col-span-2 flex min-h-[56px] items-center justify-center gap-2 transition hover:-translate-y-px hover:shadow-md">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300"><Icon name="grid" className="h-4 w-4" /></span>
+            <span className="text-[13px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-ink-100">More</span>
+            <span className="text-xs font-semibold text-ink-400">quantity · discounts · delete · resume{held.length ? ` (${held.length})` : ''} · clear</span>
+          </button>
         </div>
         {needsAge && <div className="card p-3 text-sm"><Checkbox label={`Customer is ${Math.max(...cart.lines.map((l) => l.product.minAge ?? 18))}+ (ID checked)`} checked={cart.ageVerified} onChange={(v) => update((c) => ({ ...c, ageVerified: v }))} /></div>}
-        <button type="button" aria-label={`Pay ${money(totals.total)}`} disabled={!cart.lines.length || (needsAge && !cart.ageVerified)} onClick={() => setPaying(true)}
+        <button type="button" aria-label={`Pay ${money(totals.total)}`} disabled={cantPay} onClick={() => setPaying('cash')}
           className="group flex shrink-0 flex-col items-center justify-center gap-1.5 rounded-lg bg-brand-500 px-6 py-5 text-white shadow-lg shadow-brand-500/25 ring-4 ring-brand-500/20 transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:bg-brand-300 disabled:shadow-none disabled:ring-0 dark:disabled:bg-brand-800">
           <span className="text-2xl font-black uppercase tracking-wide 2xl:text-3xl">Finalize &amp; Pay</span>
           <span className="rounded-full bg-white/20 px-3 py-1 text-sm font-bold">F9 · {money(totals.total)}</span>
@@ -386,7 +438,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
               <li key={c.id} className="flex items-center gap-3 py-2.5">
                 <div className="min-w-0 flex-1"><div className="font-semibold">{c.label}</div><div className="text-xs text-ink-500">{c.lines.length} line(s){c.customer ? ` · ${c.customer.name}` : ''}</div></div>
                 <Button size="sm" onClick={() => { setActive(i); setPanel(null); searchRef.current?.focus(); }}>Resume</Button>
-                <Button size="sm" variant="ghost" aria-label={`Discard ${c.label}`} onClick={() => removeCart(i)}><Icon name="trash" className="h-4 w-4" /></Button>
+                <Button size="sm" variant="ghost" aria-label={`Discard ${c.label}`} onClick={() => clearCart(i)}><Icon name="trash" className="h-4 w-4" /></Button>
               </li>
             ))}
           </ul>
@@ -414,10 +466,47 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
         </Modal>
       )}
 
+      {panel?.kind === 'more' && (
+        <Modal open onClose={() => setPanel(null)} title="More actions" icon="grid" subtitle={selected ? `Selected: ${selected.product.name}` : 'Scan an item first to change it.'} size="md">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {more.map((t) => (
+              <button key={t.key} type="button" onClick={t.onClick} disabled={t.disabled}
+                className="relative flex min-h-[92px] flex-col items-center justify-center gap-1.5 rounded-lg border border-ink-100 bg-white p-3 transition hover:-translate-y-px hover:border-brand-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none dark:border-ink-800 dark:bg-ink-900">
+                {t.lock && <Icon name="lock" className="absolute right-2 top-2 h-3.5 w-3.5 text-ink-400" aria-label="Needs a supervisor" />}
+                <span className={cx('flex h-9 w-9 items-center justify-center rounded-full', t.tone)}><Icon name={t.icon} className="h-[18px] w-[18px]" /></span>
+                <span className="text-[12.5px] font-extrabold uppercase tracking-wide">{t.label}{t.count ? ` (${t.count})` : ''}</span>
+              </button>
+            ))}
+          </div>
+          {(needsApproval('remove') || needsApproval('clear')) && <p className="mt-3 flex items-center gap-1.5 text-xs text-ink-500"><Icon name="lock" className="h-3.5 w-3.5" />Locked actions need a supervisor's card scan.</p>}
+        </Modal>
+      )}
+      {removal && (
+        <OverrideModal permission="sales.items.remove"
+          message={`${removal.kind === 'clear' ? 'Clearing this sale' : removal.kind === 'reduce' ? 'Lowering the quantity' : `Removing ${removal.lines[0]?.name ?? 'this item'}`} needs a supervisor. Scan the supervisor's card.`}
+          onClose={() => { setRemoval(null); searchRef.current?.focus(); }}
+          onApproved={async (token) => {
+            const r = removal;
+            setRemoval(null);
+            try {
+              await api('/pos/item-removals', { body: { tillId: till._id, kind: r.kind, lines: r.lines, overrideToken: token } });
+              r.then();
+              toast.success('Approved and recorded');
+            } catch (e) { toast.error(e); }
+            searchRef.current?.focus();
+          }} />
+      )}
+      {loyaltyOpen && <LoyaltyCardModal onClose={() => { setLoyaltyOpen(false); searchRef.current?.focus(); }} onFound={(c) => {
+        setLoyaltyOpen(false);
+        const next = { ...cart, customer: c, priceList: (c.priceList as PriceListKey) && caps.priceLists.includes(c.priceList as PriceListKey) ? (c.priceList as PriceListKey) : cart.priceList };
+        requoteAll(next);
+        if (c.loyaltyPoints && cart.lines.length) setPaying('loyalty');
+        else toast.info(`${c.name} added to the sale${c.loyaltyPoints ? '' : ': no points to spend yet'}`);
+      }} />}
       {customerOpen && <CustomerPicker onClose={() => setCustomerOpen(false)} onPick={(c) => { setCustomerOpen(false); const next = { ...cart, customer: c, priceList: (c?.priceList as PriceListKey) && caps.priceLists.includes(c?.priceList as PriceListKey) ? (c!.priceList as PriceListKey) : cart.priceList }; requoteAll(next); }} />}
       {paying && (
-        <PaymentModal cart={cart} total={totals.total} till={till} shift={shift} onClose={() => setPaying(false)}
-          onDone={(sale) => { setPaying(false); setLastSale(sale); removeCart(active); qc.invalidateQueries({ queryKey: ['pos-search'] }); searchRef.current?.focus(); }} />
+        <PaymentModal cart={cart} total={totals.total} till={till} shift={shift} initialMethod={paying} onClose={() => setPaying(false)}
+          onDone={(sale) => { setPaying(false); setLastSale(sale); removeCart(active); pickup.refetch(); qc.invalidateQueries({ queryKey: ['pos-search'] }); searchRef.current?.focus(); }} />
       )}
       {lastSale && <ReceiptModal sale={lastSale} tillId={till._id} onClose={() => { setLastSale(null); searchRef.current?.focus(); }} />}
     </div>
@@ -505,13 +594,42 @@ function CustomerPicker({ onClose, onPick }: { onClose: () => void; onPick: (c: 
   );
 }
 
-function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Cart; total: number; till: { _id: string }; shift: any; onClose: () => void; onDone: (sale: any) => void }) {
-  const { has, can } = useAuth();
+/** Scan or type a loyalty card (the customer's code) or phone number to put the customer on the sale. */
+function LoyaltyCardModal({ onClose, onFound }: { onClose: () => void; onFound: (c: NonNullable<Cart['customer']>) => void }) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const find = async () => {
+    const q = code.trim();
+    if (!q) return;
+    setBusy(true); setError(null);
+    try {
+      const list = (await api<{ data: any[] }>('/customers', { query: { q, limit: 5 } })).data.filter((c) => c.kind !== 'walk_in');
+      const exact = list.find((c) => c.code?.toUpperCase() === q.toUpperCase() || (c.phone ?? '').replace(/\D/g, '').endsWith(q.replace(/\D/g, '').slice(-9)));
+      const hit = exact ?? (list.length === 1 ? list[0] : null);
+      if (!hit) setError(new ApiError(404, 'NOT_FOUND', list.length ? 'Several customers match: scan the card or type the full code' : `No customer with card or phone "${q}"`));
+      else onFound(hit);
+    } catch (e) { setError(e); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open onClose={onClose} title="Loyalty card" icon="star" subtitle="Scan the customer's card, or type the card code or phone number." size="sm"
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} onClick={find}>Find customer</Button></>}>
+      <Field label="Card code or phone"><Input autoFocus value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); find(); } }} placeholder="Scan card" /></Field>
+      <p className="mt-2 text-xs text-ink-500">With points available, the payment opens on Points so the customer can pay with them.</p>
+      <div className="mt-2"><ErrorBox error={error} /></div>
+    </Modal>
+  );
+}
+
+function PaymentModal({ cart, total, till, shift, initialMethod, onClose, onDone }: { cart: Cart; total: number; till: { _id: string }; shift: any; initialMethod?: string; onClose: () => void; onDone: (sale: any) => void }) {
+  const { has, can, me } = useAuth();
+  const terminals: { name: string; bank: string; terminalId: string }[] = me?.tenant.settings?.cardTerminals ?? [];
+  const [card, setCard] = useState({ terminal: terminals[0]?.name ?? '', type: 'Visa', last4: '', approval: '' });
   const toast = useToast();
   // Stable id for this payment attempt: retries after a network error replay instead of double-selling.
   const [requestId] = useState(newRequestId);
   const [payments, setPayments] = useState<Payment[]>([]);
-  const [method, setMethod] = useState('cash');
+  const [method, setMethod] = useState(initialMethod || 'cash');
   const paid = payments.reduce((a, p) => a + p.amountCents, 0);
   const remaining = total - paid;
   const [amount, setAmount] = useState<number | null>(remaining);
@@ -558,6 +676,15 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
   const addPayment = () => {
     if (!amount || amount <= 0) return;
     const a = Math.min(amount, remaining);
+    if (method === 'card') {
+      // Bank card machine: the approval code on the slip proves the payment; the machine and card are recorded.
+      if (!/^[A-Za-z0-9]{4,12}$/.test(card.approval.trim())) { setError(new ApiError(400, 'CARD_APPROVAL', 'Enter the approval code printed on the card machine slip')); return; }
+      const ref = [card.terminal, `${card.type}${card.last4 ? ` ****${card.last4}` : ''}`, `AUTH ${card.approval.trim().toUpperCase()}`].filter(Boolean).join(' · ').slice(0, 100);
+      setPayments((ps) => [...ps, { method, amountCents: a, reference: ref, label: `Card ${card.type}${card.last4 ? ` ****${card.last4}` : ''}` }]);
+      setCard({ ...card, last4: '', approval: '' });
+      setError(null);
+      return;
+    }
     if (method === 'cash') setPayments((ps) => [...ps, { method, amountCents: a, tenderedCents: Math.max(tendered ?? a, a), label: 'Cash' }]);
     else setPayments((ps) => [...ps, { method, amountCents: a, reference: reference || undefined, label: paymentLabel(method) }]);
     setTendered(null);
@@ -619,7 +746,19 @@ function PaymentModal({ cart, total, till, shift, onClose, onDone }: { cart: Car
                   onUse={(i) => setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - (i.allocatedCents ?? 0), remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}` }])} />
               )}
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}
-              {['card', 'bank'].includes(method) && <Field label="Reference (approval code)"><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>}
+              {method === 'card' && (
+                <div className="space-y-3 rounded-lg border border-sky-100 bg-sky-50/50 p-3 dark:border-sky-900 dark:bg-sky-950/20">
+                  <p className="text-xs text-ink-600 dark:text-ink-300"><b>1.</b> Key <b>{money(Math.min(amount ?? 0, remaining))}</b> into the card machine. <b>2.</b> The customer taps or inserts the card. <b>3.</b> Enter the approval code from the slip.</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {terminals.length > 0 && <Field label="Card machine"><Select value={card.terminal} onChange={(e) => setCard({ ...card, terminal: e.target.value })} options={terminals.map((t) => ({ value: t.name, label: `${t.name}${t.bank ? ` (${t.bank})` : ''}` }))} /></Field>}
+                    <Field label="Card"><Select value={card.type} onChange={(e) => setCard({ ...card, type: e.target.value })} options={['Visa', 'Mastercard', 'Amex', 'UnionPay', 'Other card'].map((v) => ({ value: v, label: v }))} /></Field>
+                    <Field label="Last 4 digits (optional)"><Input inputMode="numeric" maxLength={4} value={card.last4} onChange={(e) => setCard({ ...card, last4: e.target.value.replace(/\D/g, '').slice(0, 4) })} /></Field>
+                    <Field label="Approval code"><Input autoFocus value={card.approval} maxLength={12} placeholder="From the slip" onChange={(e) => setCard({ ...card, approval: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') addPayment(); }} /></Field>
+                  </div>
+                  {gateways.data?.some((g) => g.provider === 'pesapal') && <button type="button" className="text-xs font-semibold text-brand-600 hover:underline" onClick={() => setMethod('gateway')}>No card machine? Let the customer pay by card online with Pesapal (QR code) →</button>}
+                </div>
+              )}
+              {method === 'bank' && <Field label="Reference (bank transfer)"><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>}
               {method === 'credit' && cart.customer && <p className="text-sm text-ink-600">Balance {money(cart.customer.balanceCents)} · limit {money(cart.customer.creditLimitCents)}{!can('sales.credit') && ' · needs manager approval'}</p>}
               {method !== 'mpesa' && method !== 'gateway' && <Button variant="secondary" onClick={addPayment}>Add {paymentLabel(method).toLowerCase()} payment</Button>}
             </div>

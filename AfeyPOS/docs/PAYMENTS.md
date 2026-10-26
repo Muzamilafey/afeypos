@@ -18,6 +18,7 @@ JulyPay and Chipper are listed as **coming soon**: neither publishes merchant AP
 | Kopo Kopo | KE | M-Pesa STK push to a K-till | `X-KopoKopo-Signature` = HMAC-SHA256 of the raw body with the API key | `GET` the payment `Location` URL (only on the Kopo Kopo host) |
 | Hubtel | GH | Phone prompt (MTN, Telecel, AirtelTigo) | Per-tenant callback token in the URL | Transaction status API (`api-txnstatus.hubtel.com`; Hubtel requires the server IP to be whitelisted) |
 | iPay | KE | M-Pesa STK push | Per-tenant callback token in the URL | `POST /transaction/search` (HMAC-SHA256 signed) |
+| Pesapal (API 3.0) | KE, UG, TZ, RW, MW, ZM, ZW | Payment page / QR (Visa, Mastercard, Amex, M-Pesa, Airtel Money, bank) | Per-tenant callback token in the URL; the notification (IPN) URL is registered with Pesapal automatically | `GET /api/Transactions/GetTransactionStatus?orderTrackingId=` (status_code 1 = completed) |
 | ZenoPay | TZ | Phone prompt (M-Pesa, Mixx by Yas, Airtel, Halopesa) | `x-api-key` header equals the API key | `GET /order-status?order_id=` |
 | Africa's Talking | KE, UG, TZ, RW, MW, ZM | Mobile checkout (phone prompt) | Per-tenant callback token in the URL | `GET /query/transaction/find` |
 | Payment simulator | — | Phone prompt and payment link | Callback token | Outcome set via `POST /payments/gateways/simulate/:id` (disabled in production) |
@@ -50,6 +51,15 @@ At the till, **Pay → Mobile money & cards** lists the gateways enabled for tha
 - `GET /payments/online/reconciliation` · `GET /payments/online/events`.
 - `POST /payments/gateways/simulate/:id` — simulator only, non-production.
 - Sales: `payments: [{ method: 'gateway', amountCents, paymentIntentId }]`. The receipt shows the provider name and its receipt / transaction id.
+
+## Card machines (bank POS / PDQ)
+
+Bank card machines are not connected to Afey POS. The **Card** tile on the till records a payment taken on a machine:
+1. the cashier keys the amount into the machine;
+2. the customer taps or inserts the card;
+3. the cashier enters the **approval code** from the slip, plus the card type and, optionally, the last four digits.
+
+The sale stores the machine, card and approval code, for reconciliation with the bank statement. List your machines (name, bank, terminal ID) under **Settings → Checkout rules**. For cards without a machine, configure **Pesapal** under Integrations: the till shows a QR code for its payment page.
 
 ## Verification status
 

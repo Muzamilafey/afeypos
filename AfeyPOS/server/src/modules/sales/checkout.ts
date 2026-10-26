@@ -1,7 +1,7 @@
 import type { Request } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { allocateProportionally, calculateTax, lineAmount, percentOf, PRICE_LISTS, roundQty, type Permission, type PriceListKey } from '@afeypos/shared';
+import { allocateProportionally, calculateTax, lineAmount, mergeCheckoutRules, percentOf, PRICE_LISTS, roundQty, type Permission, type PriceListKey } from '@afeypos/shared';
 import {
   OnlineOrder, CashMovement, Customer, LedgerEntry, PaymentIntent, Product, Promotion, Sale, SalesDocument, SerialItem, Shift, Till, User, Branch,
 } from '../../models/index.js';
@@ -126,7 +126,8 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
   const branch = await Branch.findById(till.branchId);
 
   let shift = null;
-  if (settings.requireOpenShift) {
+  const rules = mergeCheckoutRules(settings.checkoutRules, settings);
+  if (rules.shifts.required) {
     shift = await Shift.findOne({ tillId: till._id, status: 'open' });
     if (!shift) throw new AppError(409, 'SHIFT_REQUIRED', 'Open a shift on this till before selling');
     if (String(shift.userId) !== String(userId) && !can(req, 'shifts.manage')) throw forbidden('This till has a shift opened by another cashier');
@@ -180,9 +181,14 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
   const totalDiscount = lineDiscounts + cartDiscount;
   if (totalDiscount > 0) {
     await authz.require('sales.discount', 'apply a discount');
-    if (linesGross > 0 && (totalDiscount * 10000) / linesGross > (settings.cashierDiscountLimitBp ?? 0)) {
-      await authz.require('sales.discount.override', `discount above ${(settings.cashierDiscountLimitBp ?? 0) / 100}%`);
-    }
+    // Checkout rules: what a cashier may give alone; anything more needs a supervisor (sales.discount.override).
+    const d = rules.discounts;
+    const pct = (bp: number) => `${bp / 100}%`;
+    if (!d.allowed) await authz.require('sales.discount.override', 'give a discount');
+    const bigLine = priced.find((p) => p.gross > 0 && (p.discount * 10000) / p.gross > d.lineLimitBp);
+    if (bigLine) await authz.require('sales.discount.override', `discount above ${pct(d.lineLimitBp)} on ${bigLine.product.name}`);
+    if (linesGross > 0 && (totalDiscount * 10000) / linesGross > d.saleLimitBp) await authz.require('sales.discount.override', `discount above ${pct(d.saleLimitBp)} of the sale`);
+    if (d.maxAmountCents > 0 && totalDiscount > d.maxAmountCents) await authz.require('sales.discount.override', `discount above ${(d.maxAmountCents / 100).toFixed(2)}`);
   }
   const cartShares = allocateProportionally(cartDiscount, priced.map((p) => p.gross - p.discount));
 

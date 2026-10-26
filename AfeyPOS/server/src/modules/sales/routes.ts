@@ -1,19 +1,21 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { Sale, SaleReturn, Customer, Tenant, User, Payout } from '../../models/index.js';
+import { Sale, SaleReturn, Customer, Tenant, User, Payout, Till } from '../../models/index.js';
 import { parse, idParam, objectId, pagination, positiveCents, escapeRegex } from '../../http/validate.js';
 import { can, requirePermission, assertBranchAccess, requireAnyPermission } from '../../http/auth.js';
 import { idempotent } from '../../http/idempotency.js';
-import { notFound } from '../../lib/errors.js';
+import { AppError, notFound } from '../../lib/errors.js';
 import { emitToTenant } from '../../realtime/socket.js';
 import { notify } from '../notifications/service.js';
 import { formatMoney, mergeReceipt } from '@afeypos/shared';
 import { checkout, checkoutSchema } from './checkout.js';
 import { mpesaPhoneOf, processReturn, returnPolicy, returnSchema, voidSale, voidSchema } from './returns.js';
-import { closeShift, openShift, recordCashMovement, shiftSummary } from './shifts.js';
+import { checkoutRulesOf, closeShift, hideExpected, openShift, recordCashMovement, shiftSummary } from './shifts.js';
 import { Shift } from '../../models/index.js';
 import { creditNoteAsReceipt, receiptContext, renderReceiptEscPos, renderReceiptHtml, renderReceiptText } from '../hardware/receipt.js';
 import { runAsPlatform } from '../../lib/context.js';
+import { audit } from '../../lib/audit.js';
+import { consumeOverride } from '../auth/routes.js';
 
 const router = Router();
 
@@ -166,7 +168,9 @@ router.get('/shifts', requirePermission('shifts.open'), async (req, res) => {
   if (!can(req, 'shifts.manage')) filter.userId = req.auth!.userId;
   if (q.status) filter.status = q.status;
   if (q.tillId) filter.tillId = q.tillId;
-  const [data, total] = await Promise.all([Shift.find(filter).sort({ openedAt: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), Shift.countDocuments(filter)]);
+  const [rows, total] = await Promise.all([Shift.find(filter).sort({ openedAt: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), Shift.countDocuments(filter)]);
+  const blind = checkoutRulesOf(req).shifts.blindClose && !can(req, 'shifts.manage');
+  const data = blind ? rows.map(({ expectedCashCents: _e, varianceCents: _v, ...r }) => r) : rows;
   res.json({ data, total, page: q.page, limit: q.limit });
 });
 
@@ -184,7 +188,9 @@ router.post('/shifts', requirePermission('shifts.open'), async (req, res) => {
 router.get('/shifts/:id/summary', requirePermission('shifts.open'), async (req, res) => {
   const summary = await shiftSummary(idParam(req.params.id));
   if (!can(req, 'shifts.manage') && String(summary.shift.userId) !== String(req.auth!.userId)) throw notFound('Shift');
-  res.json({ data: summary });
+  // Shown even in blind mode: the till only learns that a cash pickup is due, not the amount.
+  const max = checkoutRulesOf(req).shifts.maxCashInDrawerCents;
+  res.json({ data: { ...hideExpected(req, summary), pickupDue: summary.shift.status === 'open' && max > 0 && summary.expectedCashCents > max } });
 });
 
 router.post('/shifts/:id/cash', requirePermission('cash.movement'), async (req, res) => {
@@ -193,10 +199,38 @@ router.post('/shifts/:id/cash', requirePermission('cash.movement'), async (req, 
 });
 
 router.post('/shifts/:id/close', requirePermission('shifts.open'), async (req, res) => {
-  const body = parse(z.object({ countedCashCents: positiveCents, notes: z.string().max(500).optional(), denominations: z.record(z.string(), z.number().int().nonnegative()).optional() }), req.body);
-  const result = await closeShift(req, idParam(req.params.id), body.countedCashCents, body.notes, body.denominations);
+  const body = parse(z.object({ countedCashCents: positiveCents, notes: z.string().max(500).optional(), denominations: z.record(z.string(), z.number().int().nonnegative()).optional(), overrideToken: z.string().max(2000).optional() }), req.body);
+  const result = await closeShift(req, idParam(req.params.id), body.countedCashCents, body.notes, body.denominations, body.overrideToken);
   emitToTenant(req.tenant!._id, 'shift.closed', { id: result.shift._id, varianceCents: result.shift.varianceCents });
-  res.json({ data: result });
+  res.json({ data: hideExpected(req, result) });
+});
+
+/**
+ * Items taken off a sale before payment (deleted, quantity lowered, or the whole sale cleared). Always
+ * recorded for loss prevention; when Checkout rules require it, a supervisor's single-use approval is consumed.
+ */
+router.post('/pos/item-removals', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({
+    tillId: objectId,
+    kind: z.enum(['remove', 'reduce', 'clear']),
+    lines: z.array(z.object({ productId: objectId, name: z.string().max(200), qty: z.number().positive(), amountCents: z.number().int().min(0) })).min(1).max(500),
+    overrideToken: z.string().max(2000).optional(),
+  }), req.body);
+  const rules = checkoutRulesOf(req).items;
+  const needs = body.kind === 'clear' ? rules.clearNeedsApproval : body.kind === 'reduce' ? rules.reduceQtyNeedsApproval : rules.removeNeedsApproval;
+  let approvedBy: string | null = null;
+  if (needs && !can(req, 'sales.items.remove')) {
+    approvedBy = await consumeOverride(body.overrideToken, 'sales.items.remove', String(req.tenant!._id), String(req.auth!.userId));
+    if (!approvedBy) throw new AppError(403, 'OVERRIDE_REQUIRED', `Supervisor approval required: ${body.kind === 'clear' ? 'clear the sale' : 'remove an item'}`, { permission: 'sales.items.remove' });
+  }
+  const till = await Till.findById(body.tillId, { code: 1, branchId: 1 }).lean();
+  if (!till) throw notFound('Till');
+  assertBranchAccess(req, till.branchId);
+  await audit(req, {
+    action: body.kind === 'clear' ? 'pos.sale_cleared' : 'pos.item_removed', entity: 'Till', entityId: till._id,
+    details: { kind: body.kind, till: till.code, lines: body.lines, amountCents: body.lines.reduce((a, l) => a + l.amountCents, 0), ...(approvedBy ? { approvedBy } : {}) },
+  });
+  res.status(201).json({ data: { ok: true, approved: Boolean(approvedBy) } });
 });
 
 export const salesRoutes = router;

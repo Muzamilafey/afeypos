@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { MODULES, PAYMENT_PROVIDER_INFO, RECEIPT_TEMPLATES, mergeReceipt, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
+import { CASHIER_PAGE_OPTIONS, MODULES, PAYMENT_PROVIDER_INFO, RECEIPT_TEMPLATES, mergeCheckoutRules, mergeReceipt, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import {
   AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
 } from '../../models/index.js';
@@ -126,6 +126,34 @@ router.post('/settings/receipt/preview', requirePermission('settings.manage'), a
   const opts = { ...ctx, settings: mergeReceipt(body.receipt) };
   if (body.format === 'text') res.type('text').send(renderReceiptText(t, sale, opts));
   else res.type('html').send(renderReceiptHtml(t, sale, opts));
+});
+
+// ---------- checkout rules and card terminals ----------
+const bp = z.number().int().min(0).max(10000);
+const rulesSchema = z.object({
+  items: z.object({ removeNeedsApproval: z.boolean(), reduceQtyNeedsApproval: z.boolean(), clearNeedsApproval: z.boolean(), holdAllowed: z.boolean() }).partial(),
+  discounts: z.object({ allowed: z.boolean(), lineLimitBp: bp, saleLimitBp: bp, maxAmountCents: positiveCents }).partial(),
+  shifts: z.object({ required: z.boolean(), minOpeningFloatCents: positiveCents, blindClose: z.boolean(), closeNeedsApproval: z.boolean(), maxCashInDrawerCents: positiveCents, oneOpenShiftPerCashier: z.boolean() }).partial(),
+  cashierPages: z.array(z.enum(CASHIER_PAGE_OPTIONS.map((p) => p.key) as [string, ...string[]])).max(CASHIER_PAGE_OPTIONS.length),
+}).partial();
+const terminalsSchema = z.array(z.object({ name: z.string().trim().min(1).max(40), bank: z.string().trim().max(40), terminalId: z.string().trim().max(40) })).max(30);
+const presentRules = (t: any) => ({ rules: mergeCheckoutRules(t.settings?.checkoutRules, t.settings ?? {}), cardTerminals: t.settings?.cardTerminals ?? [] });
+
+router.get('/settings/checkout-rules', requirePermission('settings.manage'), async (req, res) => {
+  const t = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
+  res.json({ data: presentRules(t) });
+});
+
+router.put('/settings/checkout-rules', requirePermission('settings.manage'), async (req, res) => {
+  const body = parse(z.object({ rules: rulesSchema, cardTerminals: terminalsSchema.optional() }), req.body);
+  const current = mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
+  const rules = mergeCheckoutRules({ ...current, ...body.rules, items: { ...current.items, ...body.rules.items }, discounts: { ...current.discounts, ...body.rules.discounts }, shifts: { ...current.shifts, ...body.rules.shifts } });
+  // The older single settings stay in step for anything that still reads them.
+  const set: Record<string, unknown> = { 'settings.checkoutRules': rules, 'settings.requireOpenShift': rules.shifts.required, 'settings.cashierDiscountLimitBp': rules.discounts.saleLimitBp };
+  if (body.cardTerminals) set['settings.cardTerminals'] = body.cardTerminals;
+  const t = await runAsPlatform(() => Tenant.findByIdAndUpdate(req.tenant!._id, { $set: set }, { new: true }).lean());
+  await audit(req, { action: 'settings.checkout_rules_updated', entity: 'Tenant', entityId: req.tenant!._id, details: { rules } });
+  res.json({ data: presentRules(t) });
 });
 
 /** Enable or hide modules. Disabling never deletes data. */

@@ -73,6 +73,30 @@ describe('gateway adapters (stubbed HTTP; live APIs not exercised)', () => {
     expect(calls[0].url).toBe('https://api.paystack.co/transaction/initialize');
   });
 
+  it('Pesapal: token, IPN registered once, hosted page, status by tracking id', async () => {
+    const p = gw('pesapal', { consumerKey: 'ck', consumerSecret: 'cs' });
+    stubFetch((c) => {
+      if (c.url.endsWith('/api/Auth/RequestToken')) return { body: { token: 'tok-1', expiryDate: new Date(Date.now() + 300_000).toISOString(), status: '200' } };
+      if (c.url.endsWith('/api/URLSetup/GetIpnList')) return { body: [] };
+      if (c.url.endsWith('/api/URLSetup/RegisterIPN')) return { body: { ipn_id: 'ipn-9', url: c.body.url, status: '200' } };
+      if (c.url.endsWith('/api/Transactions/SubmitOrderRequest')) return { body: { order_tracking_id: 'trk-1', merchant_reference: 'ref123', redirect_url: 'https://cybqa.pesapal.com/pay/trk-1', status: '200' } };
+      return { body: { status_code: 1, payment_status_description: 'Completed', merchant_reference: 'ref123', amount: 250, currency: 'KES', confirmation_code: 'PSP123', payment_method: 'Visa' } };
+    });
+    const out = await p.charge(charge({ flow: 'link' }));
+    expect(out).toMatchObject({ status: 'pending', providerRef: 'trk-1', checkoutUrl: 'https://cybqa.pesapal.com/pay/trk-1' });
+    const order = calls.find((c) => c.url.endsWith('SubmitOrderRequest'))!;
+    expect(order.url.startsWith('https://cybqa.pesapal.com/pesapalv3/')).toBe(true);
+    expect(order.headers.authorization).toBe('Bearer tok-1');
+    expect(order.body).toMatchObject({ id: 'ref123', amount: 250, currency: 'KES', notification_id: 'ipn-9', callback_url: 'https://pos.example/return' });
+    expect(calls.find((c) => c.url.endsWith('RegisterIPN'))!.body).toEqual({ url: 'https://pos.example/hook', ipn_notification_type: 'GET' });
+    // Second charge: the IPN id is remembered.
+    await p.charge(charge({ flow: 'link', reference: 'ref124' }));
+    expect(calls.filter((c) => c.url.endsWith('RegisterIPN'))).toHaveLength(1);
+    expect(await p.verify({ reference: 'ref123', providerRef: 'trk-1' })).toMatchObject({ status: 'succeeded', paidAmountCents: 25000, receiptNumber: 'PSP123' });
+    expect(await p.verify({ reference: 'other', providerRef: 'trk-1' })).toMatchObject({ status: 'pending', message: 'Reference mismatch' });
+    expect(p.webhook({ rawBody: Buffer.alloc(0), body: {}, query: { OrderTrackingId: 'trk-1', OrderMerchantReference: 'ref123', OrderNotificationType: 'IPNCHANGE' }, headers: {} })).toEqual({ providerRef: 'trk-1', reference: 'ref123' });
+  });
+
   it('Flutterwave: charge type from channel, verif-hash webhook, verify by tx_ref', async () => {
     const f = gw('flutterwave', { secretKey: 'FLWSECK_TEST-x', webhookHash: 'my-hash' });
     stubFetch(() => ({ body: { status: 'success', data: { id: 7, flw_ref: 'FLW-1', status: 'pending' } } }));

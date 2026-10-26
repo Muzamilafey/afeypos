@@ -29,6 +29,12 @@ Permissions are enforced on the server; the web app only hides what a user canno
 
 **Cost prices.** Cost prices, average cost, profit and margins are removed from every response (and CSV export) for users without *See cost prices and margins* (`products.cost`), e.g. cashiers and salespeople. Supplier prices on purchasing documents stay visible to purchasing and receiving staff. Product edits by such users keep the existing cost.
 
+**Checkout rules** (*Settings → Checkout rules*, `settings.checkoutRules`) limit what cashiers do alone. Except for page access, the server enforces them:
+- **Items.** Removing a scanned item, lowering its quantity or clearing a sale can each require a supervisor (permission `sales.items.remove`). The till sends every removal to `POST /pos/item-removals`, which records it in the audit trail (`pos.item_removed`, `pos.sale_cleared`, with the supervisor). When approval is required, it consumes the supervisor's single-use approval. Holding sales can be turned off.
+- **Discounts.** A cashier may be allowed no discounts, or capped per item (%), per sale (%) and per sale (amount). Above the cap, checkout requires `sales.discount.override`.
+- **Shifts.** Rules available: an open shift is needed to sell; a minimum opening float; one open shift per cashier; a blind count (cashiers never receive the expected cash or the variance); closing needs a supervisor; and a cash pickup warning above an amount.
+- **Pages.** Users whose only role is Cashier see only the pages allowed here; Checkout always stays. This is a menu and navigation limit. What they can read or change is still decided by their permissions.
+
 **Refused attempts** (permission, role or branch) are written to the audit trail as `access.denied` (at most once a minute per user, reason and path).
 
 Module gates are also enforced on the server; adjustments need approval by a different user; only owners change modules.

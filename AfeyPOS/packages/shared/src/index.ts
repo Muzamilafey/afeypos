@@ -6,3 +6,4 @@ export * from './payments.js';
 export * from './storefront.js';
 export * from './receipt.js';
 export * from './code128.js';
+export * from './checkoutRules.js';
