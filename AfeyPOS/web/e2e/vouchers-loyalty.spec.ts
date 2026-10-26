@@ -77,6 +77,25 @@ test('gift vouchers and the loyalty program, from the back office to the till', 
   await carol.getByRole('button', { name: 'Complete sale' }).click();
   await expect(carol.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
 
+  // Keyboard only: scan, Enter opens cash payment, type the cash, Enter completes, Enter starts the next sale.
+  await carol.getByRole('button', { name: 'New sale' }).click();
+  await scan.fill('MILK500');
+  await scan.press('Enter');
+  await expect(carol.getByTestId('cart-total')).toHaveText(/65\.00/);
+  await carol.keyboard.press('+');
+  await expect(carol.getByTestId('cart-total')).toHaveText(/130\.00/);
+  await scan.press('Enter');
+  const cash = carol.getByLabel('Cash received');
+  await expect(cash).toBeFocused();
+  await cash.fill('200');
+  if (process.env.SHOTS) await carol.screenshot({ path: `${process.env.SHOTS}/pos-pay-drawer.png` });
+  await cash.press('Enter');
+  await expect(carol.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
+  await expect(carol.getByText(/Change: .*70\.00/)).toBeVisible();
+  await carol.keyboard.press('Enter');
+  await expect(carol.getByText(/Sale RCP-\d+ complete/)).toHaveCount(0);
+  await expect(scan).toBeFocused();
+
   // The voucher kept its 35.00.
   await page.goto('/vouchers');
   await expect(page.getByRole('row', { name: new RegExp(code) })).toContainText('35.00');

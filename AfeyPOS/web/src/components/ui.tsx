@@ -183,7 +183,11 @@ export function Loading() {
  * Dialogs. Centred card by default; `variant="drawer"` slides in from the right for long forms. On phones both
  * become a bottom sheet. Optional icon and subtitle in the header; the footer is a tinted action bar.
  */
-export function Modal({ open, onClose, title, subtitle, icon, children, footer, size = 'md', variant = 'center' }: {
+/**
+ * Dialogs open as a panel from the right taking half the page (wider for "xl", like product browsing), with
+ * the actions pinned at the bottom; on phones they rise as a bottom sheet. "center" keeps a centred box.
+ */
+export function Modal({ open, onClose, title, subtitle, icon, children, footer, size = 'md', variant = 'drawer' }: {
   open: boolean; onClose: () => void; title: string; subtitle?: ReactNode; icon?: string; children: ReactNode; footer?: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl'; variant?: 'center' | 'drawer';
 }) {
@@ -208,7 +212,7 @@ export function Modal({ open, onClose, title, subtitle, icon, children, footer, 
   }, [open, onClose]);
   if (!open) return null;
   const drawer = variant === 'drawer';
-  const w = drawer ? { sm: 'sm:max-w-md', md: 'sm:max-w-lg', lg: 'sm:max-w-2xl', xl: 'sm:max-w-4xl' }[size] : { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' }[size];
+  const w = drawer ? (size === 'xl' ? 'sm:w-[70vw] sm:min-w-[560px]' : 'sm:w-1/2 sm:min-w-[460px]') : { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' }[size];
   return (
     <div className={cx('modal-backdrop fixed inset-0 z-50 flex bg-[#14171c]/55 backdrop-blur-[2px]', drawer ? 'items-end justify-end sm:items-stretch' : 'items-end justify-center sm:items-center sm:p-4')} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={id}

@@ -259,12 +259,40 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
     setActive(0);
   };
 
+  // Keyboard: the till works without a mouse. Shortcuts act only when no window (payment, customer...) is open.
+  const anyOpen = Boolean(paying || panel || customerOpen || lastSale || removal || loyaltyOpen || voucherOpen);
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.key === 'F2') { e.preventDefault(); searchRef.current?.focus(); }
-      if (e.key === 'F4') { e.preventDefault(); setCustomerOpen(true); }
-      if (e.key === 'F8') { e.preventDefault(); suspend(); }
-      if (e.key === 'F9' || e.key === 'F12') { e.preventDefault(); if (cart.lines.length) setPaying('cash'); }
+      if (anyOpen) return;
+      const inSearch = document.activeElement === searchRef.current;
+      const typingElsewhere = !inSearch && /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement as HTMLElement | null)?.tagName ?? '');
+      const searchEmpty = !searchRef.current?.value;
+      const idx = cart.lines.findIndex((l) => l.key === selected?.key);
+      const key = e.key;
+      if (key === 'F2') { e.preventDefault(); searchRef.current?.focus(); return; }
+      if (key === 'F3') { e.preventDefault(); if (has('mpesa')) pay('mpesa'); return; }
+      if (key === 'F4') { e.preventDefault(); setCustomerOpen(true); return; }
+      if (key === 'F6') { e.preventDefault(); pay('card'); return; }
+      if (key === 'F7') { e.preventDefault(); if (!cantPay) setVoucherOpen(true); return; }
+      if (key === 'F8') { e.preventDefault(); suspend(); return; }
+      if (key === 'F9' || key === 'F12') { e.preventDefault(); pay('cash'); return; }
+      if (key === 'F10') { e.preventDefault(); setPanel({ kind: 'more' }); return; }
+      if (typingElsewhere || !searchEmpty || !cart.lines.length) return;
+      // With the scan box empty: arrows pick a line, +/- change its quantity, Delete removes it.
+      if (key === 'ArrowDown' || key === 'ArrowUp') {
+        e.preventDefault();
+        const next = cart.lines[Math.max(0, Math.min(cart.lines.length - 1, (idx < 0 ? cart.lines.length : idx) + (key === 'ArrowDown' ? 1 : -1)))];
+        if (next) setSelectedKey(next.key);
+      } else if ((key === '+' || key === '-') && selected) {
+        e.preventDefault();
+        const step = caps.checkout.allowFractionalQty && selected.product.allowFractional ? 0.5 : 1;
+        const q = roundQty(selected.qty + (key === '+' ? step : -step));
+        if (q > 0) setLine(selected.key, { qty: q });
+        else removeLine(selected.key);
+      } else if (key === 'Delete' && selected) {
+        e.preventDefault();
+        removeLine(selected.key);
+      }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
@@ -286,11 +314,11 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   const cantPay = !cart.lines.length || (needsAge && !cart.ageVerified);
   // Main tiles: ways to pay and the sale's customer. Editing the sale is under More.
   const tiles: { kind: PosTileKind; label: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string; badge?: string }[] = [
-    { kind: 'mpesa', label: 'M-Pesa payment', onClick: () => pay('mpesa'), disabled: cantPay || !has('mpesa'), title: has('mpesa') ? undefined : 'Turn on M-Pesa in Settings > Integrations' },
-    { kind: 'cash', label: 'Cash payment', onClick: () => pay('cash'), disabled: cantPay, hint: 'F9' },
-    { kind: 'card', label: 'Card payment', onClick: () => pay('card'), disabled: cantPay },
+    { kind: 'mpesa', label: 'M-Pesa payment', hint: 'F3', onClick: () => pay('mpesa'), disabled: cantPay || !has('mpesa'), title: has('mpesa') ? undefined : 'Turn on M-Pesa in Settings > Integrations' },
+    { kind: 'cash', label: 'Cash payment', onClick: () => pay('cash'), disabled: cantPay, hint: 'Enter' },
+    { kind: 'card', label: 'Card payment', hint: 'F6', onClick: () => pay('card'), disabled: cantPay },
     { kind: 'loyalty', label: 'Loyalty card', onClick: () => setLoyaltyOpen(true), disabled: !has('loyalty'), title: has('loyalty') ? undefined : 'Turn on the Loyalty module in Settings' },
-    { kind: 'voucher', label: 'Voucher', onClick: () => setVoucherOpen(true), disabled: cantPay, badge: cart.couponCode || undefined },
+    { kind: 'voucher', label: 'Voucher', hint: 'F7', onClick: () => setVoucherOpen(true), disabled: cantPay, badge: cart.couponCode || undefined },
     { kind: 'customer', label: cart.customer ? `Customer: ${cart.customer.name}` : 'Customer', onClick: () => setCustomerOpen(true), hint: 'F4', badge: cart.customer ? '✓' : undefined },
     { kind: 'hold', label: 'Hold sale', onClick: suspend, disabled: !cart.lines.length || !rules.items.holdAllowed, hint: 'F8', title: rules.items.holdAllowed ? undefined : 'Holding sales is turned off in Checkout rules' },
   ];
@@ -312,7 +340,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 px-4 py-3 dark:border-ink-800">
           <div className="relative min-w-[240px] flex-1">
             <Icon name="search" className="absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-ink-400" />
-            <input ref={searchRef} autoFocus value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onScan(e.currentTarget.value); } if (e.key === 'Escape') setSearch(''); }}
+            <input ref={searchRef} autoFocus value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (e.currentTarget.value.trim()) onScan(e.currentTarget.value); else pay('cash'); } if (e.key === 'Escape') setSearch(''); }}
               placeholder="Scan barcode or search name / SKU" aria-label="Scan or search products"
               className={cx('w-full rounded-md border-2 border-ink-800 bg-white py-2.5 pl-11 pr-14 text-[15px] font-medium shadow-sm placeholder:font-normal placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-500/15 dark:border-ink-600 dark:bg-ink-900', big && 'py-3.5 text-base')} />
             <kbd className="absolute right-3 top-1/2 -translate-y-1/2 rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 text-[11px] font-semibold text-ink-500 dark:border-ink-700 dark:bg-ink-800">F2</kbd>
@@ -371,7 +399,8 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
             <div className="flex h-[60%] flex-col items-center justify-center px-6 text-center text-ink-400">
               <Icon name="barcode" className="mb-3 h-14 w-14" />
               <p className="font-semibold text-ink-500">Scan an item to start the sale</p>
-              <p className="mt-1 text-xs">F2 search · F4 customer · F8 hold · F9 pay</p>
+              <p className="mt-1 text-xs">Enter pay cash · F3 M-Pesa · F6 card · F7 voucher · F4 customer · F8 hold · F10 more</p>
+              <p className="mt-0.5 text-xs">↑ ↓ pick a line · + − quantity · Delete remove · F2 scan box</p>
             </div>
           )}
         </div>
@@ -768,11 +797,12 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   };
 
 
-  const complete = async (overrideToken?: string) => {
+  const complete = async (overrideToken?: string, cashTendered?: number) => {
     setBusy(true);
     setError(null);
     let final = payments;
-    if (remaining > 0 && method === 'cash' && (tendered ?? 0) >= remaining) final = [...payments, { method: 'cash', amountCents: remaining, tenderedCents: tendered!, label: 'Cash' }];
+    const given = cashTendered ?? tendered ?? 0;
+    if (remaining > 0 && method === 'cash' && given >= remaining) final = [...payments, { method: 'cash', amountCents: remaining, tenderedCents: given, label: 'Cash' }];
     try {
       const body = {
         clientRequestId: requestId,
@@ -799,6 +829,32 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
 
   const changeDue = method === 'cash' && tendered ? Math.max(0, tendered - remaining) : payments.reduce((a, p) => a + ((p.tenderedCents ?? p.amountCents) - p.amountCents), 0);
   const canComplete = remaining === 0 || (method === 'cash' && (tendered ?? 0) >= remaining);
+  /**
+   * Enter in "Cash received": completes the sale (empty = the exact amount). Less than due is kept as part
+   * of the payment so the rest can be paid another way.
+   */
+  const onCashEnter = () => {
+    if (busy) return;
+    if (remaining <= 0) return complete();
+    if (tendered === null || tendered === undefined) return complete(undefined, remaining);
+    if (tendered >= remaining) return complete();
+    if (tendered > 0) {
+      setPayments((ps) => [...ps, { method: 'cash', amountCents: tendered, tenderedCents: tendered, label: 'Cash' }]);
+      setTendered(null);
+      toast.info(`${money(remaining - tendered)} still to pay: choose another way to pay`);
+    }
+  };
+  // Enter anywhere else in the payment window (not in a field) completes a fully paid sale.
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || override) return;
+      const tag = (document.activeElement as HTMLElement | null)?.tagName ?? '';
+      if (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(tag)) return;
+      if (canComplete && !busy) { e.preventDefault(); complete(); }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  });
 
   return (
     <Modal open onClose={onClose} title={`Payment · ${money(total)}`} size="lg"
@@ -810,10 +866,10 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
           </div>
           {remaining > 0 && (
             <div className="space-y-3">
-              <Field label="Amount"><MoneyInput value={amount} onChange={setAmount} /></Field>
+              <Field label="Amount"><MoneyInput value={amount} onChange={setAmount} onKeyDown={(e) => { if (e.key === 'Enter' && method !== 'cash' && method !== 'mpesa' && method !== 'gateway') { e.preventDefault(); addPayment(); } }} /></Field>
               {method === 'cash' && (
                 <>
-                  <Field label="Cash received"><MoneyInput value={tendered} onChange={setTendered} autoFocus /></Field>
+                  <Field label="Cash received" hint="Enter completes the sale; leave empty for the exact amount"><MoneyInput value={tendered} onChange={setTendered} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onCashEnter(); } }} /></Field>
                   <div className="flex flex-wrap gap-2">{[remaining, ...[50000, 100000, 200000].filter((v) => v > remaining)].slice(0, 4).map((v) => <Button key={v} size="sm" variant="secondary" onClick={() => setTendered(v)}>{money(v)}</Button>)}</div>
                 </>
               )}
