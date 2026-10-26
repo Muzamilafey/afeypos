@@ -62,8 +62,12 @@ case "${1:-status}" in
       conf=$(nginx -T 2>/dev/null || true)
       if printf '%s' "$conf" | grep -q '# Afey POS (written by'; then ok "nginx loads the Afey POS site"
       else bad "nginx does not load the Afey POS site (its nginx.conf does not include that folder)"; tip "Run the install command again (it now puts the site where nginx reads it), or: sudo cp /etc/nginx/sites-available/afeypos.conf /etc/nginx/conf.d/ && sudo nginx -t && sudo systemctl reload nginx"; fi
-      clash=$(printf '%s' "$conf" | awk -v d="$d" '/^# configuration file /{f=$4; sub(/:$/,"",f)} /server_name/ && index($0,d) && f !~ /afeypos/ {print f}' | sort -u | tr '\n' ' ' || true)
+      clash=$(printf '%s' "$conf" | awk -v d="$d" '/^# configuration file /{f=$4; sub(/:$/,"",f)} f !~ /afeypos/ && match($0,/server_name[[:space:]][^;]*/) {n=split(substr($0,RSTART,RLENGTH),t,/[[:space:]]+/); for(i=2;i<=n;i++) if (t[i]==d) print f}' | sort -u | tr '\n' ' ' || true)
       if [ -n "$clash" ]; then bad "Another nginx site also uses $d: $clash"; tip "Remove $d from the server_name lines in that file (keep its other names), then: sudo nginx -t && sudo systemctl reload nginx"; fi
+      wild=$(printf '%s' "$conf" | awk -v w="*.${d#*.}" '/^# configuration file /{f=$4; sub(/:$/,"",f)} f !~ /afeypos/ && match($0,/server_name[[:space:]][^;]*/) {n=split(substr($0,RSTART,RLENGTH),t,/[[:space:]]+/); for(i=2;i<=n;i++) if (t[i]==w) print f}' | sort -u | tr '\n' ' ' || true)
+      [ -n "$wild" ] && info "$wild also covers $d through *.${d#*.}: fine as long as the Afey POS site has both an HTTP and an HTTPS part (an exact name wins)"
+      certfile=$(printf '%s' "$conf" | awk -v d="$d" '/^# configuration file /{f=$4; sub(/:$/,"",f)} /ssl_certificate[[:space:]]/ && index($0,"/live/" d "/") && f !~ /afeypos/ {print f}' | sort -u | tr '\n' ' ' || true)
+      if [ -n "$certfile" ]; then bad "The certificate for $d is also used by: $certfile"; tip "That site was probably given $d's certificate by 'certbot --nginx -d $d'. Put back its own ssl_certificate lines (e.g. /etc/letsencrypt/live/<its domain>/...), then: sudo nginx -t && sudo systemctl reload nginx"; fi
       info "nginx sites (file: names):"
       printf '%s' "$conf" | awk '/^# configuration file /{f=$4; sub(/:$/,"",f)} /server_name[[:space:]]/ {if (match($0,/server_name[[:space:]][^;]*/)) print "       " f ": " substr($0,RSTART,RLENGTH)}' | sort -u | head -n 20 || true ;;
     esac
@@ -77,7 +81,15 @@ case "${1:-status}" in
       else bad "https://$d reaches Afey POS but the certificate is not valid for $d"; tip "sudo certbot --nginx -d $d"; fi
     else
       bad "https://$d does not reach Afey POS (answer: $s)"
-      case "$owner" in *nginx*) tip "sudo certbot --nginx -d $d   (choose 1 to reinstall the existing certificate)" ;; *apache*|*httpd*) tip "sudo certbot --apache -d $d" ;; esac
+      case "$owner" in
+        *nginx*)
+          if ! printf '%s' "$conf" | awk '/^# configuration file /{f=$4} f ~ /afeypos/ && /listen[[:space:]]+(\[::\]:)?443/ {x=1} END {exit !x}'; then
+            tip "The Afey POS site has no HTTPS part yet, so another site (e.g. one for *.${d#*.}) answers HTTPS."
+          fi
+          tip "Run the install command again: it gives Afey POS its own HTTPS part with the certificate for $d."
+          tip "Do not use 'certbot --nginx -d $d': it installs the certificate into whichever site matches first (e.g. the *.${d#*.} site)." ;;
+        *apache*|*httpd*) tip "sudo certbot --apache -d $d" ;;
+      esac
     fi
     if command -v openssl >/dev/null; then
       cert=$(echo | timeout 8 openssl s_client -connect 127.0.0.1:443 -servername "$d" 2>/dev/null | openssl x509 -noout -subject -ext subjectAltName 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g' || true)

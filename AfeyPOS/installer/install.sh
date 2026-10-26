@@ -294,19 +294,14 @@ web_port_owner() {
   command -v ss >/dev/null || return 0
   ss -ltnpH 2>/dev/null | awk '$4 ~ /:(80|443)$/' | grep -o 'users:(("[^"]*"' | head -n1 | sed 's/users:(("//; s/"//'
 }
-https_with_nginx() {
-  say "nginx already serves ports 80/443: adding $DOMAIN to nginx"
-  local site=/etc/nginx/sites-available/afeypos.conf names="$DOMAIN${SHOP_HOST:+ $SHOP_HOST}" v6=""
-  # IPv6 only where the server has it (nginx refuses to start on [::] otherwise).
-  [ -s /proc/net/if_inet6 ] && v6="    listen [::]:80;"
-  [ -d /etc/nginx/sites-available ] || site=/etc/nginx/conf.d/afeypos.conf
-  cat > "$site" <<EOF
-# Afey POS (written by the Afey POS installer)
-map \$http_upgrade \$afeypos_connection { default upgrade; '' close; }
-server {
-    listen 80;
-$v6
-    server_name $names;
+# Writes the Afey POS nginx site. With a certificate it gets its own HTTPS server block: an exact name always
+# beats a wildcard such as *.afey.co.ke in another site, so HTTPS for $DOMAIN reaches Afey POS. HTTP redirects
+# to HTTPS inside "location /" (not server-wide), so certificate renewal challenges still work.
+nginx_site() {
+  local file="$1" ssl="$2" names="$DOMAIN${SHOP_HOST:+ $SHOP_HOST}" v6=0 live="/etc/letsencrypt/live/$DOMAIN"
+  [ -s /proc/net/if_inet6 ] && v6=1   # IPv6 only where the server has it (nginx refuses [::] otherwise)
+  local proxy
+  proxy=$(cat <<EOF
     client_max_body_size 20m;
     location / {
         proxy_pass http://127.0.0.1:$PORT;
@@ -318,30 +313,64 @@ $v6
         proxy_set_header Connection \$afeypos_connection;
         proxy_read_timeout 120s;
     }
-}
 EOF
-  [ -d /etc/nginx/sites-enabled ] && ln -sf "$site" /etc/nginx/sites-enabled/afeypos.conf
-  # Another site that also lists this name (e.g. the main website, or an earlier certbot run) would win.
-  local others
-  others=$(grep -rlE "server_name[^;]*[[:space:]]$DOMAIN([[:space:];]|\$)" /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | xargs -r readlink -f | grep -v '/afeypos.conf$' | sort -u || true)
-  if [ -n "$others" ]; then
-    note "Another nginx site also uses $DOMAIN: $others"
-    note "Remove $DOMAIN from its server_name lines (keep its other names), then: sudo nginx -t && sudo systemctl reload nginx"
-  fi
+)
+  {
+    echo "# Afey POS (written by the Afey POS installer)"
+    echo "map \$http_upgrade \$afeypos_connection { default upgrade; '' close; }"
+    echo "server {"
+    echo "    listen 80;"; [ "$v6" = 1 ] && echo "    listen [::]:80;"
+    echo "    server_name $names;"
+    if [ "$ssl" = 1 ]; then echo "    location / { return 301 https://\$host\$request_uri; }"; else echo "$proxy"; fi
+    echo "}"
+    if [ "$ssl" = 1 ]; then
+      echo "server {"
+      echo "    listen 443 ssl;"; [ "$v6" = 1 ] && echo "    listen [::]:443 ssl;"
+      echo "    server_name $names;"
+      echo "    ssl_certificate $live/fullchain.pem;"
+      echo "    ssl_certificate_key $live/privkey.pem;"
+      [ -f /etc/letsencrypt/options-ssl-nginx.conf ] && echo "    include /etc/letsencrypt/options-ssl-nginx.conf;"
+      [ -f /etc/letsencrypt/ssl-dhparams.pem ] && echo "    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;"
+      echo "$proxy"
+      echo "}"
+    fi
+  } > "$file"
+}
+https_with_nginx() {
+  say "nginx already serves ports 80/443: adding $DOMAIN to nginx"
+  local site=/etc/nginx/sites-available/afeypos.conf
+  [ -d /etc/nginx/sites-available ] || site=/etc/nginx/conf.d/afeypos.conf
+  nginx_site "$site" 0
+  [ -d /etc/nginx/sites-enabled ] && [ "$site" != /etc/nginx/conf.d/afeypos.conf ] && ln -sf "$site" /etc/nginx/sites-enabled/afeypos.conf
   if ! nginx -t >/dev/null 2>&1; then nginx -t || true; note "nginx rejected the configuration above; fix it, then: sudo systemctl reload nginx"; return 1; fi
   # Some nginx.conf files do not include sites-enabled: then the site goes in conf.d, which nginx reads.
   if ! nginx -T 2>/dev/null | grep -q '# Afey POS (written by'; then
-    rm -f /etc/nginx/sites-enabled/afeypos.conf; cp "$site" /etc/nginx/conf.d/afeypos.conf
+    rm -f /etc/nginx/sites-enabled/afeypos.conf; site=/etc/nginx/conf.d/afeypos.conf; nginx_site "$site" 0
     nginx -t >/dev/null 2>&1 || { nginx -t || true; return 1; }
   fi
   systemctl reload nginx
+  # Another site that lists exactly this name would compete with Afey POS's site.
+  local others
+  others=$(nginx -T 2>/dev/null | awk -v d="$DOMAIN" '/^# configuration file /{f=$4; sub(/:$/,"",f)} f !~ /afeypos/ && match($0,/server_name[[:space:]][^;]*/) {n=split(substr($0,RSTART,RLENGTH),w,/[[:space:]]+/); for(i=2;i<=n;i++) if (w[i]==d) print f}' | sort -u | tr '\n' ' ' || true)
+  [ -n "$others" ] && note "Another nginx site also lists $DOMAIN: $others- remove $DOMAIN from its server_name lines (keep its other names), then: sudo nginx -t && sudo systemctl reload nginx"
+  # Certificate: only obtained here ("certonly"), never installed by certbot into whichever site it picks;
+  # an existing valid certificate is reused.
   command -v certbot >/dev/null || apt-get install -y -qq certbot python3-certbot-nginx >/dev/null 2>&1 || true
-  if command -v certbot >/dev/null && certbot --nginx --non-interactive --agree-tos --register-unsafely-without-email --redirect $(for n in $names; do printf -- '-d %s ' "$n"; done) >/dev/null 2>&1; then
-    note "HTTPS certificate installed (certbot renews it automatically)"
-  else
-    note "Could not get the certificate yet (is DNS for $DOMAIN pointing here?). When it is: sudo certbot --nginx -d $DOMAIN"
+  if command -v certbot >/dev/null; then
+    certbot certonly --nginx --non-interactive --agree-tos --register-unsafely-without-email --keep-until-expiring --expand \
+      --cert-name "$DOMAIN" -d "$DOMAIN" ${SHOP_HOST:+-d "$SHOP_HOST"} >/dev/null 2>&1 || true
+  fi
+  if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    note "Could not get the certificate yet (is DNS for $DOMAIN pointing here, or Cloudflare set up?). Then run the install command again."
     return 1
   fi
+  nginx_site "$site" 1
+  if ! nginx -t >/dev/null 2>&1; then
+    nginx -t || true; nginx_site "$site" 0; systemctl reload nginx
+    note "nginx rejected the HTTPS part (above); Afey POS stays on HTTP for now"; return 1
+  fi
+  systemctl reload nginx
+  note "HTTPS ready for $DOMAIN (its own nginx site and certificate; certbot renews it)"
 }
 https_with_apache() {
   say "Apache already serves ports 80/443: adding $DOMAIN to Apache"
