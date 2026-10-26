@@ -329,6 +329,11 @@ EOF
     note "Remove $DOMAIN from its server_name lines (keep its other names), then: sudo nginx -t && sudo systemctl reload nginx"
   fi
   if ! nginx -t >/dev/null 2>&1; then nginx -t || true; note "nginx rejected the configuration above; fix it, then: sudo systemctl reload nginx"; return 1; fi
+  # Some nginx.conf files do not include sites-enabled: then the site goes in conf.d, which nginx reads.
+  if ! nginx -T 2>/dev/null | grep -q '# Afey POS (written by'; then
+    rm -f /etc/nginx/sites-enabled/afeypos.conf; cp "$site" /etc/nginx/conf.d/afeypos.conf
+    nginx -t >/dev/null 2>&1 || { nginx -t || true; return 1; }
+  fi
   systemctl reload nginx
   command -v certbot >/dev/null || apt-get install -y -qq certbot python3-certbot-nginx >/dev/null 2>&1 || true
   if command -v certbot >/dev/null && certbot --nginx --non-interactive --agree-tos --register-unsafely-without-email --redirect $(for n in $names; do printf -- '-d %s ' "$n"; done) >/dev/null 2>&1; then
