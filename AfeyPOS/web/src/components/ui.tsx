@@ -179,25 +179,53 @@ export function Loading() {
   return <div className="flex items-center justify-center p-10 text-ink-500"><Spinner /></div>;
 }
 
-export function Modal({ open, onClose, title, children, footer, size = 'md' }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; size?: 'sm' | 'md' | 'lg' | 'xl' }) {
+/**
+ * Dialogs. Centred card by default; `variant="drawer"` slides in from the right for long forms. On phones both
+ * become a bottom sheet. Optional icon and subtitle in the header; the footer is a tinted action bar.
+ */
+export function Modal({ open, onClose, title, subtitle, icon, children, footer, size = 'md', variant = 'center' }: {
+  open: boolean; onClose: () => void; title: string; subtitle?: ReactNode; icon?: string; children: ReactNode; footer?: ReactNode;
+  size?: 'sm' | 'md' | 'lg' | 'xl'; variant?: 'center' | 'drawer';
+}) {
   const id = useId();
+  const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
+    // Keep the page behind still and put focus inside the dialog.
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const active = document.activeElement as HTMLElement | null;
+    setTimeout(() => {
+      if (!panel.current?.contains(document.activeElement)) panel.current?.querySelector<HTMLElement>('input:not([type=hidden]), select, textarea, button:not([aria-label=Close])')?.focus();
+    }, 0);
+    return () => {
+      window.removeEventListener('keydown', h);
+      document.body.style.overflow = prev;
+      active?.focus?.();
+    };
   }, [open, onClose]);
   if (!open) return null;
-  const w = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' }[size];
+  const drawer = variant === 'drawer';
+  const w = drawer ? { sm: 'sm:max-w-md', md: 'sm:max-w-lg', lg: 'sm:max-w-2xl', xl: 'sm:max-w-4xl' }[size] : { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' }[size];
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink-950/50 p-0 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-labelledby={id} className={cx('card max-h-[92vh] w-full overflow-hidden rounded-b-none sm:rounded-xl', w)}>
-        <header className="flex items-center justify-between border-b border-ink-100 px-5 py-3 dark:border-ink-800">
-          <h2 id={id} className="font-semibold">{title}</h2>
-          <button onClick={onClose} className="rounded p-1 text-ink-500 hover:bg-ink-100 dark:hover:bg-ink-800" aria-label="Close"><Icon name="x" /></button>
+    <div className={cx('modal-backdrop fixed inset-0 z-50 flex bg-[#14171c]/55 backdrop-blur-[2px]', drawer ? 'items-end justify-end sm:items-stretch' : 'items-end justify-center sm:items-center sm:p-4')} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={id}
+        className={cx('relative flex w-full flex-col overflow-hidden bg-white shadow-2xl dark:bg-ink-900',
+          drawer ? 'modal-drawer max-h-[94vh] rounded-t-xl sm:h-full sm:max-h-none sm:rounded-none' : 'modal-panel max-h-[94vh] rounded-t-xl sm:max-h-[90vh] sm:rounded-lg', w)}>
+        <div className="absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r from-brand-500 via-[#3fb8b0] to-[#9b7fd6]" aria-hidden="true" />
+        <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-ink-200 sm:hidden" aria-hidden="true" />
+        <header className="flex items-start gap-3 px-6 pb-4 pt-5">
+          {icon && <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 dark:bg-brand-500/15 dark:text-brand-200"><Icon name={icon} className="h-5 w-5" /></span>}
+          <div className="min-w-0 flex-1">
+            <h2 id={id} className="text-[15px] font-bold leading-6 text-ink-900 dark:text-white">{title}</h2>
+            {subtitle && <p className="mt-0.5 text-[13px] text-ink-500 dark:text-ink-400">{subtitle}</p>}
+          </div>
+          <button type="button" onClick={onClose} className="-mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-ink-700 dark:hover:bg-ink-800" aria-label="Close"><Icon name="x" className="h-4 w-4" /></button>
         </header>
-        <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <footer className="flex justify-end gap-2 border-t border-ink-100 px-5 py-3 dark:border-ink-800">{footer}</footer>}
+        <div className="min-h-0 flex-1 overflow-y-auto border-t border-ink-100 px-6 py-5 dark:border-ink-800">{children}</div>
+        {footer && <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-ink-100 bg-[#f7f8fa] px-6 py-3.5 dark:border-ink-800 dark:bg-ink-950/40">{footer}</footer>}
       </div>
     </div>
   );
@@ -216,7 +244,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastCtx.Provider value={push}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-80 flex-col gap-2" aria-live="polite">
+      {/* Top right, under the header: clear of dialog footers and the side panel's buttons. */}
+      <div className="pointer-events-none fixed right-4 top-16 z-[60] flex w-80 flex-col gap-2" aria-live="polite">
         {toasts.map((t) => (
           <div key={t.id} className={cx('pointer-events-auto rounded-lg px-4 py-3 text-sm text-white shadow-lg', t.tone === 'success' && 'bg-emerald-600', t.tone === 'error' && 'bg-red-600', t.tone === 'info' && 'bg-ink-800')}>{t.text}</div>
         ))}
@@ -241,7 +270,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   return (
     <ConfirmCtx.Provider value={confirm}>
       {children}
-      <Modal open={Boolean(state)} onClose={() => close(false)} title={state?.title ?? ''} size="sm" footer={<><Button variant="secondary" onClick={() => close(false)}>Cancel</Button><Button variant={state?.danger ? 'danger' : 'primary'} onClick={() => close(true)}>{state?.confirmLabel ?? 'Confirm'}</Button></>}>
+      <Modal open={Boolean(state)} onClose={() => close(false)} title={state?.title ?? ''} icon={state?.danger ? 'flag' : 'info'} size="sm" footer={<><Button variant="secondary" onClick={() => close(false)}>Cancel</Button><Button variant={state?.danger ? 'danger' : 'primary'} onClick={() => close(true)}>{state?.confirmLabel ?? 'Confirm'}</Button></>}>
         <div className="text-sm text-ink-600 dark:text-ink-300">{state?.message}</div>
       </Modal>
     </ConfirmCtx.Provider>

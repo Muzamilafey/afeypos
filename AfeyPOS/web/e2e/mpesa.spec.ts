@@ -9,12 +9,12 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await expect(page.getByRole('heading', { name: 'Data Panel Widget' })).toBeVisible();
 
   await page.goto('/settings/integrations');
-  await page.getByRole('button', { name: 'Add mpesa' }).click();
-  await page.getByLabel('Provider').selectOption('mock');
+  await page.getByRole('button', { name: /^M-Pesa simulator/ }).click();
+  await expect(page.getByLabel('Provider')).toHaveValue('mock');
   await page.getByLabel('Name', { exact: true }).fill('Till simulator');
   await page.getByLabel('Short code').fill('174379');
   await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.getByRole('cell', { name: 'Till simulator' })).toBeVisible();
+  await expect(page.getByRole('article', { name: 'Till simulator' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Checkout', exact: true }).click();
   const scan = page.getByLabel('Scan or search products');

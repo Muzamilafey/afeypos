@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { roleName, useRoleCatalog, UserPermissionsEditor } from './Roles';
@@ -9,7 +9,7 @@ import { useLocations } from '../../lib/hooks';
 import { dateTime, money } from '../../lib/format';
 import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { DataTable } from '../../components/DataTable';
-import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
+import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
 import { StaffAccessPanel } from './StaffAccess';
 import { BridgePairingCard, FingerprintReadersCard } from './ThisComputer';
@@ -299,20 +299,52 @@ const PROVIDER_FIELDS: Record<string, { settings: [string, string][]; secrets: [
 const providerLabel = (kind: string, p: string) =>
   kind === 'payment' ? PAYMENT_PROVIDER_INFO[p as PaymentProviderKey]?.label ?? p : p === 'oscu' ? 'OSCU (online, KRA servers)' : p === 'vscu' ? 'VSCU (KRA software on your network)' : p === 'mock' ? 'Simulator (testing)' : p === 'console' ? 'Development log (no delivery)' : p === 'daraja' ? 'Safaricom Daraja' : p;
 
-/** Provider chips (M-Pesa + gateways); "soon" providers are shown but cannot be configured yet. */
-function PaymentProviderGrid({ onPick }: { onPick: (kind: 'mpesa' | 'payment', provider: string) => void }) {
-  const chips = [{ key: 'mpesa', label: 'M-Pesa', soon: false }, ...PAYMENT_PROVIDERS.filter((p) => !PAYMENT_PROVIDER_INFO[p].devOnly).map((p) => ({ key: p, label: PAYMENT_PROVIDER_INFO[p].label, soon: PAYMENT_PROVIDER_INFO[p].availability === 'soon' }))];
+type IntegrationKind = 'mpesa' | 'payment' | 'etims' | 'sms' | 'email';
+const KIND_INFO: Record<IntegrationKind, { label: string; icon: string; blurb: string }> = {
+  mpesa: { label: 'M-Pesa', icon: 'phone', blurb: 'STK push at the till, Paybill and Till payments, payouts' },
+  payment: { label: 'Payment gateways', icon: 'card', blurb: 'Cards and mobile money through Paystack, Flutterwave and others' },
+  etims: { label: 'KRA eTIMS', icon: 'shield', blurb: 'Signs sales and credit notes with KRA' },
+  sms: { label: 'SMS', icon: 'megaphone', blurb: 'Receipts, reminders and campaigns by text' },
+  email: { label: 'Email', icon: 'mail', blurb: 'Receipts, statements, documents with PDFs' },
+};
+const CATEGORIES: { key: 'all' | 'payments' | IntegrationKind; label: string; kinds: IntegrationKind[] }[] = [
+  { key: 'all', label: 'All', kinds: ['mpesa', 'payment', 'etims', 'sms', 'email'] },
+  { key: 'payments', label: 'Payments', kinds: ['mpesa', 'payment'] },
+  { key: 'etims', label: 'KRA eTIMS', kinds: ['etims'] },
+  { key: 'sms', label: 'SMS', kinds: ['sms'] },
+  { key: 'email', label: 'Email', kinds: ['email'] },
+];
+const OTHER_PROVIDERS: Record<string, string> = {
+  daraja: 'Safaricom Daraja: STK push, Paybill / Buy Goods confirmations, B2C payouts.',
+  oscu: 'Online signing with KRA servers. Needs internet at the till.',
+  vscu: 'KRA software running on your shop network. Keeps signing when the internet is down.',
+  talksasa: 'Kenyan SMS provider with sender IDs.',
+  africastalking: "Africa's Talking SMS across Africa.",
+  smtp: 'Any email account or service with SMTP (Gmail, Zoho, Mailgun, your host).',
+  console: 'Writes messages to the server log instead of sending them (development).',
+  mock: 'Simulator for training and testing; nothing is sent to KRA or Safaricom.',
+};
+const TILE_COLORS = ['#4a9be3', '#62b86f', '#9b7fd6', '#e8625b', '#f3c24c', '#3fb8b0'];
+const NAMES: Record<string, string> = { talksasa: 'Talk Sasa', africastalking: "Africa's Talking", smtp: 'SMTP email (any mail service)' };
+const providerTitle = (kind: IntegrationKind, p: string) => (NAMES[p] ? NAMES[p]! : kind === 'mpesa' ? (p === 'mock' ? 'M-Pesa simulator' : 'M-Pesa (Safaricom Daraja)') : kind === 'etims' && p === 'mock' ? 'KRA eTIMS simulator' : kind === 'sms' && p === 'console' ? 'SMS to the server log' : kind === 'email' && p === 'console' ? 'Email to the server log' : providerLabel(kind, p));
+
+function ProviderAvatar({ name, size = 'md' }: { name: string; size?: 'md' | 'lg' }) {
+  const color = TILE_COLORS[[...name].reduce((a, c) => a + c.charCodeAt(0), 0) % TILE_COLORS.length];
+  const initials = name.replace(/\(.*\)/, '').split(/[\s'-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
+  return <span className={cx('flex shrink-0 items-center justify-center rounded-lg font-bold text-white', size === 'lg' ? 'h-11 w-11 text-sm' : 'h-9 w-9 text-xs')} style={{ background: color }} aria-hidden="true">{initials}</span>;
+}
+
+function StatusPill({ tone, children }: { tone: 'green' | 'amber' | 'red' | 'gray' | 'blue'; children: ReactNode }) {
+  const c = { green: 'bg-emerald-50 text-emerald-700 ring-emerald-200', amber: 'bg-amber-50 text-amber-700 ring-amber-200', red: 'bg-red-50 text-red-700 ring-red-200', gray: 'bg-ink-50 text-ink-600 ring-ink-200', blue: 'bg-sky-50 text-sky-700 ring-sky-200' }[tone];
+  return <span className={cx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset', c)}>{children}</span>;
+}
+
+function CopyField({ label, value }: { label: string; value: string }) {
+  const toast = useToast();
   return (
-    <div className="flex flex-wrap gap-2">
-      {chips.map((c) => (
-        <button key={c.key} type="button" disabled={c.soon} title={c.key === 'mpesa' ? 'Safaricom Daraja STK Push and C2B' : PAYMENT_PROVIDER_INFO[c.key as PaymentProviderKey].description}
-          onClick={() => (c.key === 'mpesa' ? onPick('mpesa', 'daraja') : onPick('payment', c.key))}
-          className="inline-flex items-center gap-2 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-sm font-medium shadow-sm transition hover:border-brand-400 hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-ink-200 disabled:hover:bg-white dark:border-ink-700 dark:bg-ink-900 dark:hover:bg-ink-800">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden style={c.soon ? { background: '#a9a7a2' } : undefined} />
-          {c.label}
-          {c.soon && <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-ink-500 dark:bg-ink-800">SOON</span>}
-        </button>
-      ))}
+    <div className="flex items-center gap-2 rounded-md border border-ink-100 bg-[#f7f8fa] px-3 py-2 dark:border-ink-800 dark:bg-ink-950/40">
+      <div className="min-w-0 flex-1"><div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">{label}</div><div className="truncate font-mono text-xs text-ink-700 dark:text-ink-200" title={value}>{value}</div></div>
+      <Button size="sm" variant="ghost" aria-label={`Copy ${label}`} onClick={() => navigator.clipboard.writeText(value).then(() => toast.success(`${label} copied`)).catch(() => toast.error('Copy failed'))}>Copy</Button>
     </div>
   );
 }
@@ -322,73 +354,207 @@ export function IntegrationsPage() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['integrations'], queryFn: () => api<{ data: any[]; providers: Record<string, string[]>; callbackUrls: Record<string, string> }>('/settings/integrations') });
   const [edit, setEdit] = useState<any>(null);
+  const [testing, setTesting] = useState<any>(null);
   const [testTo, setTestTo] = useState('');
+  const [category, setCategory] = useState<(typeof CATEGORIES)[number]['key']>('all');
   const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
   if (!q.data) return <Loading />;
+  const rows = q.data.data;
+  const kinds = CATEGORIES.find((c) => c.key === category)!.kinds;
+  const connected = rows.filter((r) => kinds.includes(r.kind));
+  const startNew = (kind: IntegrationKind, provider: string) => {
+    setError(null);
+    setEdit({ kind, provider, name: kind === 'payment' ? PAYMENT_PROVIDER_INFO[provider as PaymentProviderKey].label : kind === 'etims' ? 'KRA eTIMS' : providerTitle(kind, provider), enabled: true, isDefault: !rows.some((r) => r.kind === kind), environment: 'sandbox', settings: kind === 'etims' ? { bhfId: '00' } : {}, secrets: {} });
+  };
   const save = async () => {
     setError(null);
+    setBusy(true);
     try {
       const body = { provider: edit.provider, name: edit.name, enabled: edit.enabled, isDefault: edit.isDefault, environment: edit.environment, settings: edit.settings, secrets: edit.secrets };
       if (edit.id) await api(`/settings/integrations/${edit.id}`, { method: 'PATCH', body });
       else await api('/settings/integrations', { body: { kind: edit.kind, ...body } });
       setEdit(null); qc.invalidateQueries({ queryKey: ['integrations'] }); toast.success('Saved. Secrets are stored encrypted and never shown again.');
-    } catch (e) { setError(e); }
+    } catch (e) { setError(e); } finally { setBusy(false); }
   };
-  const test = async (id: string) => { try { const r = await api<{ data: any }>(`/settings/integrations/${id}/test`, { body: { to: testTo || undefined } }); if (r.data.ok) toast.success(r.data.message); else toast.error(r.data.message); q.refetch(); } catch (e) { toast.error(e); } };
+  const runTest = async () => {
+    setBusy(true);
+    try {
+      const r = await api<{ data: any }>(`/settings/integrations/${testing.id}/test`, { body: { to: testTo || undefined } });
+      if (r.data.ok) toast.success(r.data.message); else toast.error(r.data.message);
+      setTesting(null); q.refetch();
+    } catch (e) { toast.error(e); } finally { setBusy(false); }
+  };
+  const live = rows.filter((r) => r.enabled && r.environment === 'production').length;
+  // A config never tested has an empty lastTest.
+  const attention = rows.filter((r) => !r.enabled || (r.lastTest?.at && r.lastTest.ok === false)).length;
+  // Catalog: everything that can be connected in the chosen category.
+  interface Tile { kind: IntegrationKind; provider: string; title: string; text: string; soon: boolean }
+  const catalog = kinds.flatMap((k): Tile[] => {
+    if (k === 'payment') return PAYMENT_PROVIDERS.filter((p) => !PAYMENT_PROVIDER_INFO[p].devOnly).map((p) => ({ kind: k, provider: p, title: PAYMENT_PROVIDER_INFO[p].label, text: PAYMENT_PROVIDER_INFO[p].description, soon: PAYMENT_PROVIDER_INFO[p].availability === 'soon' }));
+    return (q.data.providers[k] ?? []).map((p) => ({ kind: k, provider: p, title: providerTitle(k, p), text: OTHER_PROVIDERS[p] ?? '', soon: false }));
+  });
+  const info = edit?.kind === 'payment' ? PAYMENT_PROVIDER_INFO[edit.provider as PaymentProviderKey] : null;
+
   return (
-    <div className="max-w-5xl">
-      <PageHeader title="Integrations" subtitle="Payments, SMS and email. Credentials stay on the server." actions={<>{(['mpesa', 'etims', 'sms', 'email'] as const).map((k) => <Button key={k} variant="secondary" onClick={() => setEdit({ kind: k, provider: q.data.providers[k][0], name: k === 'etims' ? 'KRA eTIMS' : '', enabled: true, isDefault: true, environment: 'sandbox', settings: k === 'etims' ? { bhfId: '00' } : {}, secrets: {} })}>Add {k === 'etims' ? 'KRA eTIMS' : k}</Button>)}</>} />
-      <Card title="Payment methods" className="mb-4">
-        <p className="mb-3 text-sm text-ink-600 dark:text-ink-300">Pick a provider to connect it. Payments are only accepted after the provider confirms them to the server.</p>
-        <PaymentProviderGrid onPick={(kind, provider) => setEdit({ kind, provider, name: kind === 'mpesa' ? 'M-Pesa' : PAYMENT_PROVIDER_INFO[provider as PaymentProviderKey].label, enabled: true, isDefault: true, environment: 'sandbox', settings: {}, secrets: {} })} />
-        <button type="button" className="mt-3 text-xs text-ink-500 underline" onClick={() => setEdit({ kind: 'payment', provider: 'simulator', name: 'Payment simulator', enabled: true, isDefault: false, environment: 'sandbox', settings: {}, secrets: {} })}>Add the payment simulator (training and testing; never moves money)</button>
-      </Card>
-      <Card title="M-Pesa callback URLs (register these with Safaricom)" className="mb-4">
-        <dl className="space-y-1 text-xs">{Object.entries(q.data.callbackUrls).map(([k, v]) => <div key={k}><dt className="font-medium">{k}</dt><dd className="break-all font-mono text-ink-600">{v}</dd></div>)}</dl>
-        <p className="mt-2 text-xs text-ink-500">These URLs contain a secret token. They must be public HTTPS addresses reachable by Safaricom.</p>
-      </Card>
-      <div className="mb-3 flex items-center gap-2"><Input className="max-w-xs" placeholder="Test recipient (phone or email)" value={testTo} onChange={(e) => setTestTo(e.target.value)} /></div>
-      <div className="card"><DataTable rows={q.data.data} empty="No integrations yet" columns={[
-        { key: 'k', header: 'Type', render: (r: any) => (r.kind === 'payment' ? 'payment gateway' : r.kind) }, { key: 'n', header: 'Name', render: (r: any) => <span>{r.name}{!r.enabled && <span className="ml-1"><Badge tone="gray">disabled</Badge></span>}</span> }, { key: 'p', header: 'Provider', render: (r: any) => providerLabel(r.kind, r.provider) },
-        { key: 'e', header: 'Mode', render: (r: any) => <Badge tone={r.environment === 'production' ? 'green' : 'amber'}>{r.environment}</Badge> },
-        { key: 's', header: 'Secrets', render: (r: any) => <span className="text-xs">{r.secretsSet.join(', ') || 'none'}</span> },
-        { key: 't', header: 'Last test', render: (r: any) => (r.lastTest ? <Badge tone={r.lastTest.ok ? 'green' : 'red'}>{r.lastTest.ok ? 'ok' : 'failed'}</Badge> : '—') },
-        { key: 'a', header: '', render: (r: any) => <div className="flex gap-1"><Button size="sm" variant="secondary" onClick={() => test(r.id)}>Test</Button><Button size="sm" variant="secondary" onClick={() => setEdit({ ...r, secrets: {} })}>Edit</Button>{r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => api(`/settings/integrations/${r.id}/register-c2b`, { body: {} }).then(() => toast.success('C2B URLs registered')).catch(toast.error)}>Register C2B</Button>}{r.kind === 'etims' && <Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/settings/integrations/${r.id}/etims/initialize`, { body: {} }).then((x) => { toast.success(`eTIMS device initialised: SCU ${x.data.sdcId}`); q.refetch(); }).catch(toast.error)}>Initialise device</Button>}</div> },
-      ]} /></div>
+    <div className="max-w-6xl">
+      <PageHeader title="Integrations" subtitle="Connect payments, KRA eTIMS, SMS and email. Credentials are encrypted on the server and never shown again." />
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat label="Connected" value={rows.length} icon="plug" color="blue" />
+        <Stat label="Live (real money / messages)" value={live} icon="check" color="green" />
+        <Stat label="In test mode" value={rows.filter((r) => r.environment !== 'production').length} icon="flag" color="yellow" />
+        <Stat label="Need attention" value={attention} icon="info" color={attention ? 'red' : 'teal'} hint={attention ? 'Disabled or failed the last test' : 'All good'} />
+      </div>
+
+      <div className="mb-4 flex flex-wrap gap-1.5" role="tablist" aria-label="Integration type">
+        {CATEGORIES.map((c) => {
+          const n = rows.filter((r) => c.kinds.includes(r.kind)).length;
+          return (
+            <button key={c.key} type="button" role="tab" aria-selected={category === c.key} onClick={() => setCategory(c.key)}
+              className={cx('inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-semibold transition', category === c.key ? 'bg-brand-500 text-white shadow-sm' : 'bg-white text-ink-600 ring-1 ring-ink-200 hover:bg-ink-50 dark:bg-ink-900 dark:text-ink-300 dark:ring-ink-700')}>
+              {c.label}{n > 0 && <span className={cx('rounded-full px-1.5 text-[11px]', category === c.key ? 'bg-white/25' : 'bg-ink-100 dark:bg-ink-800')}>{n}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      <section className="mb-6" aria-labelledby="connected-h">
+        <h2 id="connected-h" className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Connected</h2>
+        {connected.length === 0 ? (
+          <div className="card flex items-center gap-3 p-5 text-sm text-ink-500"><Icon name="plug" className="h-5 w-5" />Nothing connected here yet. Pick a provider below.</div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {connected.map((r) => (
+              <article key={r.id} className="card flex flex-col p-4" aria-label={r.name}>
+                <div className="flex items-start gap-3">
+                  <ProviderAvatar name={providerTitle(r.kind, r.provider)} size="lg" />
+                  <div className="min-w-0 flex-1">
+                    <h3 className="truncate text-[15px] font-bold">{r.name}</h3>
+                    <p className="truncate text-xs text-ink-500">{KIND_INFO[r.kind as IntegrationKind]?.label} · {providerTitle(r.kind, r.provider)}</p>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-1">
+                    {!r.enabled ? <StatusPill tone="gray">Disabled</StatusPill> : r.environment === 'production' ? <StatusPill tone="green">● Live</StatusPill> : <StatusPill tone="amber">Test mode</StatusPill>}
+                    {r.isDefault && <StatusPill tone="blue">Default</StatusPill>}
+                  </div>
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div><dt className="text-ink-500">Credentials</dt><dd className="mt-0.5 font-medium">{r.secretsSet.length ? `${r.secretsSet.length} saved` : 'none needed'}</dd></div>
+                  <div><dt className="text-ink-500">Last test</dt><dd className="mt-0.5">{r.lastTest?.at ? <StatusPill tone={r.lastTest.ok ? 'green' : 'red'}>{r.lastTest.ok ? 'Passed' : 'Failed'}{r.lastTest.at ? ` · ${dateTime(r.lastTest.at)}` : ''}</StatusPill> : <span className="text-ink-400">Not tested yet</span>}</dd></div>
+                </dl>
+                {r.lastTest?.at && !r.lastTest.ok && r.lastTest.message && <p className="mt-2 rounded-md bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-200">{r.lastTest.message}</p>}
+                <div className="mt-4 flex flex-wrap gap-1.5 border-t border-ink-100 pt-3 dark:border-ink-800">
+                  <Button size="sm" onClick={() => { setTestTo(''); setTesting(r); }}><Icon name="check" className="h-3.5 w-3.5" />Test</Button>
+                  <Button size="sm" variant="secondary" onClick={() => { setError(null); setEdit({ ...r, secrets: {} }); }}>Configure</Button>
+                  {r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => api(`/settings/integrations/${r.id}/register-c2b`, { body: {} }).then(() => toast.success('C2B URLs registered')).catch(toast.error)}>Register C2B</Button>}
+                  {r.kind === 'etims' && <Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/settings/integrations/${r.id}/etims/initialize`, { body: {} }).then((x) => { toast.success(`eTIMS device initialised: SCU ${x.data.sdcId}`); q.refetch(); }).catch(toast.error)}>Initialise device</Button>}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="mb-6" aria-labelledby="catalog-h">
+        <h2 id="catalog-h" className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Add an integration</h2>
+        {kinds.map((k) => {
+          const tiles = catalog.filter((c) => c.kind === k);
+          if (!tiles.length) return null;
+          return (
+            <div key={k} className="mb-4">
+              <div className="mb-2 flex items-center gap-2 text-sm"><Icon name={KIND_INFO[k].icon} className="h-4 w-4 text-ink-400" /><span className="font-semibold">{KIND_INFO[k].label}</span><span className="text-xs text-ink-500">{KIND_INFO[k].blurb}</span></div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {tiles.map((t) => (
+                  <button key={`${t.kind}-${t.provider}`} type="button" disabled={t.soon} onClick={() => startNew(t.kind, t.provider)} aria-label={`${t.title}${t.soon ? ' (coming soon)' : ': connect'}`}
+                    className="group flex items-start gap-3 rounded-lg border border-ink-100 bg-white p-3 text-left transition hover:-translate-y-px hover:border-brand-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:translate-y-0 disabled:hover:border-ink-100 disabled:hover:shadow-none dark:border-ink-800 dark:bg-ink-900">
+                    <ProviderAvatar name={t.title} />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2 text-sm font-semibold">{t.title}{t.soon && <StatusPill tone="gray">Soon</StatusPill>}</span>
+                      {t.text && <span className="mt-0.5 line-clamp-2 block text-xs text-ink-500">{t.text}</span>}
+                    </span>
+                    {!t.soon && <span className="mt-1 text-xs font-semibold text-brand-600 opacity-0 transition group-hover:opacity-100">Connect →</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {kinds.includes('payment') && <button type="button" className="text-xs text-ink-500 underline hover:text-brand-600" onClick={() => startNew('payment', 'simulator')}>Add the payment simulator (training and testing; never moves money)</button>}
+      </section>
+
+      {kinds.includes('mpesa') && (
+        <details className="card mb-4 p-4">
+          <summary className="cursor-pointer text-sm font-semibold">M-Pesa callback URLs <span className="font-normal text-ink-500">(register these with Safaricom)</span></summary>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">{Object.entries(q.data.callbackUrls).map(([k, v]) => <CopyField key={k} label={k} value={v} />)}</div>
+          <p className="mt-2 text-xs text-ink-500">These URLs contain a secret token. They must be public HTTPS addresses Safaricom can reach.</p>
+        </details>
+      )}
+
+      {testing && (
+        <Modal open onClose={() => setTesting(null)} title={`Test ${testing.name}`} icon="check" size="sm"
+          subtitle={testing.kind === 'sms' || testing.kind === 'email' ? 'Sends a real test message.' : 'Checks the connection and credentials with the provider.'}
+          footer={<><Button variant="secondary" onClick={() => setTesting(null)}>Cancel</Button><Button loading={busy} onClick={runTest}>Run test</Button></>}>
+          {testing.kind === 'sms' || testing.kind === 'email'
+            ? <Field label={testing.kind === 'sms' ? 'Send the test SMS to' : 'Send the test email to'}><Input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder={testing.kind === 'sms' ? '07XX XXX XXX' : 'you@example.com'} /></Field>
+            : <p className="text-sm text-ink-600 dark:text-ink-300">Nothing is charged and nothing is sent to customers.</p>}
+        </Modal>
+      )}
+
       {edit && (
-        <Modal open onClose={() => setEdit(null)} title={`${edit.id ? 'Edit' : 'Add'} ${edit.kind === 'payment' ? providerLabel('payment', edit.provider) : edit.kind} integration`} size="lg" footer={<Button onClick={save}>Save</Button>}>
-          {edit.kind === 'payment' && (
-            <p className="mb-3 text-sm text-ink-600 dark:text-ink-300">
-              {PAYMENT_PROVIDER_INFO[edit.provider as PaymentProviderKey]?.description}{' '}
-              {PAYMENT_PROVIDER_INFO[edit.provider as PaymentProviderKey]?.docsUrl && <a className="text-brand-700 underline dark:text-brand-200" href={PAYMENT_PROVIDER_INFO[edit.provider as PaymentProviderKey].docsUrl} target="_blank" rel="noreferrer">API docs</a>}
-            </p>
-          )}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Provider"><Select value={edit.provider} disabled={Boolean(edit.id)} onChange={(e) => setEdit({ ...edit, provider: e.target.value })} options={q.data.providers[edit.kind].map((p) => ({ value: p, label: providerLabel(edit.kind, p) }))} /></Field>
-            <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
-            <Field label="Environment"><Select value={edit.environment} onChange={(e) => setEdit({ ...edit, environment: e.target.value })} options={[{ value: 'sandbox', label: 'Sandbox / test' }, { value: 'production', label: 'Production (live money)' }]} /></Field>
-            <div className="flex items-end gap-4"><Checkbox label="Enabled" checked={edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} /><Checkbox label="Default" checked={edit.isDefault} onChange={(v) => setEdit({ ...edit, isDefault: v })} /></div>
-            {edit.kind === 'payment' && PAYMENT_PROVIDER_INFO[edit.provider as PaymentProviderKey]?.fields.map((f) =>
-              f.secret ? (
-                <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={edit.secretsSet?.includes(f.key) ? 'Saved. Leave blank to keep.' : f.help}><Input type="password" autoComplete="new-password" value={edit.secrets?.[f.key] ?? ''} onChange={(e) => setEdit({ ...edit, secrets: { ...edit.secrets, [f.key]: e.target.value } })} /></Field>
-              ) : f.options ? (
-                <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}><Select value={edit.settings?.[f.key] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [f.key]: e.target.value } })} options={[{ value: '', label: 'Select…' }, ...f.options]} /></Field>
-              ) : (
-                <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}><Input value={edit.settings?.[f.key] ?? ''} placeholder={f.placeholder} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [f.key]: e.target.value } })} /></Field>
-              ),
+        <Modal open variant="drawer" size="lg" onClose={() => setEdit(null)} icon={KIND_INFO[edit.kind as IntegrationKind]?.icon}
+          title={`${edit.id ? 'Configure' : 'Connect'} ${edit.kind === 'payment' ? providerLabel('payment', edit.provider) : providerTitle(edit.kind, edit.provider)}`}
+          subtitle={info ? info.description : OTHER_PROVIDERS[edit.provider] ?? KIND_INFO[edit.kind as IntegrationKind]?.blurb}
+          footer={<><Button variant="secondary" onClick={() => setEdit(null)}>Cancel</Button><Button loading={busy} onClick={save}>Save</Button></>}>
+          <div className="space-y-5">
+            <fieldset className="space-y-3">
+              <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">General</legend>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Provider"><Select value={edit.provider} disabled={Boolean(edit.id)} onChange={(e) => setEdit({ ...edit, provider: e.target.value })} options={(edit.kind === 'payment' ? [edit.provider] : q.data.providers[edit.kind]).map((p: string) => ({ value: p, label: providerTitle(edit.kind, p) }))} /></Field>
+                <Field label="Name"><Input value={edit.name} placeholder="Shown to staff, e.g. Main Paybill" onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
+              </div>
+              <div role="radiogroup" aria-label="Environment" className="grid gap-2 sm:grid-cols-2">
+                {[{ v: 'sandbox', t: 'Test mode', d: 'Sandbox credentials, no real money or messages' }, { v: 'production', t: 'Live', d: 'Real payments, real messages' }].map((o) => (
+                  <button key={o.v} type="button" role="radio" aria-checked={edit.environment === o.v} onClick={() => setEdit({ ...edit, environment: o.v })}
+                    className={cx('rounded-lg border p-3 text-left transition', edit.environment === o.v ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500 dark:bg-brand-500/10' : 'border-ink-200 hover:border-ink-300 dark:border-ink-700')}>
+                    <span className="block text-sm font-semibold">{o.t}</span><span className="block text-xs text-ink-500">{o.d}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-5"><Checkbox label="Enabled" checked={edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} /><Checkbox label="Default" checked={edit.isDefault} onChange={(v) => setEdit({ ...edit, isDefault: v })} /></div>
+            </fieldset>
+            <fieldset className="space-y-3">
+              <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Account details</legend>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {edit.kind === 'payment' && info?.fields.filter((f) => !f.secret).map((f) => f.options ? (
+                  <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}><Select value={edit.settings?.[f.key] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [f.key]: e.target.value } })} options={[{ value: '', label: 'Select…' }, ...f.options]} /></Field>
+                ) : (
+                  <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}><Input value={edit.settings?.[f.key] ?? ''} placeholder={f.placeholder} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [f.key]: e.target.value } })} /></Field>
+                ))}
+                {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => k === 'type' && edit.kind === 'mpesa' ? (
+                  <Field key={k} label={l}><Select value={edit.settings?.type ?? 'paybill'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, type: e.target.value } })} options={[{ value: 'paybill', label: 'Paybill (customers enter an account number)' }, { value: 'till', label: 'Buy Goods / Till number' }]} /></Field>
+                ) : (k === 'tillNumber' && edit.kind === 'mpesa' && (edit.settings?.type ?? 'paybill') !== 'till') ? null : (
+                  <Field key={k} label={l}><Input value={edit.settings?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [k]: k === 'port' ? Number(e.target.value) : e.target.value } })} /></Field>
+                ))}
+              </div>
+              {edit.kind === 'mpesa' && edit.provider === 'daraja' && <Checkbox label="Double-check every callback with an STK status query" checked={Boolean(edit.settings?.verifyCallbacksWithQuery)} onChange={(v) => setEdit({ ...edit, settings: { ...edit.settings, verifyCallbacksWithQuery: v } })} />}
+            </fieldset>
+            {((edit.kind === 'payment' && info?.fields.some((f) => f.secret)) || (PROVIDER_FIELDS[edit.provider]?.secrets ?? []).length > 0) && (
+              <fieldset className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900 dark:bg-amber-950/20">
+                <legend className="px-1 text-xs font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300"><Icon name="shield" className="mr-1 inline h-3.5 w-3.5" />Secret credentials</legend>
+                <p className="text-xs text-ink-600 dark:text-ink-300">Encrypted on the server and never shown again. Leave a saved field blank to keep it.</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {edit.kind === 'payment' && info?.fields.filter((f) => f.secret).map((f) => (
+                    <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={edit.secretsSet?.includes(f.key) ? 'Saved. Leave blank to keep.' : f.help}><Input type="password" autoComplete="new-password" value={edit.secrets?.[f.key] ?? ''} onChange={(e) => setEdit({ ...edit, secrets: { ...edit.secrets, [f.key]: e.target.value } })} /></Field>
+                  ))}
+                  {(PROVIDER_FIELDS[edit.provider]?.secrets ?? []).map(([k, l]) => <Field key={k} label={l} hint={edit.secretsSet?.includes(k) ? 'Saved. Leave blank to keep.' : undefined}><Input type="password" autoComplete="new-password" value={edit.secrets?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, secrets: { ...edit.secrets, [k]: e.target.value } })} /></Field>)}
+                </div>
+              </fieldset>
             )}
             {edit.kind === 'payment' && edit.webhookUrl && (
-              <div className="sm:col-span-2"><div className="label">Webhook / callback URL (set this in the provider dashboard if asked)</div><div className="break-all rounded bg-ink-50 p-2 font-mono text-xs dark:bg-ink-800">{edit.webhookUrl}</div><p className="mt-1 text-xs text-ink-500">Contains a secret token. Charges started from the till send it automatically where the provider supports per-request callbacks.</p></div>
+              <div><CopyField label="Webhook / callback URL" value={edit.webhookUrl} /><p className="mt-1 text-xs text-ink-500">Set this in the provider dashboard if asked. It contains a secret token.</p></div>
             )}
-            {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => k === 'type' && edit.kind === 'mpesa' ? (
-              <Field key={k} label={l}><Select value={edit.settings?.type ?? 'paybill'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, type: e.target.value } })} options={[{ value: 'paybill', label: 'Paybill (customers enter an account number)' }, { value: 'till', label: 'Buy Goods / Till number' }]} /></Field>
-            ) : (k === 'tillNumber' && edit.kind === 'mpesa' && (edit.settings?.type ?? 'paybill') !== 'till') ? null : (
-              <Field key={k} label={l}><Input value={edit.settings?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [k]: k === 'port' ? Number(e.target.value) : e.target.value } })} /></Field>
-            ))}
-            {(PROVIDER_FIELDS[edit.provider]?.secrets ?? []).map(([k, l]) => <Field key={k} label={l} hint={edit.secretsSet?.includes(k) ? 'Saved. Leave blank to keep.' : undefined}><Input type="password" autoComplete="new-password" value={edit.secrets?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, secrets: { ...edit.secrets, [k]: e.target.value } })} /></Field>)}
-            {edit.kind === 'mpesa' && edit.provider === 'daraja' && <Checkbox label="Double-check every callback with an STK status query" checked={Boolean(edit.settings?.verifyCallbacksWithQuery)} onChange={(v) => setEdit({ ...edit, settings: { ...edit.settings, verifyCallbacksWithQuery: v } })} />}
+            {info?.docsUrl && <a className="inline-flex items-center gap-1 text-xs font-semibold text-brand-600 hover:underline" href={info.docsUrl} target="_blank" rel="noreferrer">Provider API documentation ↗</a>}
+            <ErrorBox error={error} />
           </div>
-          <div className="mt-3"><ErrorBox error={error} /></div>
         </Modal>
       )}
     </div>

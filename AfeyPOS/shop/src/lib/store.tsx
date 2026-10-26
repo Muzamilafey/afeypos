@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { mergeStudio, type StoreStudio } from '@afeypos/shared';
-import { api, type StoreConfig } from './api';
+import { api, ApiError, type StoreConfig } from './api';
 import { setCurrency } from './format';
 
 const Ctx = createContext<(StoreConfig & { preview: boolean }) | null>(null);
@@ -65,7 +65,7 @@ function withImages(s: StoreStudio, images: Record<string, string>): StoreStudio
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [cfg, setCfg] = useState<StoreConfig | null>(null);
   const [draft, setDraft] = useState<StoreStudio | null>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [onDraft] = useState(() => (s: StoreStudio, images: Record<string, string>) => setDraft(withImages(s, images)));
   const preview = usePreview(onDraft);
   useEffect(() => {
@@ -74,7 +74,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setCurrency(r.data.currency);
         setCfg({ ...r.data, studio: mergeStudio(r.data.studio) });
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => setError({ code: e instanceof ApiError ? e.code : 'ERROR', message: e.message }));
   }, []);
   const studio = draft ?? cfg?.studio;
   useEffect(() => {
@@ -83,7 +83,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     document.title = studio.seo.title || `${cfg.name}${studio.brand.tagline ? ` · ${studio.brand.tagline}` : ''}`;
     if (studio.seo.description) document.querySelector('meta[name="description"]')?.setAttribute('content', studio.seo.description);
   }, [studio, cfg]);
-  if (error) return <div className="mx-auto max-w-md p-10 text-center"><h1 className="text-xl font-bold">The shop is closed</h1><p className="mt-2 text-ink-500">{error}</p></div>;
+  if (error) return <Unavailable code={error.code} message={error.message} />;
   if (!cfg || !studio) return <div className="flex h-screen items-center justify-center text-ink-400">Loading…</div>;
   return <Ctx.Provider value={{ ...cfg, studio, preview }}>{children}</Ctx.Provider>;
 }
@@ -92,4 +92,46 @@ export function useStore() {
   const c = useContext(Ctx);
   if (!c) throw new Error('StoreProvider missing');
   return c;
+}
+
+/**
+ * Shown instead of the shop when it cannot open. Customers get a short notice; the owner gets the reason and the
+ * steps (the shop is switched off until the owner opens it in the POS).
+ */
+function Unavailable({ code, message }: { code: string; message: string }) {
+  const steps: Record<string, { title: string; text: string; steps?: string[] }> = {
+    STORE_CLOSED: {
+      title: 'The shop is closed for now',
+      text: 'Please check back soon.',
+      steps: ['Sign in to Afey POS as the owner or an administrator.', 'Go to Administration → Online shop and tick “The online shop is open”, then Save.', 'On each product to sell, tick “Sell on the online shop” (Products → the product → Online shop).', 'Optional: design it under Administration → Store studio.'],
+    },
+    SETUP_REQUIRED: {
+      title: 'This shop is not set up yet',
+      text: 'Please check back soon.',
+      steps: ['Open Afey POS (for example http://localhost:5173) and create the business and owner account.', 'Then open the shop under Administration → Online shop.'],
+    },
+    NETWORK: {
+      title: 'We cannot reach the shop right now',
+      text: 'Check your connection and try again in a moment.',
+      steps: ['Is the Afey POS server running? (npm run local, or the afeypos service)', 'When the shop is hosted elsewhere, it must be built with VITE_API_URL set to the server address.'],
+    },
+  };
+  const info = steps[code] ?? { title: 'The shop is not available', text: message };
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[#f5f1ea] p-6">
+      <div className="w-full max-w-lg rounded-3xl bg-white p-8 text-center shadow-sm">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#1f3d2b] text-2xl text-white" aria-hidden="true">{code === 'NETWORK' ? '!' : '⏸'}</div>
+        <h1 className="text-2xl font-extrabold text-[#1f3d2b]">{info.title}</h1>
+        <p className="mt-2 text-ink-500">{info.text}</p>
+        <button className="btn-primary mt-5" onClick={() => location.reload()}>Try again</button>
+        {info.steps && (
+          <details className="mt-6 rounded-2xl bg-[#f5f1ea] p-4 text-left text-sm">
+            <summary className="cursor-pointer font-semibold text-[#1f3d2b]">Are you the shop owner? How to open the shop</summary>
+            <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-ink-600">{info.steps.map((s) => <li key={s}>{s}</li>)}</ol>
+            <p className="mt-3 text-xs text-ink-400">Reason: {message} ({code})</p>
+          </details>
+        )}
+      </div>
+    </div>
+  );
 }

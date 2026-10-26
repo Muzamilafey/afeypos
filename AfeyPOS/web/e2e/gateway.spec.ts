@@ -23,7 +23,7 @@ test('pays through a payment gateway (simulator): pending until the provider con
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: /Add the payment simulator/ }).click();
   await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.getByRole('cell', { name: 'Payment simulator' }).first()).toBeVisible();
+  await expect(page.getByRole('article', { name: 'Payment simulator' }).first()).toBeVisible();
 
   await page.getByRole('link', { name: 'Checkout', exact: true }).click();
   const scan = page.getByLabel('Scan or search products');

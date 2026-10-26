@@ -117,8 +117,9 @@ router.post('/brands', requirePermission('products.manage'), async (req, res) =>
 
 // ---- products ----
 router.get('/products', requirePermission('products.read'), async (req, res) => {
-  const q = parse(pagination.extend({ categoryId: objectId.optional(), active: z.enum(['true', 'false']).optional(), type: z.string().optional(), lowStock: z.enum(['true']).optional(), warehouseId: objectId.optional() }), req.query);
+  const q = parse(pagination.extend({ categoryId: objectId.optional(), active: z.enum(['true', 'false']).optional(), type: z.string().optional(), lowStock: z.enum(['true']).optional(), warehouseId: objectId.optional(), online: z.enum(['true']).optional() }), req.query);
   const filter: Record<string, unknown> = {};
+  if (q.online) filter['online.enabled'] = true;
   if (q.categoryId) filter.categoryId = q.categoryId;
   if (q.active) filter.active = q.active === 'true';
   if (q.type) filter.type = q.type;

@@ -136,6 +136,33 @@ function OrderModal({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
+/** What still stops the shop website from opening, with a link to it. Uses the saved settings. */
+function ShopReadiness({ saved }: { saved: any }) {
+  const listed = useQuery({ queryKey: ['products-online-count'], queryFn: () => api<{ total: number }>('/products', { query: { online: 'true', limit: 1 } }).then((r) => r.total ?? 0) });
+  // The shop's address: set in Store studio; on this computer the shop runs on port 5174 during development.
+  const url = (saved.publicUrl || `${location.protocol}//${location.hostname}:5174`).replace(/\/$/, '');
+  const checks = [
+    { ok: Boolean(saved.enabled), text: 'The shop is switched on', fix: 'Tick the first box below (shop open) and press Save.' },
+    { ok: (listed.data ?? 0) > 0, text: `${listed.data ?? 0} product(s) listed online`, fix: 'Open a product and tick “Sell on the online shop”, then Save.' },
+    { ok: saved.pickup !== false || saved.delivery !== false, text: 'Customers can get their orders (pickup or delivery)', fix: 'Allow pickup or delivery below.' },
+    { ok: saved.payOnDelivery !== false || saved.mpesa !== false || Boolean(saved.gatewayConfigId), text: 'Customers can pay', fix: 'Allow M-Pesa or pay on delivery below.' },
+  ];
+  const ready = checks.every((c) => c.ok);
+  return (
+    <Card title={ready ? 'The shop is open' : 'Before the shop opens'} actions={<a className="text-xs font-semibold text-brand-600 hover:underline" href={url} target="_blank" rel="noreferrer">Open the shop ↗</a>}>
+      <ul className="space-y-2 text-sm">
+        {checks.map((c) => (
+          <li key={c.text} className="flex items-start gap-2">
+            <span className={c.ok ? 'mt-0.5 text-green-600' : 'mt-0.5 text-amber-600'} aria-hidden="true">{c.ok ? '✔' : '●'}</span>
+            <span><span className={c.ok ? '' : 'font-semibold'}>{c.text}</span>{!c.ok && <span className="block text-xs text-ink-500">{c.fix}</span>}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-xs text-ink-500">Shop address: <a className="text-brand-600 underline" href={url} target="_blank" rel="noreferrer">{url}</a>. Change it under Store studio → Payments &amp; address. On a development computer the shop website runs with <code>npm run local</code> (or <code>npm run dev:shop</code>).</p>
+    </Card>
+  );
+}
+
 /** Settings → Online shop */
 export function StoreSettingsPage() {
   const toast = useToast();
@@ -149,10 +176,11 @@ export function StoreSettingsPage() {
     enabled: Boolean(s.enabled), branchId: s.branchId || null, warehouseId: s.warehouseId || null, pickup: s.pickup !== false, delivery: s.delivery !== false,
     deliveryAreas: (s.deliveryAreas ?? []).filter((a: any) => a.name), deliveryFeeCents: s.deliveryFeeCents ?? 0, freeDeliveryAboveCents: s.freeDeliveryAboveCents ?? 0, minOrderCents: s.minOrderCents ?? 0,
     payOnDelivery: s.payOnDelivery !== false, mpesa: s.mpesa !== false, notifyPhone: s.notifyPhone ?? '', contactPhone: s.contactPhone ?? '', announcement: s.announcement ?? '', hours: s.hours ?? '',
-  } } } }).then(() => toast.success('Online shop saved')).catch(toast.error);
+  } } } }).then(() => { toast.success('Online shop saved'); q.refetch(); }).catch(toast.error);
   return (
     <div className="max-w-4xl space-y-4">
       <PageHeader title="Online shop" subtitle="The separate shopping website for your customers" actions={<Button onClick={save}>Save</Button>} />
+      <ShopReadiness saved={q.data?.settings?.store ?? {}} />
       <Card>
         <Checkbox label="The online shop is open" checked={Boolean(s.enabled)} onChange={(v) => set('enabled', v)} />
         <p className="mt-2 text-sm text-ink-500">Tick <strong>Sell on the online shop</strong> on each product to list it. Publish the shop website (see docs/ONLINE-SHOP.md) on its own address, for example <code>shop.yoursupermarket.co.ke</code>. Change its look, pages and payment accounts in <Link className="text-brand-600 underline" to="/settings/store-studio">Store studio</Link>.</p>

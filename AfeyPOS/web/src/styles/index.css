@@ -31,3 +31,18 @@
 @media print {
   .no-print { display: none !important; }
 }
+
+/* Dialog animations (see Modal in components/ui.tsx). */
+@keyframes modal-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-rise { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes modal-slide { from { transform: translateX(32px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes modal-sheet { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.modal-backdrop { animation: modal-fade 0.15s ease-out; }
+.modal-panel, .modal-drawer { animation: modal-sheet 0.2s ease-out; }
+@media (min-width: 640px) {
+  .modal-panel { animation: modal-rise 0.18s ease-out; }
+  .modal-drawer { animation: modal-slide 0.22s ease-out; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop, .modal-panel, .modal-drawer { animation: none; }
+}
