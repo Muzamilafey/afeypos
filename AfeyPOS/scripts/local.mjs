@@ -5,7 +5,7 @@
 // 3. Uses the MongoDB in server/.env if it is a reachable replica set; otherwise starts a private
 //    single-node replica set in ./data/mongo on port 27018 (data is kept between runs). If `mongod` is
 //    not installed, a MongoDB binary is downloaded once by mongodb-memory-server.
-// 4. Starts the API (PORT in server/.env, default 4000), the web app (http://localhost:5173) and the online shop (http://localhost:5174).
+// 4. Starts the API (PORT in server/.env, default 9999), the web app (http://localhost:5173) and the online shop (http://localhost:5174).
 // Ctrl+C stops everything, including the database this script started.
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -52,7 +52,7 @@ if (!getEnv('ENCRYPTION_KEY') || getEnv('ENCRYPTION_KEY').startsWith('REPLACE'))
   envChanged = true;
 }
 // Keep the local API URL (used for payment callbacks) on the same port as the server.
-const apiPort = getEnv('PORT') || '4000';
+const apiPort = getEnv('PORT') || '9999';
 const apiUrl = getEnv('API_PUBLIC_URL');
 if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(apiUrl) && !apiUrl.replace(/\/$/, '').endsWith(`:${apiPort}`)) {
   setEnv('API_PUBLIC_URL', `http://localhost:${apiPort}`);

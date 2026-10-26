@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/in
 | Option | Meaning |
 |---|---|
 | `--mode standalone\|hq\|branch` | One shop (default), head office online, or a branch server |
-| `--port 4000` | Port for tills and browsers |
+| `--port 9999` | Port for tills and browsers |
 | `--public-url URL` | Address staff use (default `http://<LAN IP>:<port>`; head office needs one) |
 | `--domain NAME` | HTTPS for NAME with Caddy (ports 80/443 open to the internet) |
 | `--shop-host NAME` | Also serve the online shop website for NAME |
@@ -82,7 +82,7 @@ irm https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/installer
 With options:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/installer/windows/install-online.ps1))) -Mode standalone -Port 4000
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/installer/windows/install-online.ps1))) -Mode standalone -Port 9999
 ```
 
 Options: `-Mode`, `-Port`, `-PublicUrl`, `-HqUrl -SyncToken -BranchCode` (branch servers), `-Root C:\AfeyPOS`, `-Ref`, `-SkipFirewall`.
@@ -102,7 +102,7 @@ Day-to-day use, backups and recovery are covered in [INSTALL-WINDOWS.md](INSTALL
 From the `AfeyPOS` folder, with Node.js 22.9+ and a MongoDB replica set available:
 
 ```bash
-npm run setup -- --mode standalone --port 4000   # configure, install, build, initialise the database
+npm run setup -- --mode standalone --port 9999   # configure, install, build, initialise the database
 npm start
 ```
 

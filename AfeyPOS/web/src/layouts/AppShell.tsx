@@ -15,6 +15,11 @@ const GROUPS: Record<string, string> = { sell: 'Sales', stock: 'Inventory', buy:
 
 const GROUP_ICONS: Record<string, string> = { sell: 'cart', stock: 'box', buy: 'truck', parties: 'users', people: 'user', finance: 'wallet', admin: 'settings' };
 
+const ago = (iso: string) => {
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+};
+
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
 
 function matchLength(path: string, location: string) {
@@ -41,6 +46,7 @@ export function AppShell() {
   const [menu, setMenu] = useState(false);
   const [search, setSearch] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
+  const sync = useQuery({ queryKey: ['sync-indicator'], queryFn: () => api<{ data: { role: string; online?: boolean; lastSuccessAt?: string | null; lastError?: string | null } }>('/sync/indicator').then((r) => r.data), enabled: me?.deploymentMode === 'branch', refetchInterval: 15_000 });
   const alerts = useQuery({ queryKey: ['stock-alert-count'], queryFn: () => api<{ data: { counts: { total: number } } }>('/inventory/alerts', { query: { summary: 'true' } }).then((r) => r.data.counts.total), enabled: Boolean(me) && can('inventory.read') && has('inventory'), refetchInterval: 120_000 });
   const dashboard = useQuery({ queryKey: ['dashboard'], queryFn: () => api<{ data: any }>('/reports/dashboard').then((r) => r.data), enabled: Boolean(me) && can('reports.read') && has('reports'), refetchInterval: 60_000 });
 
@@ -207,7 +213,14 @@ export function AppShell() {
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search..." aria-label="Search products, receipts or customers" className="w-full rounded-sm border border-transparent bg-transparent py-1 pl-7 pr-2 text-[12.5px] outline-none placeholder:text-ink-400 focus:border-[#d5d9de] focus:bg-white dark:focus:bg-ink-950" />
             </form>
             <div className="ml-auto flex items-center gap-1">
-              {me.deploymentMode !== 'standalone' && <span className="mr-1 hidden rounded-sm bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-700 sm:inline">{me.deploymentMode === 'hq' ? 'Head office' : 'Branch server'}</span>}
+              {me.deploymentMode === 'hq' && <span className="mr-1 hidden rounded-sm bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-700 sm:inline">Head office</span>}
+              {me.deploymentMode === 'branch' && sync.data && (
+                // Branch server: sales are always saved here; this says whether head office is up to date.
+                <span role="status" title={sync.data.lastError ?? undefined} className={cx('mr-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold', sync.data.online ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200' : 'bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200')}>
+                  <span className={cx('h-2 w-2 rounded-full', sync.data.online ? 'bg-emerald-500' : 'bg-amber-500')} />
+                  {sync.data.online ? `Online · synced ${sync.data.lastSuccessAt ? ago(sync.data.lastSuccessAt) : 'now'}` : 'Offline · saved here, syncs when back'}
+                </span>
+              )}
               {pwa.canInstall && <button onClick={() => installApp()} className="mr-1 hidden items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-[12px] font-semibold text-brand-700 hover:bg-brand-100 sm:inline-flex dark:border-brand-500/40 dark:bg-brand-500/10 dark:text-brand-200" aria-label="Install Afey POS as an app"><Icon name="download" className="h-3.5 w-3.5" />Install app</button>}
               <button onClick={toggleTheme} className="rounded p-1.5 text-ink-500 hover:bg-ink-100 dark:hover:bg-ink-800" aria-label="Toggle dark mode"><Icon name={dark ? 'sun' : 'moon'} className="h-4 w-4" /></button>
               <button onClick={() => nav(can('inventory.read') ? '/inventory?belowReorder=true' : '/')} className="relative rounded p-1.5 text-ink-500 hover:bg-ink-100 dark:hover:bg-ink-800" aria-label={lowStock ? `${lowStock} products low on stock` : 'Notifications'}>

@@ -8,9 +8,9 @@ import react from '@vitejs/plugin-react';
 function serverPort(): string {
   try {
     const env = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../server/.env'), 'utf8');
-    return env.match(/^PORT=\s*(\d+)/m)?.[1] ?? '4000';
+    return env.match(/^PORT=\s*(\d+)/m)?.[1] ?? '9999';
   } catch {
-    return '4000';
+    return '9999';
   }
 }
 const api = process.env.VITE_API_TARGET ?? `http://127.0.0.1:${serverPort()}`;

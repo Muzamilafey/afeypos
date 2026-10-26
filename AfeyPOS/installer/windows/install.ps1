@@ -17,12 +17,13 @@
 [CmdletBinding()]
 param(
   [ValidateSet('standalone', 'hq', 'branch')][string]$Mode = 'standalone',
-  [int]$Port = 4000,
+  [int]$Port = 9999,
   [string]$PublicUrl = '',
   [string]$ShopHost = '',
   [string]$HqUrl = '',
   [string]$SyncToken = '',
   [string]$BranchCode = '',
+  [string]$EncryptionKey = $env:AFEY_ENCRYPTION_KEY,
   [string]$InstallDir = (Resolve-Path "$PSScriptRoot\..\..").Path,
   [string]$DataDir = "C:\AfeyPOS\data",
   [string]$MongoDataDir = "C:\AfeyPOS\mongodb",
@@ -88,6 +89,7 @@ if ($ShopHost) { $setupArgs += @('--shop-host', $ShopHost) }
 if ($HqUrl) { $setupArgs += @('--hq-url', $HqUrl) }
 if ($SyncToken) { $setupArgs += @('--sync-token', $SyncToken) }
 if ($BranchCode) { $setupArgs += @('--branch-code', $BranchCode) }
+if ($EncryptionKey) { $setupArgs += @('--encryption-key', $EncryptionKey) }
 Push-Location $InstallDir
 & node @setupArgs
 $code = $LASTEXITCODE
@@ -113,9 +115,9 @@ Register-ScheduledTask -TaskName 'AfeyPOS Backup' -Action $bAction -Trigger $bTr
 
 if (-not $SkipFirewall) {
   Step "Allowing tills on the local network to reach port $Port"
-  if (-not (Get-NetFirewallRule -DisplayName 'Afey POS' -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName 'Afey POS' -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
-  }
+  # Recreated each run so the rule follows the port (it was 4000 before 9999 became the default).
+  Get-NetFirewallRule -DisplayName 'Afey POS' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  New-NetFirewallRule -DisplayName 'Afey POS' -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
 }
 
 Step 'Waiting for the server to start'
@@ -126,7 +128,8 @@ for ($i = 0; $i -lt 30; $i++) {
 if ($ok) {
   Write-Host "`nAfey POS is running." -ForegroundColor Green
   $url = ((Get-Content (Join-Path $InstallDir 'server\.env')) -match '^PUBLIC_APP_URL=' | Select-Object -First 1) -replace '^PUBLIC_APP_URL=', ''
-  Write-Host "Open http://localhost:$Port on this computer, or $url on other tills, and create the owner account."
+  if ($Mode -eq 'branch') { Write-Host "Open http://localhost:$Port on this computer, or $url on other tills. Within a minute the business, staff and products arrive from head office: sign in with your head-office accounts." }
+  else { Write-Host "Open http://localhost:$Port on this computer, or $url on other tills, and create the owner account." }
 } else {
   Write-Warning "The server did not answer yet. Check: Get-ScheduledTaskInfo AfeyPOS, and docs/TROUBLESHOOTING.md"
 }

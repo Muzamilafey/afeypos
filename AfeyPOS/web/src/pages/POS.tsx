@@ -1038,49 +1038,98 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   );
 }
 
-/** Supervisor approval on the cashier's screen: email + PIN/password, staff card + PIN, or fingerprint. */
+/**
+ * Supervisor approval on the cashier's screen: scanning the supervisor's staff card approves at once (no PIN),
+ * or, with a reader paired, the fingerprint tab listens for a finger as soon as it is chosen.
+ */
 export function OverrideModal({ permission, message, onClose, onApproved }: { permission: string; message: string; onClose: () => void; onApproved: (token: string) => void }) {
   const { me } = useAuth();
-  const [mode, setMode] = useState<'card' | 'email' | 'finger'>('card');
-  const [email, setEmail] = useState('');
+  const [mode, setMode] = useState<'card' | 'finger'>('card');
   const [card, setCard] = useState('');
-  const [pin, setPin] = useState('');
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const pinRef = useRef<HTMLInputElement>(null);
-  const approve = async () => {
+  const cardRef = useRef<HTMLInputElement>(null);
+  const approvedRef = useRef(onApproved);
+  approvedRef.current = onApproved;
+  const busyRef = useRef(false);
+  const approveCard = async (code = card) => {
+    if (!code.trim() || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
-      if (mode === 'finger') {
-        const r = await fingerprint<{ overrideToken: string }>('override', { permission, forUserId: me!.user.id });
-        onApproved(r.overrideToken);
-        return;
-      }
-      const digits = /^\d{4,8}$/.test(pin);
       // The till tells the server which branch the approval is for (supervisors may be limited to some branches).
       const tillId = getWorkstation().tillId || undefined;
-      const body = mode === 'card' ? { cardCode: card.trim(), pin: pin || undefined, permission, tillId } : { email, pin: digits ? pin : undefined, password: digits ? undefined : pin, permission, tillId };
-      const r = await api<{ overrideToken: string }>('/auth/override', { body });
-      onApproved(r.overrideToken);
+      const r = await api<{ overrideToken: string }>('/auth/override', { body: { cardCode: code.trim(), permission, tillId } });
+      approvedRef.current(r.overrideToken);
     } catch (e) {
       setError(e);
+      // Ready for the next scan.
+      setCard('');
+      cardRef.current?.focus();
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
-  const modes = [{ key: 'card', label: 'Staff card' }, { key: 'email', label: 'Email' }, ...(bridgeConfigured() ? [{ key: 'finger', label: 'Fingerprint' }] : [])] as { key: typeof mode; label: string }[];
+  // Scanners that do not send Enter: a full card code followed by a short pause approves too.
+  useEffect(() => {
+    if (mode !== 'card' || card.trim().length < 16) return;
+    const t = setTimeout(() => approveCard(card), 300);
+    return () => clearTimeout(t);
+  }, [card, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Fingerprint: keep the reader listening until a supervisor's finger approves or the tab is left.
+  const [listening, setListening] = useState(false);
+  useEffect(() => {
+    if (mode !== 'finger') return;
+    const ctrl = new AbortController();
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      while (!ctrl.signal.aborted) {
+        setListening(true);
+        try {
+          const r = await fingerprint<{ overrideToken: string }>('override', { permission, forUserId: me!.user.id }, ctrl.signal);
+          if (ctrl.signal.aborted) return;
+          setError(null);
+          approvedRef.current(r.overrideToken);
+          return;
+        } catch (e) {
+          if (ctrl.signal.aborted) return;
+          setListening(false);
+          setError(e);
+          // A wrong finger or a timeout re-arms quickly; an unreachable bridge is retried a little slower.
+          await wait(/reach the Afey device bridge|not paired/.test(String((e as Error)?.message)) ? 3000 : 1200);
+        }
+      }
+    })();
+    return () => { ctrl.abort(); setListening(false); };
+  }, [mode, permission, me]);
+  const fingerOk = bridgeConfigured();
+  const modes = [{ key: 'card', label: 'Staff card' }, ...(fingerOk ? [{ key: 'finger', label: 'Fingerprint' }] : [])] as { key: typeof mode; label: string }[];
   return (
-    <Modal open onClose={onClose} title="Supervisor approval" size="sm" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} onClick={approve}>{mode === 'finger' ? 'Scan finger' : 'Approve'}</Button></>}>
+    <Modal open onClose={onClose} title="Supervisor approval" size="sm" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button>{mode === 'card' && <Button loading={busy} disabled={!card.trim()} onClick={() => approveCard()}>Approve</Button>}</>}>
       <p className="mb-3 text-sm">{message}</p>
-      <div className="mb-3 flex gap-1 rounded-lg bg-ink-100 p-1 text-sm dark:bg-ink-800" role="radiogroup" aria-label="Approve with">
-        {modes.map((m) => <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} className={`flex-1 rounded-md py-1.5 ${mode === m.key ? 'bg-white shadow dark:bg-ink-700' : 'text-ink-500'}`} onClick={() => { setMode(m.key); setError(null); }}>{m.label}</button>)}
-      </div>
+      {modes.length > 1 && (
+        <div className="mb-3 flex gap-1 rounded-lg bg-ink-100 p-1 text-sm dark:bg-ink-800" role="radiogroup" aria-label="Approve with">
+          {modes.map((m) => <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} className={`flex-1 rounded-md py-1.5 ${mode === m.key ? 'bg-white shadow dark:bg-ink-700' : 'text-ink-500'}`} onClick={() => { setMode(m.key); setError(null); }}>{m.label}</button>)}
+        </div>
+      )}
       <div className="space-y-3">
-        {mode === 'card' && <Field label="Supervisor card"><Input autoFocus type="password" autoComplete="off" value={card} placeholder="Scan the supervisor's card" onChange={(e) => setCard(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); pinRef.current?.focus(); } }} /></Field>}
-        {mode === 'email' && <Field label="Supervisor email"><Input autoFocus value={email} onChange={(e) => setEmail(e.target.value)} /></Field>}
-        {mode !== 'finger' && <Field label={mode === 'card' ? 'PIN' : 'PIN or password'}><Input ref={pinRef} type="password" value={pin} onChange={(e) => setPin(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') approve(); }} /></Field>}
-        {mode === 'finger' && <p className="text-sm text-ink-500">Press <strong>Scan finger</strong>; the supervisor places an enrolled finger on the reader.</p>}
+        {mode === 'card' && (
+          <Field label="Supervisor card" hint="Scan the card: it approves straight away.">
+            <Input ref={cardRef} autoFocus type="password" autoComplete="off" value={card} placeholder="Scan the supervisor's card"
+              onChange={(e) => setCard(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); approveCard(); } }} />
+          </Field>
+        )}
+        {mode === 'finger' && (
+          <div className="flex flex-col items-center gap-3 py-6 text-center" role="status" aria-live="polite">
+            <span className={`flex h-20 w-20 items-center justify-center rounded-full ${listening ? 'animate-pulse bg-brand-100 text-brand-700 ring-4 ring-brand-200 dark:bg-brand-950 dark:ring-brand-800' : 'bg-ink-100 text-ink-400 dark:bg-ink-800'}`}>
+              <svg viewBox="0 0 24 24" className="h-10 w-10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M12 11v4m-4-4a4 4 0 0 1 8 0v2a8 8 0 0 1-1 4M5 9a7 7 0 0 1 13.7-2M5 13v-2m14 2c0 2-.4 3.7-1 5M9 21c1-2 1.5-4 1.5-6v-4a1.5 1.5 0 0 1 3 0" /></svg>
+            </span>
+            <p className="text-sm font-medium">{listening ? 'Waiting for the supervisor’s finger…' : 'Getting the reader ready…'}</p>
+            <p className="text-xs text-ink-500">The supervisor places an enrolled finger on the reader.</p>
+          </div>
+        )}
         <ErrorBox error={error} />
       </div>
     </Modal>

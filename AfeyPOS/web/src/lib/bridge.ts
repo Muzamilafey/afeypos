@@ -15,11 +15,13 @@ export function bridgeConfigured() {
   return Boolean(w.bridgeUrl && w.bridgeToken);
 }
 
-export async function bridge<T = any>(path: string, body?: unknown, timeoutMs = 40_000): Promise<T> {
+export async function bridge<T = any>(path: string, body?: unknown, timeoutMs = 40_000, signal?: AbortSignal): Promise<T> {
   const w = getWorkstation();
   if (!w.bridgeUrl || !w.bridgeToken) throw new BridgeError('This computer is not paired with the Afey device bridge. Set it up under Hardware → This computer.');
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const cancel = () => ctrl.abort();
+  signal?.addEventListener('abort', cancel);
   try {
     const res = await fetch(`${w.bridgeUrl.replace(/\/$/, '')}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
@@ -32,9 +34,11 @@ export async function bridge<T = any>(path: string, body?: unknown, timeoutMs = 
     return data as T;
   } catch (e) {
     if (e instanceof BridgeError) throw e;
+    if (signal?.aborted) throw new BridgeError('Cancelled');
     throw new BridgeError(ctrl.signal.aborted ? 'The fingerprint reader timed out' : 'Cannot reach the Afey device bridge on this computer. Is it running?');
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
   }
 }
 
@@ -48,6 +52,6 @@ export interface BridgeStatus {
 export const bridgeStatus = () => bridge<BridgeStatus>('/status', undefined, 8000);
 
 /** Touch-only identification (or 1:1 when an email is given) for sign-in, approval or attendance. */
-export function fingerprint<T = any>(purpose: 'login' | 'override' | 'attendance', extra: { email?: string; permission?: string; forUserId?: string } = {}) {
-  return bridge<{ data: T }>(extra.email ? '/fingerprint/verify' : '/fingerprint/identify', { purpose, ...extra }).then((r) => r.data);
+export function fingerprint<T = any>(purpose: 'login' | 'override' | 'attendance', extra: { email?: string; permission?: string; forUserId?: string } = {}, signal?: AbortSignal) {
+  return bridge<{ data: T }>(extra.email ? '/fingerprint/verify' : '/fingerprint/identify', { purpose, ...extra }, 40_000, signal).then((r) => r.data);
 }

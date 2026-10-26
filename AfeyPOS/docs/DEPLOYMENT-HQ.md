@@ -7,7 +7,7 @@ does not need this: run a standalone installation (INSTALL-WINDOWS.md).
 ## Topology
 
 ```
- https://hq.myshop.co.ke ──► reverse proxy (Caddy / Nginx, TLS) ──► Afey POS server (DEPLOYMENT_MODE=hq) :4000 ──► MongoDB replica set
+ https://hq.myshop.co.ke ──► reverse proxy (Caddy / Nginx, TLS) ──► Afey POS server (DEPLOYMENT_MODE=hq) :9999 ──► MongoDB replica set
         ▲                                                         (also receives M-Pesa / gateway callbacks)
         │ HTTPS sync every ~20 s while online
  Branch server MSA01 (DEPLOYMENT_MODE=branch, own MongoDB) ◄── tills on the branch LAN
@@ -61,10 +61,10 @@ No Docker or Kubernetes is required. A small VM (2 vCPU / 4 GB) is enough for mo
 5. **DNS and HTTPS**: one A record (`hq.myshop.co.ke`) and a certificate. With Caddy:
    ```
    hq.myshop.co.ke {
-     reverse_proxy 127.0.0.1:4000
+     reverse_proxy 127.0.0.1:9999
    }
    ```
-   Nginx: `proxy_pass http://127.0.0.1:4000;` with `Host`, `X-Forwarded-For`, `X-Forwarded-Proto` and WebSocket upgrade headers for `/socket.io/`.
+   Nginx: `proxy_pass http://127.0.0.1:9999;` with `Host`, `X-Forwarded-For`, `X-Forwarded-Proto` and WebSocket upgrade headers for `/socket.io/`.
 6. Open `https://hq.myshop.co.ke`, complete the one-time setup (business, owner), then add branches, stores and tills
    under **Settings → Branches & tills**, and products, staff and integrations as usual.
 

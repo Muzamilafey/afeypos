@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { Branch, SyncConflict, SyncCursor } from '../../models/index.js';
 import { idParam, parse } from '../../http/validate.js';
-import { requirePermission } from '../../http/auth.js';
+import { requireAnyPermission, requirePermission } from '../../http/auth.js';
 import { AppError, forbidden, notFound } from '../../lib/errors.js';
 import { randomToken, sha256 } from '../../lib/crypto.js';
 import { audit } from '../../lib/audit.js';
@@ -72,6 +72,14 @@ syncSettingsRoutes.get('/settings/sync/status', requirePermission('settings.mana
     return;
   }
   res.json({ data: { role: 'standalone' } });
+});
+
+/** Small status for the header on every till of a branch server: online or not, and when it last synced. */
+syncSettingsRoutes.get('/sync/indicator', requireAnyPermission('sales.create', 'settings.manage', 'reports.read'), async (_req, res) => {
+  const e = env();
+  if (e.DEPLOYMENT_MODE !== 'branch') return void res.json({ data: { role: e.DEPLOYMENT_MODE } });
+  const st = syncState();
+  res.json({ data: { role: 'branch', enabled: e.SYNC_ENABLED, online: st.online, running: st.running, lastSuccessAt: st.lastSuccessAt ?? null, lastError: st.last && !st.last.ok ? st.last.error : null } });
 });
 
 /** Branch: sync now. */

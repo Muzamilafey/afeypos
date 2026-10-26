@@ -4,13 +4,14 @@
 // MongoDB, then run this. Safe to run again: existing secrets and settings are kept, so it also upgrades.
 //
 //   --mode standalone|hq|branch   one shop (default), head office online, or branch server
-//   --port 4000                   port of the web app and API
+//   --port 9999                   port of the web app and API
 //   --mongo-uri <uri>             default mongodb://127.0.0.1:27017/afeypos?replicaSet=rs0
 //   --public-url <url>            address staff use (default http://<this computer's LAN IP>:<port>)
 //   --data-dir <dir>              uploads and backups (default ./data next to the app)
 //   --app-dir <dir>               stable path of the app if this copy is one of several versions
 //   --shop-host <name>            serve the online shop for this host name (e.g. shop.myshop.co.ke)
 //   --hq-url <url> --sync-token <token> --branch-code <code>   branch servers: where and how to sync
+//   --encryption-key <base64>     branch servers: head office's ENCRYPTION_KEY (or set AFEY_ENCRYPTION_KEY)
 //   --no-install --no-build --no-db   skip steps
 //   --print-env                   print the resulting configuration (secrets masked) and exit
 import { spawnSync } from 'node:child_process';
@@ -77,12 +78,21 @@ const mode = opt('mode', existed && get('DEPLOYMENT_MODE') ? get('DEPLOYMENT_MOD
 if (!['standalone', 'hq', 'branch'].includes(mode)) fail('--mode must be standalone, hq or branch');
 log(existed ? 'Updating server/.env (existing values kept)' : 'Creating server/.env');
 setDefault('JWT_ACCESS_SECRET', crypto.randomBytes(48).toString('base64url'), /^(|change-me.*)$/);
+// Branch servers must share head office's key (saved credentials and fingerprints are encrypted with it).
+const givenKey = opt('encryption-key', process.env.AFEY_ENCRYPTION_KEY || '');
+if (givenKey) {
+  if (Buffer.from(givenKey, 'base64').length !== 32) fail('--encryption-key must be the 32-byte base64 ENCRYPTION_KEY from head office (server/.env)');
+  if (existed && get('ENCRYPTION_KEY') && !/^REPLACE/.test(get('ENCRYPTION_KEY')) && get('ENCRYPTION_KEY') !== givenKey && !flag('replace-key')) {
+    fail('server/.env already has a different ENCRYPTION_KEY. Saved credentials would become unreadable; add --replace-key only on a new, empty installation.');
+  }
+  set('ENCRYPTION_KEY', givenKey);
+}
 setDefault('ENCRYPTION_KEY', crypto.randomBytes(32).toString('base64'), /^(|REPLACE.*)$/);
 // This script prepares a server; development uses `npm run local` instead.
 set('NODE_ENV', 'production');
 set('DEPLOYMENT_MODE', mode);
 if (port) set('PORT', port);
-const p = get('PORT') || '4000';
+const p = get('PORT') || '9999';
 if (opt('mongo-uri')) set('MONGODB_URI', opt('mongo-uri'));
 const dataDir = path.resolve(opt('data-dir', get('UPLOAD_DIR') && path.isAbsolute(get('UPLOAD_DIR')) ? path.dirname(get('UPLOAD_DIR')) : path.join(root, 'data')));
 fs.mkdirSync(path.join(dataDir, 'uploads'), { recursive: true });

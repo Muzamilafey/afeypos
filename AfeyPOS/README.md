@@ -40,7 +40,7 @@ Requirements: [Node.js](https://nodejs.org) 22.9 or newer. MongoDB is optional: 
 npm run local
 ```
 
-Then open http://localhost:5173 and set up your business. The command installs dependencies, creates `server/.env` with fresh secrets, starts a MongoDB replica set in `./data/mongo` (port 27018, data kept between runs) unless `server/.env` already points to a reachable replica set, and starts the API (port 4000) and the web app. Press Ctrl+C to stop everything. Works on Windows, macOS and Linux.
+Then open http://localhost:5173 and set up your business. The command installs dependencies, creates `server/.env` with fresh secrets, starts a MongoDB replica set in `./data/mongo` (port 27018, data kept between runs) unless `server/.env` already points to a reachable replica set, and starts the API (port 9999) and the web app. Press Ctrl+C to stop everything. Works on Windows, macOS and Linux.
 
 ## Quick start (development)
 
@@ -51,7 +51,7 @@ npm install
 cp server/.env.example server/.env        # then set JWT_ACCESS_SECRET and ENCRYPTION_KEY
 node scripts/generate-secrets.mjs         # prints fresh values for both
 ./scripts/start-local-mongo.sh            # optional helper: single-node replica set in ./data/db
-npm run dev                               # API on :4000, web on :5173
+npm run dev                               # API on :9999, web on :5173
 ```
 
 Open http://localhost:5173. In local mode you are asked to set up the business on first visit. To try a ready-made shop: `npm run seed:demo -w @afeypos/server -- hardware demo-hw` (local mode creates it only when no business exists yet; cloud mode at `demo-hw.<BASE_DOMAIN>`).

@@ -4,7 +4,7 @@
 #   afeypos reset-password EMAIL NEWPASSWORD | config | uninstall [--remove-data]
 set -euo pipefail
 [ -f /etc/afeypos/install.conf ] && . /etc/afeypos/install.conf
-DIR="${DIR:-/opt/afeypos}" PORT="${PORT:-4000}" REPO="${REPO:-Muzamilafey/afeypos}" REF="${REF:-HEAD}"
+DIR="${DIR:-/opt/afeypos}" PORT="${PORT:-9999}" REPO="${REPO:-Muzamilafey/afeypos}" REF="${REF:-HEAD}"
 NODE="$DIR/runtime/node/bin/node"; [ -x "$NODE" ] || NODE="$(command -v node)"
 APP="$DIR/app/server"
 as_app() { if id afeypos >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then runuser -u afeypos -- "$@"; else "$@"; fi; }

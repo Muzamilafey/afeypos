@@ -84,7 +84,7 @@ SHOP_DIST_DIR=/opt/afeypos/AfeyPOS/shop/dist
 SHOP_HOSTNAMES=shop.mysupermarket.co.ke
 ```
 
-Add the name to the reverse proxy (Caddy: `shop.mysupermarket.co.ke { reverse_proxy 127.0.0.1:4000 }`). Requests for that name get the shop; the POS stays on its own address.
+Add the name to the reverse proxy (Caddy: `shop.mysupermarket.co.ke { reverse_proxy 127.0.0.1:9999 }`). Requests for that name get the shop; the POS stays on its own address.
 
 **Option B: any static host** (Netlify, Vercel, Cloudflare Pages, an nginx box). Build with the HQ address, then upload `shop/dist` and serve `index.html` for unknown paths:
 

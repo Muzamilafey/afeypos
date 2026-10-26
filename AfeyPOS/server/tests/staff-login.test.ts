@@ -59,12 +59,12 @@ describe('employee cards', () => {
     await t.client.patch('/settings/business', { settings: { staffLogin: { cardRequiresPin: true } } });
   });
 
-  it('a supervisor approves with their card and PIN', async () => {
+  it('a supervisor approves by scanning their card, no PIN', async () => {
     const cashier = new Client(ctx.api, 'staff');
     await cashier.login('cathy@staff.test', 'Cathy1234');
     expect((await cashier.post('/auth/override', { cardCode: cashierCard, pin: '1234', permission: 'sales.void' })).status).toBe(403);
-    expect((await cashier.post('/auth/override', { cardCode: managerCard, pin: '1111', permission: 'sales.void' })).status).toBe(401);
-    const ov = await cashier.post('/auth/override', { cardCode: managerCard, pin: '9876', permission: 'sales.discount.override' });
+    expect((await cashier.post('/auth/override', { cardCode: 'AFENOTAREALCARD', permission: 'sales.void' })).status).toBe(401);
+    const ov = await cashier.post('/auth/override', { cardCode: managerCard, permission: 'sales.discount.override' });
     expect(ov.status).toBe(200);
     expect(ov.body.supervisor.name).toBe('Manny Manager');
     const wh = t.locations.warehouses[0]._id;

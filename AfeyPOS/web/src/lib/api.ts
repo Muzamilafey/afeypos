@@ -100,7 +100,7 @@ export async function tryRestoreSession(scope: Scope = 'tenant') {
 
 /**
  * Random v4 UUID. crypto.randomUUID() only exists in secure contexts (HTTPS or localhost), but shop tills
- * usually open the local server over plain HTTP (http://192.168.x.x:4000), so fall back to getRandomValues.
+ * usually open the local server over plain HTTP (http://192.168.x.x:9999), so fall back to getRandomValues.
  */
 export function newRequestId(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();

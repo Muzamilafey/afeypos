@@ -8,7 +8,7 @@ const bool = (def: boolean) =>
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z.coerce.number().int().positive().default(4000),
+  PORT: z.coerce.number().int().positive().default(9999),
   HOST: z.string().default('0.0.0.0'),
   /**
    * One business per installation.
@@ -31,7 +31,7 @@ const schema = z.object({
   REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
   ENCRYPTION_KEY: z.string().min(1, 'ENCRYPTION_KEY is required (32 bytes, base64)'),
   PUBLIC_APP_URL: z.string().default('http://localhost:5173'),
-  API_PUBLIC_URL: z.string().default('http://localhost:4000'),
+  API_PUBLIC_URL: z.string().default('http://localhost:9999'),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
   TRUST_PROXY: z.string().default('loopback'),
   COOKIE_SECURE: bool(false),

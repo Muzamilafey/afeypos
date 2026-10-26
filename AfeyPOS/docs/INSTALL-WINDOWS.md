@@ -24,7 +24,7 @@ This guide is for shop owners and the technician setting up the shop. One comput
    cd C:\AfeyPOS\app
    powershell -ExecutionPolicy Bypass -File installer\windows\install.ps1
    ```
-   Options: `-Port 4000` (default), `-DataDir C:\AfeyPOS\data`, `-MongoDataDir C:\AfeyPOS\mongodb`, `-SkipFirewall`.
+   Options: `-Port 9999` (default), `-DataDir C:\AfeyPOS\data`, `-MongoDataDir C:\AfeyPOS\mongodb`, `-SkipFirewall`.
 3. The script:
    - checks Node.js and MongoDB,
    - creates the **AfeyMongoDB** Windows service as a single-node replica set (database only listens on 127.0.0.1),
@@ -33,8 +33,8 @@ This guide is for shop owners and the technician setting up the shop. One comput
    - registers the **AfeyPOS** scheduled task that starts at boot as SYSTEM and restarts automatically if it stops,
    - schedules a daily backup at 22:30,
    - opens the port in Windows Firewall for Private/Domain networks.
-4. Open `http://localhost:4000` on the server, choose your business type and create the owner account.
-5. On each till open `http://<server-ip>:4000` (the script prints the address). Pin it to the taskbar or create a desktop shortcut. On first use choose which till the computer is (Checkout asks).
+4. Open `http://localhost:9999` on the server, choose your business type and create the owner account.
+5. On each till open `http://<server-ip>:9999` (the script prints the address). Pin it to the taskbar or create a desktop shortcut. On first use choose which till the computer is (Checkout asks).
 
 > **Back up `server\.env` somewhere safe.** It contains `ENCRYPTION_KEY`; without it, saved M-Pesa/SMS credentials, 2FA secrets and fingerprint templates cannot be decrypted after a reinstall.
 
@@ -48,7 +48,7 @@ This guide is for shop owners and the technician setting up the shop. One comput
 - Use a private network (Windows "Private" profile). The firewall rule is not applied to Public networks.
 - MongoDB is bound to 127.0.0.1 and is never exposed to the network.
 - Give each cashier their own account and PIN; never share the owner account.
-- For HTTPS on the LAN, put a reverse proxy (e.g. Caddy with an internal certificate) in front of port 4000 and set `COOKIE_SECURE=true`.
+- For HTTPS on the LAN, put a reverse proxy (e.g. Caddy with an internal certificate) in front of port 9999 and set `COOKIE_SECURE=true`.
 
 ## Upgrade
 

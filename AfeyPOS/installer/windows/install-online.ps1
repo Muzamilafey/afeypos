@@ -19,11 +19,12 @@
 [CmdletBinding()]
 param(
   [ValidateSet('standalone', 'hq', 'branch')][string]$Mode = $(if ($env:AFEY_MODE) { $env:AFEY_MODE } else { 'standalone' }),
-  [int]$Port = $(if ($env:AFEY_PORT) { [int]$env:AFEY_PORT } else { 4000 }),
+  [int]$Port = $(if ($env:AFEY_PORT) { [int]$env:AFEY_PORT } else { 9999 }),
   [string]$PublicUrl = $env:AFEY_PUBLIC_URL,
   [string]$HqUrl = '',
   [string]$SyncToken = '',
   [string]$BranchCode = '',
+  [string]$EncryptionKey = $env:AFEY_ENCRYPTION_KEY,
   [string]$Root = 'C:\AfeyPOS',
   [string]$Repo = 'Muzamilafey/afeypos',
   [string]$Ref = $(if ($env:AFEY_REF) { $env:AFEY_REF } else { 'HEAD' }),
@@ -121,6 +122,7 @@ if ($PublicUrl) { $installArgs.PublicUrl = $PublicUrl }
 if ($HqUrl) { $installArgs.HqUrl = $HqUrl }
 if ($SyncToken) { $installArgs.SyncToken = $SyncToken }
 if ($BranchCode) { $installArgs.BranchCode = $BranchCode }
+if ($EncryptionKey) { $installArgs.EncryptionKey = $EncryptionKey }
 if ($SkipFirewall) { $installArgs.SkipFirewall = $true }
 & (Join-Path $app 'installer\windows\install.ps1') @installArgs
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

@@ -12,11 +12,12 @@
 #
 # Options:
 #   --mode standalone|hq|branch    one shop (default), head office online, or a branch server
-#   --port 4000                    port for the tills / browser
+#   --port 9999                    port for the tills / browser
 #   --public-url URL               address staff use (default http://<LAN IP>:<port>; required for hq)
 #   --domain NAME                  get HTTPS for NAME with Caddy (needs ports 80/443 open to the internet)
 #   --shop-host NAME               also serve the online shop for NAME
 #   --hq-url URL --sync-token T --branch-code C   branch servers (from head office: Administration > Branch sync)
+#   --encryption-key KEY           branch servers: head office's ENCRYPTION_KEY (from its server/.env)
 #   --mongo-uri URI                use an existing MongoDB replica set (e.g. Atlas) instead of installing one
 #   --dir /opt/afeypos             install location
 #   --ref HEAD                     branch, tag or commit to install (HEAD = the default branch);   --repo owner/name (default Muzamilafey/afeypos)
@@ -28,7 +29,8 @@ set -euo pipefail
 
 NODE_MAJOR=22
 MONGO_VERSION="${MONGO_VERSION:-8.0.4}"
-MODE=standalone PORT=4000 PUBLIC_URL="" DOMAIN="" SHOP_HOST="" HQ_URL="" SYNC_TOKEN="" BRANCH_CODE="" MONGO_URI=""
+ENC_KEY="${AFEY_ENCRYPTION_KEY:-}"
+MODE=standalone PORT=9999 PUBLIC_URL="" DOMAIN="" SHOP_HOST="" HQ_URL="" SYNC_TOKEN="" BRANCH_CODE="" MONGO_URI=""
 DIR=/opt/afeypos REF=HEAD REPO=Muzamilafey/afeypos SOURCE="" MONGOD_BIN="" NO_SERVICE=0
 
 say() { printf '\033[32m==>\033[0m %s\n' "$*"; }
@@ -40,6 +42,7 @@ die() { printf '\033[31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode) MODE="$2"; shift ;; --port) PORT="$2"; shift ;; --public-url) PUBLIC_URL="$2"; shift ;;
+    --encryption-key) ENC_KEY="$2"; shift ;;
     --domain) DOMAIN="$2"; shift ;; --shop-host) SHOP_HOST="$2"; shift ;; --hq-url) HQ_URL="$2"; shift ;;
     --sync-token) SYNC_TOKEN="$2"; shift ;; --branch-code) BRANCH_CODE="$2"; shift ;; --mongo-uri) MONGO_URI="$2"; shift ;;
     --dir) DIR="$2"; shift ;; --ref) REF="$2"; shift ;; --repo) REPO="$2"; shift ;; --source) SOURCE="$2"; shift ;;
@@ -213,6 +216,7 @@ setup=(--mode "$MODE" --port "$PORT" --mongo-uri "$MONGO_URI" --data-dir "$DATA"
 [ -n "$HQ_URL" ] && setup+=(--hq-url "$HQ_URL")
 [ -n "$SYNC_TOKEN" ] && setup+=(--sync-token "$SYNC_TOKEN")
 [ -n "$BRANCH_CODE" ] && setup+=(--branch-code "$BRANCH_CODE")
+[ -n "$ENC_KEY" ] && setup+=(--encryption-key "$ENC_KEY")
 mkdir -p "$DIR/.npm"; [ "$NO_SERVICE" = 0 ] && chown afeypos:afeypos "$DIR/.npm" "$DIR"
 (cd "$rel" && "${RUN_AS[@]}" env PATH="$PATH" HOME="$DIR" npm_config_cache="$DIR/.npm" "$NODE" scripts/setup.mjs "${setup[@]}") || die "Setup failed (the previous version, if any, is still running)"
 
@@ -260,12 +264,20 @@ fi
 if [ -n "$DOMAIN" ] && [ "$NO_SERVICE" = 0 ]; then
   say "Setting up HTTPS for $DOMAIN (Caddy)"
   if ! command -v caddy >/dev/null; then
-    if command -v apt-get >/dev/null; then apt-get install -y -qq caddy >/dev/null || note "Install Caddy yourself: https://caddyserver.com/docs/install"
+    if command -v apt-get >/dev/null; then
+      apt-get install -y -qq caddy >/dev/null 2>&1 || {
+        # Not in this release's own packages (e.g. Ubuntu 22.04): use Caddy's official repository.
+        apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl gnupg >/dev/null
+        curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
+        apt-get update -qq && apt-get install -y -qq caddy >/dev/null
+      } || note "Install Caddy yourself: https://caddyserver.com/docs/install"
     else (command -v dnf >/dev/null && dnf install -y -q caddy >/dev/null) || note "Install Caddy yourself: https://caddyserver.com/docs/install"; fi
   fi
   if command -v caddy >/dev/null; then
     hosts="$DOMAIN"; [ -n "$SHOP_HOST" ] && hosts="$DOMAIN, $SHOP_HOST"
-    printf '%s {\n\treverse_proxy 127.0.0.1:%s\n}\n' "$hosts" "$PORT" > /etc/caddy/Caddyfile
+    # Live updates (websockets) pass through reverse_proxy as they are; uploads up to 20 MB.
+    printf '%s {\n\tencode gzip\n\trequest_body {\n\t\tmax_size 20MB\n\t}\n\treverse_proxy 127.0.0.1:%s\n}\n' "$hosts" "$PORT" > /etc/caddy/Caddyfile
     systemctl enable --now caddy >/dev/null 2>&1 || true
     systemctl reload caddy 2>/dev/null || systemctl restart caddy
     note "Caddy gets the certificate automatically once DNS for $DOMAIN points here"

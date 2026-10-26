@@ -41,7 +41,7 @@ Choose how each till prints under **Hardware → This computer: receipt printer*
 |---|---|---|
 | **Straight to the receipt printer (device bridge)** (recommended) | The browser fetches the ESC/POS receipt and the bridge sends it as a raw job. The printer cuts the paper and opens the cash drawer on cash sales. | Install and pair the device bridge, then pick the printer from the list and press **Use this printer**. The list shows printers installed in Windows (any driver, including "Generic / Text Only") and CUPS printers on Linux/macOS, plus USB devices (`/dev/usb/lp0`) and a network IP. The choice is saved in the bridge's `config.json`. **Print test** checks it. |
 | **Network printer of this till** | The server sends ESC/POS to port 9100 | Add the printer under Hardware (connection Network) for the till. Local installations only. |
-| **Browser, without the print window** | The receipt page prints at once to the default printer | Make the receipt printer the default printer and start Chrome or Edge with `--kiosk-printing` (e.g. `chrome.exe --kiosk-printing --app=http://SERVER:4000/pos`). |
+| **Browser, without the print window** | The receipt page prints at once to the default printer | Make the receipt printer the default printer and start Chrome or Edge with `--kiosk-printing` (e.g. `chrome.exe --kiosk-printing --app=http://SERVER:9999/pos`). |
 | **Browser print window** | Shows the print window | None |
 
 If the bridge or network printer cannot be reached, the till opens the print window instead, so a receipt is never lost. It also shows why the printer was not reached. **Print automatically after each sale** and the paper width (58/80 mm) are set in the same card. Reprints from Sales history and credit notes from Returns follow the same mode.

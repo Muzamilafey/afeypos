@@ -16,15 +16,17 @@ test('checkout rules: a cashier needs a supervisor to delete an item; payment ti
   await page.getByRole('button', { name: 'Save rules' }).click();
   await expect(page.getByText(/Checkout rules saved/)).toBeVisible();
 
-  // A cashier and a supervisor (with a PIN for approvals).
-  await page.evaluate(async () => {
+  // A cashier and a supervisor with a staff card (scanning it approves; no PIN).
+  const samCard = await page.evaluate(async () => {
     const { accessToken } = await (await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })).json();
     const h = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
     await fetch('/api/v1/settings/users', { method: 'POST', headers: h, body: JSON.stringify({ name: 'Carol Cashier', email: 'carol@mandera.test', password: 'CarolTill2026!', roles: ['cashier'] }) });
     // The owner's shift on this till ends; Carol opens her own.
     const open = await (await fetch('/api/v1/shifts?status=open', { headers: h })).json();
     for (const sh of open.data) await fetch(`/api/v1/shifts/${sh._id}/close`, { method: 'POST', headers: h, body: JSON.stringify({ countedCashCents: 0 }) });
-    await fetch('/api/v1/settings/users', { method: 'POST', headers: h, body: JSON.stringify({ name: 'Sam Supervisor', email: 'sam@mandera.test', password: 'SamSuper2026!', roles: ['branch_manager'], pin: '4321' }) });
+    const sam = await (await fetch('/api/v1/settings/users', { method: 'POST', headers: h, body: JSON.stringify({ name: 'Sam Supervisor', email: 'sam@mandera.test', password: 'SamSuper2026!', roles: ['branch_manager'], pin: '4321' }) })).json();
+    const card = await (await fetch(`/api/v1/settings/users/${sam.data._id}/card`, { method: 'POST', headers: h })).json();
+    return card.data.code as string;
   });
 
   const carol = await (await browser.newContext()).newPage();
@@ -53,10 +55,11 @@ test('checkout rules: a cashier needs a supervisor to delete an item; payment ti
   if (process.env.SHOTS) await carol.screenshot({ path: `${process.env.SHOTS}/pos-more.png` });
   await carol.getByRole('button', { name: 'Delete item' }).click();
   await expect(carol.getByText(/Removing .* needs a supervisor/)).toBeVisible();
-  await carol.getByRole('radio', { name: 'Email' }).click();
-  await carol.getByLabel('Supervisor email').fill('sam@mandera.test');
-  await carol.getByLabel('PIN or password').fill('4321');
-  await carol.getByRole('button', { name: 'Approve' }).click();
+  await expect(carol.getByRole('radio', { name: 'Email' })).toHaveCount(0);
+  await expect(carol.getByLabel('PIN')).toHaveCount(0);
+  // A scanner types the code and Enter: that alone approves.
+  await carol.getByLabel('Supervisor card').pressSequentially(samCard, { delay: 5 });
+  await carol.getByLabel('Supervisor card').press('Enter');
   await expect(carol.getByText('Approved and recorded')).toBeVisible();
   await expect(carol.getByTestId('cart-total')).toHaveText(/0\.00/);
 

@@ -36,10 +36,11 @@ export async function userByCard(code: string) {
 }
 
 /** Card plus PIN (when required): counts failures towards the same lockout as passwords. */
-export async function authenticateCard(req: Request, code: string, pin?: string) {
+/** `skipPin`: the card alone is enough (supervisor approvals at the till: scanning the card approves). */
+export async function authenticateCard(req: Request, code: string, pin?: string, opts: { skipPin?: boolean } = {}) {
   const u = await userByCard(code);
   if (u.lockedUntil && u.lockedUntil > new Date()) throw new AppError(423, 'ACCOUNT_LOCKED', 'Account temporarily locked');
-  const needPin = req.tenant!.settings?.staffLogin?.cardRequiresPin ?? true;
+  const needPin = !opts.skipPin && (req.tenant!.settings?.staffLogin?.cardRequiresPin ?? true);
   if (needPin) {
     if (!pin) throw new AppError(401, 'PIN_REQUIRED', 'Enter your PIN');
     if (!u.pinHash || !(await verifyPassword(pin, u.pinHash))) {

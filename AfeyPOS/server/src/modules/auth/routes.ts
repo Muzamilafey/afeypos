@@ -115,9 +115,10 @@ router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor 
   );
   let sup;
   if (body.cardCode) {
-    // A supervisor's card (plus PIN when the business requires it).
-    sup = await authenticateCard(req, body.cardCode, body.pin).catch(() => null);
-    if (!sup) throw unauthorized('Supervisor card or PIN is invalid');
+    // Scanning the supervisor's card is the approval: no PIN. The card code is long and random, and each
+    // approval is single use, limited to the supervisor's permissions and branches, and audited.
+    sup = await authenticateCard(req, body.cardCode, undefined, { skipPin: true }).catch(() => null);
+    if (!sup) throw unauthorized('Supervisor card is not recognised');
   } else {
     sup = body.email ? await User.findOne({ email: body.email, status: 'active' }) : null;
     const secretOk = sup && (body.password ? await verifyPassword(body.password, sup.passwordHash) : body.pin && sup.pinHash ? await verifyPassword(body.pin, sup.pinHash) : false);
