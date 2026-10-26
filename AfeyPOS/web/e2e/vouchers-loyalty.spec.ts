@@ -79,8 +79,11 @@ test('gift vouchers and the loyalty program, from the back office to the till', 
 
   // Keyboard only: scan, Enter opens cash payment, type the cash, Enter completes, Enter starts the next sale.
   await carol.getByRole('button', { name: 'New sale' }).click();
-  await scan.fill('MILK500');
-  await scan.press('Enter');
+  // The scan box listens even when focus is elsewhere (a scanner types like a keyboard).
+  await carol.getByRole('heading', { name: 'Transaction lines' }).click();
+  await carol.locator('body').focus();
+  await carol.keyboard.type('MILK500');
+  await carol.keyboard.press('Enter');
   await expect(carol.getByTestId('cart-total')).toHaveText(/65\.00/);
   await carol.keyboard.press('+');
   await expect(carol.getByTestId('cart-total')).toHaveText(/130\.00/);

@@ -12,7 +12,10 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await page.getByRole('button', { name: /^M-Pesa simulator/ }).click();
   await expect(page.getByLabel('Provider')).toHaveValue('mock');
   await page.getByLabel('Name', { exact: true }).fill('Till simulator');
-  await page.getByLabel('Short code').fill('174379');
+  // Typed key by key: the field must keep focus while the dialog re-renders.
+  await page.getByLabel('Short code').pressSequentially('174379');
+  await expect(page.getByLabel('Short code')).toHaveValue('174379');
+  await expect(page.getByLabel('Short code')).toBeFocused();
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('article', { name: 'Till simulator' })).toBeVisible();
 

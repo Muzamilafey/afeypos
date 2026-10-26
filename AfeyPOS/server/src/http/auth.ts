@@ -152,6 +152,14 @@ export function assertWarehouseAccess(req: Request, warehouseId: Types.ObjectId 
   if (!a.warehouseIds.some((w) => String(w) === String(warehouseId))) throw forbidden('You do not have access to this warehouse');
 }
 
+/**
+ * Owners and business administrators may approve what they asked for themselves (payouts, salary advances,
+ * stock adjustments); everyone else needs a second person. Self-approvals are marked in the audit trail.
+ */
+export function canSelfApprove(req: Request): boolean {
+  return Boolean(req.auth?.roles?.some((r) => r === 'tenant_owner' || r === 'business_admin'));
+}
+
 export function can(req: Request, p: Permission): boolean {
   return Boolean(req.auth?.permissions.has(p));
 }

@@ -37,7 +37,7 @@ Permissions are enforced on the server; the web app only hides what a user canno
 
 **Refused attempts** (permission, role or branch) are written to the audit trail as `access.denied` (at most once a minute per user, reason and path).
 
-Module gates are also enforced on the server; adjustments need approval by a different user; only owners change modules.
+Module gates are also enforced on the server; adjustments, payouts, salary advances and payroll runs need approval by a different user (owners and business administrators may approve their own requests; the audit trail marks it); only owners change modules.
 
 ## Single-business data scoping
 

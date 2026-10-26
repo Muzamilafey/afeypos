@@ -207,7 +207,16 @@ describe('M-Pesa B2C payouts (salaries, refunds)', () => {
     const created = await t.client.post('/payments/payouts', { payouts: [{ purpose: 'salary', amountCents: 2500000, phone: '0712345678', payeeName: 'Jane Wanjiku', ref: { type: 'PayrollRun', number: 'PR-2026-10' } }] });
     expect(created.status).toBe(201);
     const id = created.body.data[0]._id;
-    expect((await t.client.post('/payments/payouts/approve', { ids: [id] })).status).toBe(403);
+    // A manager trusted with payouts still needs someone else to approve their own request...
+    await t.client.post('/settings/users', { name: 'Mo Manager', email: 'mo@paysafe.test', password: 'MoManager123', roles: ['branch_manager'], extraPermissions: ['payouts.request', 'payouts.approve'] });
+    const mo = new Client(ctx.api, 'paysafe');
+    await mo.login('mo@paysafe.test', 'MoManager123');
+    const own = (await mo.post('/payments/payouts', { payouts: [{ purpose: 'refund', amountCents: 50000, phone: '0712345678' }] })).body.data[0]._id;
+    expect((await mo.post('/payments/payouts/approve', { ids: [own] })).status).toBe(403);
+    expect((await t.client.post('/payments/payouts/approve', { ids: [own] })).body.data.approved).toBe(1);
+    // ...while the owner (or a business administrator) may approve what they requested themselves.
+    const mine = (await t.client.post('/payments/payouts', { payouts: [{ purpose: 'refund', amountCents: 10000, phone: '0712345678' }] })).body.data[0]._id;
+    expect((await t.client.post('/payments/payouts/approve', { ids: [mine] })).body.data.approved).toBe(1);
     await t.client.post('/settings/users', { name: 'Fiona Finance', email: 'fiona@paysafe.test', password: 'Fiona12345', roles: ['business_admin'] });
     const fiona = new Client(ctx.api, 'paysafe');
     await fiona.login('fiona@paysafe.test', 'Fiona12345');

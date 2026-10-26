@@ -350,6 +350,16 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (anyOpen) return;
+      // The scan box always listens: a barcode scanner types like a keyboard, so characters typed while
+      // focus is on a button, a line or nowhere go into the scan box (Enter then adds the item).
+      const el = document.activeElement as HTMLElement | null;
+      const editable = Boolean(el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable));
+      if (!editable && e.key.length === 1 && e.key !== ' ' && e.key !== '+' && e.key !== '-' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        searchRef.current?.focus();
+        setSearch((v) => v + e.key);
+        return;
+      }
       const inSearch = document.activeElement === searchRef.current;
       const typingElsewhere = !inSearch && /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement as HTMLElement | null)?.tagName ?? '');
       const searchEmpty = !searchRef.current?.value;

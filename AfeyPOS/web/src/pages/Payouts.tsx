@@ -21,13 +21,16 @@ export function PayoutsPage() {
   const total = chosen.reduce((s, r) => s + r.amountCents, 0);
   const run = (path: string, msg: (r: any) => string) => api<any>(path, { body: { ids: picked } }).then((r) => { toast.success(msg(r)); setPicked([]); qc.invalidateQueries({ queryKey: ['payouts'] }); }).catch(toast.error);
   const mine = chosen.some((r) => String(r.requestedBy) === me?.user.id);
+  // Owners and business administrators may approve their own requests; everyone else needs a second person.
+  const selfApprove = Boolean(me?.user.roles.some((r) => r === 'tenant_owner' || r === 'business_admin'));
   return (
     <div>
       <PageHeader title="M-Pesa payouts" subtitle="Salaries, advances and refunds sent to phones (B2C). Someone other than the requester approves and sends." />
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Select className="max-w-xs" value={status} onChange={(e) => { setStatus(e.target.value); setPicked([]); }} options={[{ value: 'draft', label: 'Waiting for approval' }, { value: 'approved', label: 'Approved, not sent' }, { value: 'sent', label: 'Sent, waiting for Safaricom' }, { value: 'succeeded', label: 'Paid' }, { value: 'failed', label: 'Failed' }, { value: '', label: 'All' }]} />
         {picked.length > 0 && <span className="text-sm">{picked.length} selected · {money(total)}</span>}
-        {status === 'draft' && can('payouts.approve') && <Button disabled={!picked.length || mine} title={mine ? 'You requested some of these; another person must approve' : undefined} onClick={() => run('/payments/payouts/approve', (r) => `${r.data.approved} approved`)}>Approve</Button>}
+        {status === 'draft' && can('payouts.approve') && <Button disabled={!picked.length || (mine && !selfApprove)} title={mine && !selfApprove ? 'You requested some of these; another person must approve' : undefined}
+          onClick={async () => { if (mine && !(await confirm({ title: 'Approve your own request?', message: `You requested ${chosen.filter((r) => String(r.requestedBy) === me?.user.id).length} of these payouts. As ${me?.user.roles.includes('tenant_owner') ? 'the owner' : 'an administrator'} you may approve them yourself; this is noted in the audit trail.`, confirmLabel: 'Approve' }))) return; run('/payments/payouts/approve', (r) => `${r.data.approved} approved`); }}>Approve</Button>}
         {status === 'approved' && can('payouts.approve') && <Button disabled={!picked.length} onClick={async () => { if (await confirm({ title: `Send ${money(total)}?`, message: `${picked.length} M-Pesa payments are sent now.`, confirmLabel: 'Send' })) run('/payments/payouts/send', (r) => `${r.data.filter((x: any) => x.status === 'sent').length} sent`); }}>Send money</Button>}
         {['draft', 'approved'].includes(status) && <Button variant="secondary" disabled={!picked.length} onClick={() => run('/payments/payouts/cancel', () => 'Cancelled')}>Cancel</Button>}
       </div>

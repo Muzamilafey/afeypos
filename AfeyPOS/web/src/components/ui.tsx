@@ -193,9 +193,13 @@ export function Modal({ open, onClose, title, subtitle, icon, children, footer, 
 }) {
   const id = useId();
   const panel = useRef<HTMLDivElement>(null);
+  // Callers pass a new onClose on every render; keep the latest in a ref so the open/focus effect below runs
+  // only when the dialog opens. (Re-running it on each keystroke moved focus back to the first field.)
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current();
     window.addEventListener('keydown', h);
     // Keep the page behind still and put focus inside the dialog.
     const prev = document.body.style.overflow;
@@ -209,7 +213,7 @@ export function Modal({ open, onClose, title, subtitle, icon, children, footer, 
       document.body.style.overflow = prev;
       active?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
   if (!open) return null;
   const drawer = variant === 'drawer';
   const w = drawer ? (size === 'xl' ? 'sm:w-[70vw] sm:min-w-[560px]' : 'sm:w-1/2 sm:min-w-[460px]') : { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' }[size];

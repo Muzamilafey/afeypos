@@ -35,7 +35,7 @@ Payments received to the Paybill/Till that no sale claimed are listed at the til
 
 Salaries (and refunds) can be paid to phones with M-Pesa B2C (`/mpesa/b2c/v3/paymentrequest`, `SalaryPayment` / `BusinessPayment`):
 
-- Payouts are created as **drafts** (by payroll or `POST /payments/payouts`), **approved by a different person** with the `payouts.approve` permission, then **sent**. Each payout is claimed atomically, so it is never sent twice.
+- Payouts are created as **drafts** (by payroll or `POST /payments/payouts`), **approved by a different person** with the `payouts.approve` permission (owners and business administrators may approve their own), then **sent**. Each payout is claimed atomically, so it is never sent twice.
 - A payout is **succeeded** only when Safaricom's result callback confirms it (receipt and receiver name recorded); failures and timeouts are recorded.
 - Needs a B2C short code (bulk disbursement account), an initiator name and its security credential.
 

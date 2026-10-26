@@ -28,7 +28,7 @@ Staff clock in and out on the sign-in screen with their staff card (+PIN) or fin
 ## Salary advances
 
 1. An advance is requested with a monthly recovery instalment.
-2. A **different person** approves it (`payroll.approve`).
+2. A **different person** approves it (`payroll.approve`); owners and business administrators may approve their own.
 3. It is paid in cash or by bank, or as an M-Pesa payout that is approved and sent under *M-Pesa payouts*.
 4. Payroll recovers it by instalment until it is settled. Recovery is limited so take-home pay stays at least one third of gross (Employment Act s. 19(3)), and it can be skipped for a month.
 
@@ -47,7 +47,7 @@ Staff clock in and out on the sign-in screen with their staff card (+PIN) or fin
 
    Example, KES 50,000 basic: NSSF 3,000, SHIF 1,375, levy 750, taxable 44,875, PAYE 5,845.85, **net 39,029.15**.
 2. Adjust payslips while in draft: days or hours worked, overtime, bonus, one-off allowances or deductions. *Recalculate* picks up employee changes.
-3. **Approve.** This must be a different person from whoever prepared the run; advance recoveries are booked at this point.
+3. **Approve.** This must be a different person from whoever prepared the run (owners and business administrators may approve their own); advance recoveries are booked at this point.
 4. **Pay:**
    - *Pay by M-Pesa* creates B2C salary payouts in whole shillings. Someone with `payouts.approve` approves and sends them under *M-Pesa payouts*, and each payslip is marked paid when Safaricom confirms it.
    - *Bank file* exports a CSV for the bank.

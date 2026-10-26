@@ -1,7 +1,8 @@
 /**
  * M-Pesa B2C payouts (salaries, refunds). Optional: needs a B2C short code and an initiator.
  *
- * Controls: a payout is requested by one person and approved by a different person with payouts.approve;
+ * Controls: a payout is requested by one person and approved by a different person with payouts.approve
+ * (owners and business administrators may approve their own);
  * only approved payouts are sent; a payout is "succeeded" only when Safaricom's result callback says so.
  */
 import { Router } from 'express';
@@ -10,7 +11,7 @@ import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
 import { IntegrationConfig, MpesaEvent, Payout } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
-import { requirePermission } from '../../http/auth.js';
+import { canSelfApprove, requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { runInTenant } from '../../lib/context.js';
@@ -59,13 +60,14 @@ router.post('/payments/payouts', requirePermission('payouts.request'), async (re
   res.status(201).json({ data: created });
 });
 
-/** A second person approves; the requester cannot approve their own payouts. */
+/** A second person approves; only owners and business administrators may approve their own payouts. */
 router.post('/payments/payouts/approve', requirePermission('payouts.approve'), async (req, res) => {
   const body = parse(z.object({ ids: z.array(objectId).min(1).max(500) }), req.body);
   const rows = await Payout.find({ _id: { $in: body.ids }, status: 'draft' });
-  if (rows.some((p) => String(p.requestedBy) === String(req.auth!.userId))) throw forbidden('Payouts must be approved by someone other than the person who requested them');
+  const own = rows.filter((p) => String(p.requestedBy) === String(req.auth!.userId));
+  if (own.length && !canSelfApprove(req)) throw forbidden('Payouts must be approved by someone other than the person who requested them');
   const r = await Payout.updateMany({ _id: { $in: rows.map((p) => p._id) }, status: 'draft' }, { $set: { status: 'approved', approvedBy: req.auth!.userId, approvedAt: new Date() } });
-  await audit(req, { action: 'payout.approved', details: { count: r.modifiedCount, totalCents: rows.reduce((a, p) => a + p.amountCents, 0) } });
+  await audit(req, { action: 'payout.approved', details: { count: r.modifiedCount, totalCents: rows.reduce((a, p) => a + p.amountCents, 0), ...(own.length ? { selfApproved: own.length } : {}) } });
   res.json({ data: { approved: r.modifiedCount } });
 });
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { roundQty } from '@afeypos/shared';
 import { Product, SerialItem, StockAdjustment, StockBatch, StockLevel, StockMovement, StockTransfer, Stocktake, Warehouse, Sale } from '../../models/index.js';
 import { idParam, objectId, pagination, parse } from '../../http/validate.js';
-import { assertWarehouseAccess, can, requireModule, requirePermission } from '../../http/auth.js';
+import { assertWarehouseAccess, can, canSelfApprove, requireModule, requirePermission } from '../../http/auth.js';
 import { idempotent } from '../../http/idempotency.js';
 import { withTransaction } from '../../db/connection.js';
 import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
@@ -162,7 +162,7 @@ router.post('/inventory/adjustments/:id/approve', requirePermission('inventory.a
   const adj = await withTransaction(async () => {
     const a = await StockAdjustment.findOne({ _id: idParam(req.params.id), status: 'pending' });
     if (!a) throw notFound('Pending adjustment');
-    if (String(a.requestedBy) === String(req.auth!.userId) && !req.auth!.roles.includes('tenant_owner')) throw forbidden('Adjustments must be approved by someone other than the requester');
+    if (String(a.requestedBy) === String(req.auth!.userId) && !canSelfApprove(req)) throw forbidden('Adjustments must be approved by someone other than the requester');
     await postAdjustment(req, a);
     await audit(req, { action: 'inventory.adjustment_approved', entity: 'StockAdjustment', entityId: a._id });
     return a;

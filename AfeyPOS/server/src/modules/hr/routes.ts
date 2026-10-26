@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { formatMoney } from '@afeypos/shared';
 import { Employee, LeaveRequest, PayrollRun, Payout, SalaryAdvance, Tenant, User } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents, escapeRegex } from '../../http/validate.js';
-import { requirePermission } from '../../http/auth.js';
+import { canSelfApprove, requirePermission } from '../../http/auth.js';
 import { badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { nextNumber } from '../../lib/numbering.js';
@@ -222,11 +222,12 @@ router.post('/hr/advances/:id/approve', requirePermission('payroll.approve'), as
   const body = parse(z.object({ approve: z.boolean().default(true) }), req.body ?? {});
   const a = await SalaryAdvance.findById(idParam(req.params.id));
   if (!a || a.status !== 'requested') throw unprocessable('Only requested advances can be decided', 'NOT_REQUESTED');
-  if (String(a.requestedBy) === String(req.auth!.userId)) throw forbidden('Another person must approve an advance you requested');
+  const self = String(a.requestedBy) === String(req.auth!.userId);
+  if (self && !canSelfApprove(req)) throw forbidden('Another person must approve an advance you requested');
   a.status = body.approve ? 'approved' : 'rejected';
   a.approvedBy = req.auth!.userId;
   await a.save();
-  await audit(req, { action: body.approve ? 'hr.advance_approved' : 'hr.advance_rejected', entity: 'SalaryAdvance', entityId: a._id });
+  await audit(req, { action: body.approve ? 'hr.advance_approved' : 'hr.advance_rejected', entity: 'SalaryAdvance', entityId: a._id, ...(self ? { details: { selfApproved: true } } : {}) });
   res.json({ data: a });
 });
 
@@ -320,12 +321,12 @@ router.post('/hr/payroll/:id/recalculate', requirePermission('payroll.manage'), 
   res.json({ data: run });
 });
 
-/** A different person approves; advance recoveries are booked against the advances at this point. */
+/** A different person approves (owners and administrators may approve their own); advance recoveries are booked here. */
 router.post('/hr/payroll/:id/approve', requirePermission('payroll.approve'), async (req, res) => {
   const run = await withTransaction(async () => {
     const r = await loadRun(req.params.id);
     if (r.status !== 'draft') throw unprocessable('Only draft payrolls can be approved', 'NOT_DRAFT');
-    if (String(r.preparedBy) === String(req.auth!.userId)) throw forbidden('Another person must approve a payroll you prepared');
+    if (String(r.preparedBy) === String(req.auth!.userId) && !canSelfApprove(req)) throw forbidden('Another person must approve a payroll you prepared');
     for (const line of r.lines) {
       let left = line.advanceRecoveryCents ?? 0;
       if (!left) continue;
