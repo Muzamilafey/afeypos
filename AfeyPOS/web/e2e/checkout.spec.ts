@@ -17,7 +17,7 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await page.getByLabel('Email').fill('amina@mandera.test');
   await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Data Panel Widget' })).toBeVisible();
   // Minimart navigation: checkout yes, quotations no.
   await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Quotations' })).toHaveCount(0);

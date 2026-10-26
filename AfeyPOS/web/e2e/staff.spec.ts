@@ -22,7 +22,7 @@ async function signInOwner(page: Page) {
   await page.getByLabel('Email').fill('amina@mandera.test');
   await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Data Panel Widget' })).toBeVisible();
 }
 
 test('staff card and fingerprint sign-in', async ({ page, context }) => {
@@ -80,7 +80,8 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   await page.getByRole('button', { name: 'Enrol finger' }).click();
   await expect(page.getByText('right index enrolled')).toBeVisible();
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.locator('[aria-haspopup=\"menu\"]').click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
   // Card + PIN.
   await page.getByRole('radio', { name: 'Staff card' }).click();
@@ -90,14 +91,16 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   await page.waitForTimeout(300);
   await page.screenshot({ path: 'test-results/card-login.png' });
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Welcome, Juma' })).toBeVisible();
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Quick start' })).toBeVisible();
+  await page.locator('[aria-haspopup=\"menu\"]').click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
   // Fingerprint: touch only, no email.
   await page.getByRole('radio', { name: 'Fingerprint' }).click();
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Welcome, Juma' })).toBeVisible();
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('heading', { name: 'Quick start' })).toBeVisible();
+  await page.locator('[aria-haspopup=\"menu\"]').click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
   // Clock in with the card from the sign-in screen.
   await page.getByRole('button', { name: 'Clock in / out' }).click();

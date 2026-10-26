@@ -11,6 +11,7 @@ import { SaleDetailPage, SalesPage, ShiftsPage } from './pages/sales/Sales';
 import { ReturnsPage } from './pages/sales/Returns';
 import { AttendancePage, EmployeeDetailPage, EmployeesPage, LeavePage, PayrollPage, PayrollRunPage } from './pages/hr/HR';
 import { PayoutsPage } from './pages/Payouts';
+import { SupportPage } from './pages/Support';
 import { AccountingPage, LedgerPage } from './pages/accounting/Accounting';
 import { CrmPage } from './pages/crm/CRM';
 import { OnlineOrdersPage, StoreSettingsPage } from './pages/OnlineOrders';
@@ -96,6 +97,7 @@ export function App() {
         <Route path="settings/integrations" element={<Gate perm="integrations.manage"><IntegrationsPage /></Gate>} />
         <Route path="settings/hardware" element={<Gate perm="hardware.manage"><HardwarePage /></Gate>} />
         <Route path="account" element={<AccountPage />} />
+        <Route path="support" element={<SupportPage />} />
         <Route path="*" element={<EmptyState title="Page not found" />} />
       </Route>
     </Routes>

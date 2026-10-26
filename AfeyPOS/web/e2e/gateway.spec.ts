@@ -10,7 +10,7 @@ test('pays through a payment gateway (simulator): pending until the provider con
   await page.getByLabel('Email').fill('amina@mandera.test');
   await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Data Panel Widget' })).toBeVisible();
 
   await page.goto('/settings/integrations');
   await expect(page.getByRole('button', { name: /^Paystack/ })).toBeEnabled();

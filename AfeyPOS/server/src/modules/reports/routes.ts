@@ -108,8 +108,10 @@ router.get('/reports/dashboard', requirePermission('reports.read'), async (req, 
   const openShifts = await Shift.countDocuments({ status: 'open' });
   const [recv] = await Customer.aggregate([{ $match: { balanceCents: { $gt: 0 } } }, { $group: { _id: null, total: { $sum: '$balanceCents' }, count: { $sum: 1 } } }]);
   const ret = await returnsTotals(p);
+  const extra = await dashboardExtras(req, p);
   res.json({
     data: {
+      ...extra,
       period: { from: p.from, to: p.to, timezone: p.tz },
       sales: { count: sales?.count ?? 0, grossCents: sales?.total ?? 0, averageCents: sales?.count ? Math.round(sales.total / sales.count) : 0, creditCents: sales?.credit ?? 0 },
       grossProfitCents: (sales?.net ?? 0) - ret.netCents - ((sales?.cost ?? 0) - ret.costCents),
@@ -125,6 +127,122 @@ router.get('/reports/dashboard', requirePermission('reports.read'), async (req, 
     },
   });
 });
+
+/** Figures for the overview dashboard: catalogue and stock counts, units sold vs held, top 10 by sales, six months of expenses vs profit. */
+async function dashboardExtras(req: Request, p: ReturnType<typeof period>) {
+  const since30 = new Date(Date.now() - 30 * 86400_000);
+  const branchMatch = p.branchIds ? { branchId: { $in: p.branchIds } } : {};
+  const [productsCount, customersCount, stock, outOfStock, sold, branchCount] = await Promise.all([
+    Product.countDocuments({ active: { $ne: false } }),
+    Customer.countDocuments({ kind: { $ne: 'walk_in' }, active: { $ne: false } }),
+    StockLevel.aggregate([{ $match: { qty: { $gt: 0 } } }, { $group: { _id: null, units: { $sum: '$qty' } } }]),
+    StockLevel.aggregate([
+      { $group: { _id: '$productId', qty: { $sum: '$qty' } } },
+      { $match: { qty: { $lte: 0 } } },
+      { $lookup: { from: 'products', localField: '_id', foreignField: '_id', as: 'p', pipeline: [{ $match: { tenantId: req.tenant!._id, active: true, trackStock: { $ne: false }, type: 'stock' } }, { $project: { _id: 1 } }] } },
+      { $match: { 'p.0': { $exists: true } } },
+      { $count: 'n' },
+    ]),
+    Sale.aggregate([{ $match: { completedAt: { $gte: since30 }, status: { $ne: 'voided' }, ...branchMatch } }, { $unwind: '$lines' }, { $group: { _id: null, units: { $sum: '$lines.baseQty' } } }]),
+    Branch.countDocuments({}),
+  ]);
+  // Products never stocked also count as out of stock.
+  const stocked = await StockLevel.distinct('productId');
+  const neverStocked = await Product.countDocuments({ active: { $ne: false }, trackStock: { $ne: false }, type: 'stock', _id: { $nin: stocked } });
+  const byBranch = branchCount > 1 && !p.branchIds;
+  const topRows = byBranch
+    ? await Sale.aggregate([{ $match: { completedAt: { $gte: since30 }, status: { $ne: 'voided' } } }, { $group: { _id: '$branchId', totalCents: { $sum: '$totalCents' } } }, { $sort: { totalCents: -1 } }, { $limit: 10 }])
+    : await Sale.aggregate([{ $match: { completedAt: { $gte: since30 }, status: { $ne: 'voided' }, ...branchMatch } }, { $unwind: '$lines' }, { $group: { _id: '$lines.productId', name: { $first: '$lines.name' }, totalCents: { $sum: '$lines.totalCents' } } }, { $sort: { totalCents: -1 } }, { $limit: 10 }]);
+  const branchNames = byBranch ? new Map((await Branch.find({ _id: { $in: topRows.map((r) => r._id) } }, { name: 1 }).lean()).map((b) => [String(b._id), b.name])) : null;
+  // Last six calendar months in the business timezone.
+  const months: { key: string; start: Date; end: Date }[] = [];
+  const now = localDateString(new Date(), p.tz);
+  let y = +now.slice(0, 4);
+  let m = +now.slice(5, 7);
+  for (let i = 0; i < 6; i++) {
+    const key = `${y}-${String(m).padStart(2, '0')}`;
+    const nextY = m === 12 ? y + 1 : y;
+    const nextM = m === 12 ? 1 : m + 1;
+    months.unshift({ key, start: localMidnightUtc(`${key}-01`, p.tz), end: localMidnightUtc(`${nextY}-${String(nextM).padStart(2, '0')}-01`, p.tz) });
+    m -= 1;
+    if (m === 0) {
+      m = 12;
+      y -= 1;
+    }
+  }
+  const from = months[0].start;
+  const [profitRows, expenseRows] = await Promise.all([
+    Sale.aggregate([{ $match: { completedAt: { $gte: from }, status: { $ne: 'voided' }, ...branchMatch } }, { $group: { _id: { $dateToString: { date: '$completedAt', format: '%Y-%m', timezone: p.tz } }, net: { $sum: '$netCents' }, cost: { $sum: '$costCents' } } }]),
+    Expense.aggregate([{ $match: { date: { $gte: from }, ...branchMatch } }, { $group: { _id: { $dateToString: { date: '$date', format: '%Y-%m', timezone: p.tz } }, total: { $sum: '$amountCents' } } }]),
+  ]);
+  const units = stock[0]?.units ?? 0;
+  const soldUnits = sold[0]?.units ?? 0;
+  const live30 = { completedAt: { $gte: since30 }, status: { $ne: 'voided' }, ...branchMatch };
+  const since7 = new Date(Date.now() - 7 * 86400_000);
+  const yStart = new Date(p.start.getTime() - 86400_000);
+  const day = (f: string) => ({ $dateToString: { date: f, format: '%Y-%m-%d', timezone: p.tz } });
+  const [daily, byCategoryRaw, pay30, hourly2, customers30, cashiers, lowList, weekday, recent, pay7, visits] = await Promise.all([
+    Sale.aggregate([{ $match: live30 }, { $group: { _id: day('$completedAt'), sales: { $sum: '$totalCents' }, profit: { $sum: { $subtract: ['$netCents', '$costCents'] } }, count: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
+    Sale.aggregate([{ $match: live30 }, { $unwind: '$lines' }, { $group: { _id: '$lines.productId', total: { $sum: '$lines.totalCents' } } }]),
+    Sale.aggregate([{ $match: live30 }, { $unwind: '$payments' }, { $group: { _id: '$payments.method', total: { $sum: '$payments.amountCents' } } }, { $sort: { total: -1 } }]),
+    Sale.aggregate([{ $match: { completedAt: { $gte: yStart, $lt: p.end }, status: { $ne: 'voided' }, ...branchMatch } }, { $group: { _id: { today: { $gte: ['$completedAt', p.start] }, h: { $hour: { date: '$completedAt', timezone: p.tz } } }, total: { $sum: '$totalCents' } } }]),
+    Sale.aggregate([{ $match: { ...live30, customerId: { $ne: null } } }, { $group: { _id: '$customerId', total: { $sum: '$totalCents' }, visits: { $sum: 1 } } }, { $sort: { total: -1 } }, { $limit: 6 }]),
+    Sale.aggregate([{ $match: saleMatch(p) }, { $group: { _id: '$cashierId', total: { $sum: '$totalCents' }, count: { $sum: 1 } } }, { $sort: { total: -1 } }, { $limit: 6 }]),
+    StockLevel.aggregate([
+      { $group: { _id: '$productId', qty: { $sum: '$qty' } } },
+      { $lookup: { from: 'products', localField: '_id', foreignField: '_id', as: 'p', pipeline: [{ $match: { tenantId: req.tenant!._id, active: true, reorderLevel: { $gt: 0 } } }, { $project: { name: 1, reorderLevel: 1 } }] } },
+      { $unwind: '$p' }, { $match: { $expr: { $lte: ['$qty', '$p.reorderLevel'] } } }, { $sort: { qty: 1 } }, { $limit: 6 },
+      { $project: { name: '$p.name', qty: 1, reorderLevel: '$p.reorderLevel' } },
+    ]),
+    Sale.aggregate([{ $match: live30 }, { $group: { _id: { $dayOfWeek: { date: '$completedAt', timezone: p.tz } }, total: { $sum: '$totalCents' } } }]),
+    Sale.find({ status: { $ne: 'voided' }, ...branchMatch }, { number: 1, totalCents: 1, completedAt: 1 }).sort({ completedAt: -1 }).limit(6).lean(),
+    Sale.aggregate([{ $match: { completedAt: { $gte: since7 }, status: { $ne: 'voided' }, ...branchMatch } }, { $unwind: '$payments' }, { $group: { _id: { m: '$payments.method', d: day('$completedAt') }, total: { $sum: '$payments.amountCents' } } }]),
+    Sale.aggregate([{ $match: { ...live30, customerId: { $ne: null } } }, { $group: { _id: '$customerId', n: { $sum: 1 } } }, { $group: { _id: null, customers: { $sum: 1 }, repeat: { $sum: { $cond: [{ $gt: ['$n', 1] }, 1, 0] } } } }]),
+  ]);
+  const prodCats = new Map((await Product.find({ _id: { $in: byCategoryRaw.map((r) => r._id) } }, { categoryId: 1 }).lean()).map((x) => [String(x._id), x.categoryId ? String(x.categoryId) : 'none']));
+  const catNames = new Map((await Category.find({}, { name: 1 }).lean()).map((c) => [String(c._id), c.name]));
+  const catTotals = new Map<string, number>();
+  for (const r of byCategoryRaw) {
+    const k = prodCats.get(String(r._id)) ?? 'none';
+    catTotals.set(k, (catTotals.get(k) ?? 0) + r.total);
+  }
+  const custNames = new Map((await Customer.find({ _id: { $in: customers30.map((c) => c._id) } }, { name: 1 }).lean()).map((c) => [String(c._id), c.name]));
+  const userNames = new Map((await User.find({ _id: { $in: cashiers.map((c) => c._id) } }, { name: 1 }).lean()).map((u) => [String(u._id), u.name]));
+  const days30: string[] = [];
+  for (let i = 29; i >= 0; i--) days30.push(localDateString(new Date(Date.now() - i * 86400_000), p.tz));
+  const days7 = days30.slice(-7);
+  const [s30] = await Sale.aggregate([{ $match: live30 }, { $group: { _id: null, net: { $sum: '$netCents' }, cost: { $sum: '$costCents' } } }]);
+  return {
+    productsCount,
+    customersCount,
+    stockUnits: Math.round(units),
+    outOfStockCount: (outOfStock[0]?.n ?? 0) + neverStocked,
+    units: { sold30: Math.round(soldUnits), inStock: Math.round(units) },
+    top: { by: byBranch ? 'branch' : 'product', rows: topRows.map((r) => ({ name: byBranch ? branchNames!.get(String(r._id)) ?? 'Unknown' : r.name, totalCents: r.totalCents })) },
+    daily30: days30.map((dd) => {
+      const r = daily.find((x) => x._id === dd);
+      return { day: dd, salesCents: r?.sales ?? 0, profitCents: r?.profit ?? 0, count: r?.count ?? 0 };
+    }),
+    categories: [...catTotals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => ({ name: k === 'none' ? 'Uncategorised' : catNames.get(k) ?? 'Other', totalCents: v })),
+    payments30: pay30.map((x) => ({ method: x._id, totalCents: x.total })),
+    hourlyCompare: Array.from({ length: 24 }, (_, h) => ({ hour: h, todayCents: hourly2.find((x) => x._id.today && x._id.h === h)?.total ?? 0, yesterdayCents: hourly2.find((x) => !x._id.today && x._id.h === h)?.total ?? 0 })),
+    topCustomers: customers30.map((c) => ({ name: custNames.get(String(c._id)) ?? 'Customer', totalCents: c.total, visits: c.visits })),
+    cashiersToday: cashiers.map((c) => ({ name: userNames.get(String(c._id)) ?? 'Unknown', totalCents: c.total, count: c.count })),
+    lowStockList: lowList.map((l) => ({ name: l.name, qty: l.qty, reorderLevel: l.reorderLevel })),
+    weekday: [1, 2, 3, 4, 5, 6, 7].map((w) => ({ weekday: w, totalCents: weekday.find((x) => x._id === w)?.total ?? 0 })),
+    recentSales: recent.map((r) => ({ number: r.number, totalCents: r.totalCents, at: r.completedAt })),
+    paymentTrend7: [...new Set(pay7.map((x) => x._id.m))].map((m) => ({ method: m, series: days7.map((dd) => pay7.find((x) => x._id.m === m && x._id.d === dd)?.total ?? 0) })),
+    rates: {
+      inStockBp: productsCount ? Math.round(((productsCount - ((outOfStock[0]?.n ?? 0) + neverStocked)) / productsCount) * 10_000) : 0,
+      margin30Bp: s30?.net ? Math.round(((s30.net - s30.cost) / s30.net) * 10_000) : 0,
+      repeatCustomersBp: visits[0]?.customers ? Math.round((visits[0].repeat / visits[0].customers) * 10_000) : 0,
+    },
+    expenseVsProfit: months.map((mo) => {
+      const pr = profitRows.find((r) => r._id === mo.key);
+      return { month: mo.key, expensesCents: expenseRows.find((r) => r._id === mo.key)?.total ?? 0, profitCents: pr ? pr.net - pr.cost : 0 };
+    }),
+  };
+}
 
 const GROUPS = ['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'] as const;
 

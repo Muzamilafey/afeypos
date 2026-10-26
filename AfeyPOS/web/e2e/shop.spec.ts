@@ -10,7 +10,7 @@ test('a customer orders on the shop website and staff deliver it as a sale', asy
   await page.getByLabel('Email').fill('amina@mandera.test');
   await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Data Panel Widget' })).toBeVisible();
 
   // Open the shop with one delivery area.
   await page.goto('/settings/online-shop');

@@ -6,7 +6,7 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await page.getByLabel('Email').fill('amina@mandera.test');
   await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Data Panel Widget' })).toBeVisible();
 
   await page.goto('/settings/integrations');
   await page.getByRole('button', { name: 'Add mpesa' }).click();

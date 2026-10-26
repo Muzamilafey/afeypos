@@ -7,6 +7,9 @@ import { AuthProvider } from './lib/auth';
 import { ConfirmProvider, ToastProvider } from './components/ui';
 import { ApiError } from './lib/api';
 import { applyTheme } from './lib/workstation';
+import '@fontsource/open-sans/400.css';
+import '@fontsource/open-sans/600.css';
+import '@fontsource/open-sans/700.css';
 import './styles/index.css';
 
 applyTheme();

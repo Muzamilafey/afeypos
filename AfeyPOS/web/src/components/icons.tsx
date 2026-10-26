@@ -29,6 +29,9 @@ const paths: Record<string, string> = {
   search: 'M11 18a7 7 0 100-14 7 7 0 000 14zM21 21l-5-5',
   plus: 'M12 5v14M5 12h14',
   minus: 'M5 12h14',
+  expand: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
+  flag: 'M5 21V4h11l-1 4 4 4H5',
+  calendar: 'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4',
   x: 'M6 6l12 12M18 6L6 18',
   check: 'M5 13l4 4L19 7',
   logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
@@ -51,6 +54,14 @@ const paths: Record<string, string> = {
   eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 100-6 3 3 0 000 6z',
   eyeOff: 'M3 3l18 18M10.6 6.1A10 10 0 0112 6c6 0 10 6 10 6a17 17 0 01-3.2 3.8M6.5 7.6A17 17 0 002 12s4 7 10 7a9.7 9.7 0 004.5-1.1M9.9 9.9a3 3 0 004.2 4.2',
   store: 'M4 9l1-5h14l1 5M4 9v11h16V9M4 9h16M9 20v-6h6v6',
+  grid: 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z',
+  bell: 'M6 16V11a6 6 0 0112 0v5l2 2H4zM10 20a2 2 0 004 0',
+  headset: 'M4 15v-3a8 8 0 0116 0v3M4 15a2 2 0 002 2h1v-5H6a2 2 0 00-2 2zM20 15a2 2 0 01-2 2h-1v-5h1a2 2 0 012 2zM17 17c0 2-2 3-5 3',
+  package: 'M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12L4 7.5M12 12v9M8 5.3l8 4.4',
+  layersStack: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5M3 17l9 5 9-5',
+  trendUp: 'M3 17l6-6 4 4 8-8M15 7h6v6',
+  info: 'M12 22a10 10 0 100-20 10 10 0 000 20zM12 16v-5M12 8h.01',
+  chevron: 'M9 6l6 6-6 6',
 };
 
 export function Icon({ name, className = 'h-5 w-5' }: { name: string; className?: string }) {

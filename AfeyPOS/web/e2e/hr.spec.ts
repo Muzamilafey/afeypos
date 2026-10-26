@@ -6,7 +6,7 @@ test('adds an employee and runs a payroll with Kenyan deductions', async ({ page
   await page.getByLabel('Email').fill('amina@mandera.test');
   await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Data Panel Widget' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Employees', exact: true }).click();
   await page.getByRole('button', { name: 'Add employee' }).click();

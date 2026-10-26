@@ -7,14 +7,14 @@ export { cx };
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
 export function Button({ variant = 'primary', size = 'md', loading, className, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'sm' | 'md' | 'lg' | 'xl'; loading?: boolean }) {
   const v = {
-    primary: 'bg-brand-600 text-white hover:bg-brand-700 disabled:bg-brand-300 dark:bg-brand-100 dark:text-brand-900 dark:hover:bg-white dark:disabled:bg-brand-500',
-    secondary: 'border border-ink-300 bg-white text-ink-800 hover:bg-ink-50 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800',
+    primary: 'bg-brand-500 text-white hover:bg-brand-600 disabled:bg-brand-300 dark:disabled:bg-brand-800',
+    secondary: 'border border-[#d5d9de] bg-white text-ink-700 hover:bg-[#f5f6f8] dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800',
     danger: 'bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300',
     ghost: 'text-ink-700 hover:bg-ink-100 dark:text-ink-200 dark:hover:bg-ink-800',
   }[variant];
   const s = { sm: 'px-2.5 py-1.5 text-xs', md: 'px-3.5 py-2 text-sm', lg: 'px-5 py-3 text-base', xl: 'px-6 py-4 text-lg' }[size];
   return (
-    <button {...rest} disabled={rest.disabled || loading} className={cx('inline-flex items-center justify-center gap-2 rounded-lg font-medium transition disabled:cursor-not-allowed', v, s, className)}>
+    <button {...rest} disabled={rest.disabled || loading} className={cx('inline-flex items-center justify-center gap-2 rounded-sm font-semibold transition disabled:cursor-not-allowed', v, s, className)}>
       {loading && <Spinner className="h-4 w-4" />}
       {children}
     </button>
@@ -101,36 +101,60 @@ export function StatusBadge({ status }: { status: string }) {
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-        {subtitle && <p className="mt-0.5 text-sm text-ink-500">{subtitle}</p>}
+        <h1 className="text-[15px] font-bold text-ink-800 dark:text-white">{title}</h1>
+        {subtitle && <p className="mt-0.5 text-[13px] text-ink-500 dark:text-ink-400">{subtitle}</p>}
       </div>
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
     </div>
   );
 }
 
-export function Card({ title, actions, children, className }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) {
+/** Panel with a header strip: title, actions and the template toolbar (refresh, minimise, maximise). */
+export function Card({ title, actions, children, className, bodyClassName }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; bodyClassName?: string }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [max, setMax] = useState(false);
+  const qc = useContext(QueryRefreshCtx);
   return (
-    <section className={cx('card', className)}>
+    <section className={cx('card', max && 'fixed inset-4 z-50 overflow-auto shadow-2xl', className)}>
       {(title || actions) && (
-        <header className="flex items-center justify-between border-b border-ink-100 px-4 py-3 dark:border-ink-800">
-          <h2 className="text-sm font-semibold">{title}</h2>
-          {actions}
+        <header className="panel-head">
+          <h2 className="truncate text-[13px] font-bold text-ink-800 dark:text-white">{title}</h2>
+          <div className="flex items-center gap-1">
+            {actions}
+            {title && <span className="ml-1 hidden items-center sm:flex">
+              {qc && <button type="button" className="panel-tool" aria-label="Refresh" title="Refresh" onClick={() => qc()}><Icon name="refresh" className="h-3.5 w-3.5" /></button>}
+              <button type="button" className="panel-tool" aria-label={collapsed ? 'Expand panel' : 'Minimise panel'} title={collapsed ? 'Expand' : 'Minimise'} onClick={() => setCollapsed((v) => !v)}><Icon name={collapsed ? 'plus' : 'minus'} className="h-3.5 w-3.5" /></button>
+              <button type="button" className="panel-tool" aria-label={max ? 'Restore panel' : 'Maximise panel'} title={max ? 'Restore' : 'Maximise'} onClick={() => setMax((v) => !v)}><Icon name={max ? 'x' : 'expand'} className="h-3.5 w-3.5" /></button>
+            </span>}
+          </div>
         </header>
       )}
-      <div className="p-4">{children}</div>
+      {!collapsed && <div className={cx('p-3', bodyClassName)}>{children}</div>}
     </section>
   );
 }
 
-export function Stat({ label, value, hint, tone }: { label: string; value: ReactNode; hint?: ReactNode; tone?: 'red' | 'green' }) {
+/** Lets panels refresh the page's data without each page wiring it (set by the app shell). */
+export const QueryRefreshCtx = createContext<(() => void) | null>(null);
+
+const TILE_BG = { purple: 'bg-tile-purple', blue: 'bg-tile-blue', red: 'bg-tile-red', yellow: 'bg-tile-yellow', teal: 'bg-tile-teal', green: 'bg-tile-green' } as const;
+const TILE_COLORS = Object.values(TILE_BG);
+const tileColor = (key: string) => TILE_COLORS[[...key].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7) % TILE_COLORS.length];
+
+/** Solid colour figure tile (admin template). Red tone always shows red, green tone green. */
+export function Stat({ label, value, hint, tone, color, icon }: { label: string; value: ReactNode; hint?: ReactNode; tone?: 'red' | 'green'; color?: 'purple' | 'blue' | 'red' | 'yellow' | 'teal' | 'green'; icon?: string }) {
+  const bg = color ? TILE_BG[color] : tone === 'red' ? TILE_BG.red : tone === 'green' ? TILE_BG.green : tileColor(label);
   return (
-    <div className="card p-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-ink-500">{label}</div>
-      <div className={cx('mt-1 text-2xl font-semibold tabular-nums', tone === 'red' && 'text-red-600', tone === 'green' && 'text-emerald-600')}>{value}</div>
-      {hint && <div className="mt-1 text-xs text-ink-500">{hint}</div>}
+    <div className={cx('relative overflow-hidden rounded-sm p-3 text-white shadow-[0_1px_1px_rgba(0,0,0,0.06)]', bg)}>
+      <div className="relative z-10 text-2xl font-bold tabular-nums leading-tight">{value}</div>
+      <div className="relative z-10 text-[12px] font-semibold opacity-90">{label}</div>
+      {hint && <div className="relative z-10 mt-1 text-[11px] opacity-80 [&_a]:underline">{hint}</div>}
+      <svg viewBox="0 0 60 40" className="pointer-events-none absolute -bottom-1 right-2 h-12 w-20 opacity-25" aria-hidden="true">
+        {icon ? null : <g fill="currentColor">{[12, 22, 16, 30, 24, 36].map((h, i) => <rect key={i} x={4 + i * 9} y={40 - h} width="6" height={h} rx="1" />)}</g>}
+      </svg>
+      {icon && <span className="pointer-events-none absolute bottom-1 right-2 opacity-25" aria-hidden="true"><Icon name={icon} className="h-12 w-12" /></span>}
     </div>
   );
 }
@@ -227,9 +251,9 @@ export const useConfirm = () => useContext(ConfirmCtx);
 
 export function Tabs({ tabs, value, onChange }: { tabs: { key: string; label: string }[]; value: string; onChange: (k: string) => void }) {
   return (
-    <div className="mb-4 flex gap-1 overflow-x-auto border-b border-ink-200 dark:border-ink-800" role="tablist">
+    <div className="mb-4 flex gap-1 overflow-x-auto border-b border-[#e1e4e8] dark:border-ink-800" role="tablist">
       {tabs.map((t) => (
-        <button key={t.key} role="tab" aria-selected={value === t.key} onClick={() => onChange(t.key)} className={cx('whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium', value === t.key ? 'border-brand-600 text-brand-700 dark:border-brand-200 dark:text-brand-100' : 'border-transparent text-ink-500 hover:text-ink-800')}>
+        <button key={t.key} role="tab" aria-selected={value === t.key} onClick={() => onChange(t.key)} className={cx('-mb-px whitespace-nowrap border px-3 py-2 text-[13px] font-semibold', value === t.key ? 'border-[#e1e4e8] border-b-white bg-white text-ink-800 dark:border-ink-800 dark:border-b-ink-900 dark:bg-ink-900 dark:text-white' : 'border-transparent text-ink-500 hover:text-ink-800')}>
           {t.label}
         </button>
       ))}

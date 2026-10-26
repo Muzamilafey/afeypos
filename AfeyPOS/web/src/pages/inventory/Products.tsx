@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { STANDARD_UNITS, type ProductField } from '@afeypos/shared';
 import { api, download } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -24,7 +24,9 @@ export function ProductsPage() {
   const nav = useNavigate();
   const { can } = useAuth();
   const [page, setPage] = useState(1);
-  const [q, setQ] = useState('');
+  const [params] = useSearchParams();
+  const [q, setQ] = useState(params.get('q') ?? '');
+  useEffect(() => setQ(params.get('q') ?? ''), [params]);
   const [importing, setImporting] = useState(false);
   const list = useList(['products'], '/products', { page, q: q || undefined, limit: 25 });
   return (
