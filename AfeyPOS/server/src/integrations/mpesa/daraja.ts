@@ -75,10 +75,39 @@ export interface StkQueryResponse {
   errorMessage?: string;
 }
 
+export interface C2BRegisterResponse {
+  OriginatorCoversationID?: string;
+  ConversationID?: string;
+  ResponseCode?: string;
+  ResponseDescription?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+/** Plain-language reasons for the errors Safaricom returns when registering C2B URLs. */
+export function explainC2BError(err: unknown, environment: 'sandbox' | 'production'): string {
+  const body = (err as any)?.body ?? {};
+  const code = String(body.errorCode ?? body.ResponseCode ?? '');
+  const msg = String(body.errorMessage ?? body.ResponseDescription ?? (err as any)?.message ?? 'Registration failed');
+  const status = (err as any)?.status;
+  if (/already registered|duplicate/i.test(msg) || code === '500.003.1001') {
+    return environment === 'production'
+      ? 'Safaricom already has URLs registered for this short code. Live URLs can only be registered once: remove them on the Daraja portal (or ask apisupport@safaricom.co.ke), then register again.'
+      : `Safaricom says the URLs are already registered (${msg}). Sandbox registrations can be repeated; try again in a minute.`;
+  }
+  if (status === 401 || /access token|unauthori[sz]ed|401/i.test(`${code} ${msg}`)) return `Safaricom refused the API keys (${msg}). Check the consumer key and secret, and that the Daraja app has the C2B product${environment === 'production' ? ' for this short code' : ''}.`;
+  if (/shortcode|short code/i.test(msg)) return `Safaricom refused the short code (${msg}). Use your Paybill number, or for Buy Goods the store (head office) number. Sandbox uses its test short code, e.g. 600xxx.`;
+  if (/url/i.test(msg)) return `Safaricom refused the callback URLs (${msg}). They must be public HTTPS addresses without words like "mpesa", "safaricom", "exe", "cmd", "sql" or "query".`;
+  if (/network error|timeout/i.test(msg)) return `Safaricom could not be reached: ${msg}`;
+  return `Safaricom: ${msg}${code ? ` (code ${code})` : ''}`;
+}
+
 export interface MpesaGateway {
   stkPush(req: StkPushRequest): Promise<StkPushResponse>;
   stkQuery(checkoutRequestId: string): Promise<StkQueryResponse>;
-  registerC2BUrls(confirmationUrl: string, validationUrl: string, shortCode: string): Promise<unknown>;
+  registerC2BUrls(confirmationUrl: string, validationUrl: string, shortCode: string): Promise<C2BRegisterResponse>;
+  /** Sandbox only: makes Safaricom send a test C2B payment to the registered URLs. */
+  simulateC2B(req: { shortCode: string; amount: number; phone: string; billRef: string; buyGoods: boolean }): Promise<C2BRegisterResponse>;
   /** Asks Safaricom about a receipt (e.g. a code the customer shows); the answer arrives at resultUrl. */
   transactionStatus(req: TransactionStatusRequest): Promise<AsyncAccepted>;
   /** Sends money to a phone (salaries, refunds); the result arrives at resultUrl. */
@@ -163,7 +192,17 @@ export class DarajaClient implements MpesaGateway {
   }
 
   async registerC2BUrls(confirmationUrl: string, validationUrl: string, shortCode: string) {
-    return this.post('/mpesa/c2b/v2/registerurl', { ShortCode: shortCode, ResponseType: 'Completed', ConfirmationURL: confirmationUrl, ValidationURL: validationUrl });
+    // ResponseType "Completed": if the validation URL cannot be reached, Safaricom still completes the payment.
+    const r = await this.post<C2BRegisterResponse>('/mpesa/c2b/v2/registerurl', { ShortCode: shortCode, ResponseType: 'Completed', ConfirmationURL: confirmationUrl, ValidationURL: validationUrl });
+    if (r.errorCode || (r.ResponseCode && r.ResponseCode !== '0' && r.ResponseCode !== '00000000')) throw new IntegrationError(r.errorMessage ?? r.ResponseDescription ?? 'Registration failed', 200, r, false);
+    return r;
+  }
+
+  async simulateC2B(req: { shortCode: string; amount: number; phone: string; billRef: string; buyGoods: boolean }) {
+    if (this.cfg.environment !== 'sandbox') throw new IntegrationError('Test payments can only be simulated in the Daraja sandbox', undefined, undefined, false);
+    return this.post<C2BRegisterResponse>('/mpesa/c2b/v1/simulate', {
+      ShortCode: req.shortCode, CommandID: req.buyGoods ? 'CustomerBuyGoodsOnline' : 'CustomerPayBillOnline', Amount: req.amount, Msisdn: req.phone, BillRefNumber: req.buyGoods ? '' : req.billRef,
+    });
   }
 
   private initiator() {
@@ -230,8 +269,13 @@ export class MockMpesaGateway implements MpesaGateway {
   async stkQuery(checkoutRequestId: string): Promise<StkQueryResponse> {
     return MockMpesaGateway.queryResults.get(checkoutRequestId) ?? { ResponseCode: '500.001.1001', errorCode: '500.001.1001', errorMessage: 'The transaction is being processed' };
   }
-  async registerC2BUrls() {
-    return { ResponseDescription: 'success (mock)' };
+  static registrations: Array<{ confirmationUrl: string; validationUrl: string; shortCode: string }> = [];
+  async registerC2BUrls(confirmationUrl: string, validationUrl: string, shortCode: string) {
+    MockMpesaGateway.registrations.push({ confirmationUrl, validationUrl, shortCode });
+    return { ResponseCode: '0', ResponseDescription: 'Success (simulator)' };
+  }
+  async simulateC2B() {
+    return { ResponseCode: '0', ResponseDescription: 'Accept the service request successfully.' };
   }
   async transactionStatus(req: TransactionStatusRequest): Promise<AsyncAccepted> {
     MockMpesaGateway.statusQueries.push(req);

@@ -185,8 +185,18 @@ export function createApp() {
   // Local installations serve the built web app from the same server.
   if (e.WEB_DIST_DIR && fs.existsSync(e.WEB_DIST_DIR)) {
     const dist = path.resolve(e.WEB_DIST_DIR);
-    app.use(express.static(dist, { index: false, maxAge: '1h' }));
-    app.get(/^\/(?!api|socket\.io).*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
+    app.use(express.static(dist, {
+      index: false,
+      maxAge: '1h',
+      setHeaders(res, file) {
+        const name = path.basename(file);
+        // The service worker and manifest must be re-checked on every load so updates arrive; hashed builds never change.
+        if (name === 'sw.js' || name === 'manifest.webmanifest') res.setHeader('Cache-Control', 'no-cache');
+        else if (file.startsWith(path.join(dist, 'assets'))) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        if (name.endsWith('.webmanifest')) res.setHeader('Content-Type', 'application/manifest+json');
+      },
+    }));
+    app.get(/^\/(?!api|socket\.io).*/, (_req, res) => res.sendFile(path.join(dist, 'index.html'), { headers: { 'Cache-Control': 'no-cache' } }));
   }
 
   app.use(errorHandler);

@@ -38,5 +38,6 @@ export function presentConfig(c: IntegrationConfigDoc) {
     settings: c.settings,
     secretsSet: secretKeys,
     lastTest: c.lastTest,
+    ...(c.kind === 'mpesa' ? { c2bRegistration: c.c2bRegistration?.at ? c.c2bRegistration : null } : {}),
   };
 }

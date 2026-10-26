@@ -66,7 +66,23 @@ The path deliberately avoids words like "mpesa" because Safaricom rejects C2B UR
 | Initiator name + security credential | Optional: API operator created on the M-Pesa org portal; the credential is the initiator password encrypted with Safaricom's certificate (Daraja portal generates it). Needed for code checks and payouts. |
 | B2C short code | Optional: bulk disbursement short code for payouts |
 
-Use **Test** to verify OAuth credentials. Branches can have their own configuration (select branches). For C2B press **Register C2B** to register the confirmation/validation URLs shown on the page.
+Use **Test** to verify OAuth credentials. Branches can have their own configuration (select branches).
+
+### Registering C2B URLs
+
+Payments customers make straight to the Paybill/Till only reach Afey POS once the C2B URLs are registered with Safaricom. Press **Register C2B URLs** on the M-Pesa card, or open **Configure**; the panel is at the bottom. It shows:
+
+- the confirmation and validation URLs and the short code that will be registered. For Paybill this is the Paybill number; for Buy Goods it is the **store (head office) number**, not the till number. You can change it before registering;
+- anything Safaricom would refuse, checked before calling it. Registration is stopped when:
+  - the address is private (localhost, 192.168.x.x and similar);
+  - a live configuration does not use HTTPS;
+  - the address contains a word Safaricom rejects ("mpesa", "safaricom", "exe", "cmd", "sql", "query").
+
+  Set `API_PUBLIC_URL` in `server/.env` to the public HTTPS address (on branch servers the URLs point to head office). Callback tokens that happen to contain such a word are sent hex-encoded automatically;
+- the result, with Safaricom's errors explained. For example, live URLs can only be registered once per short code; to change them, delete them on the Daraja portal first;
+- **Send test payment**. In the sandbox, Safaricom sends a KES 1 C2B payment to the registered URLs; with the simulator it is processed directly. **Last payment received** shows when a confirmation actually arrived, which proves the URLs work. Live accounts cannot simulate: pay KES 1 to the Paybill/Till instead.
+
+Registration uses `ResponseType: Completed`, so a payment still completes if the validation URL cannot be reached.
 
 **Sandbox**: create an app at https://developer.safaricom.co.ke, use the test short code `174379` with the sandbox passkey shown on the Daraja simulator page, and a sandbox test MSISDN. Callback URLs must be public HTTPS (use a tunnel such as `cloudflared` for local testing).
 

@@ -7,12 +7,12 @@ import { idempotent } from '../../http/idempotency.js';
 import { notFound } from '../../lib/errors.js';
 import { emitToTenant } from '../../realtime/socket.js';
 import { notify } from '../notifications/service.js';
-import { formatMoney } from '@afeypos/shared';
+import { formatMoney, mergeReceipt } from '@afeypos/shared';
 import { checkout, checkoutSchema } from './checkout.js';
 import { mpesaPhoneOf, processReturn, returnPolicy, returnSchema, voidSale, voidSchema } from './returns.js';
 import { closeShift, openShift, recordCashMovement, shiftSummary } from './shifts.js';
 import { Shift } from '../../models/index.js';
-import { creditNoteAsReceipt, renderReceiptEscPos, renderReceiptHtml, renderReceiptText } from '../hardware/receipt.js';
+import { creditNoteAsReceipt, receiptContext, renderReceiptEscPos, renderReceiptHtml, renderReceiptText } from '../hardware/receipt.js';
 import { runAsPlatform } from '../../lib/context.js';
 
 const router = Router();
@@ -131,15 +131,15 @@ router.get('/returns/:id', requirePermission('sales.read'), async (req, res) => 
 
 /** The credit note slip (text, HTML for browser printing, or ESC/POS for the bridge). */
 router.get('/returns/:id/receipt', requirePermission('sales.read'), async (req, res) => {
-  const { format, width } = parse(z.object({ format: z.enum(['html', 'text', 'escpos']).default('html'), width: z.coerce.number().int().min(24).max(64).default(42) }), req.query);
+  const { format, width } = parse(z.object({ format: z.enum(['html', 'text', 'escpos']).default('html'), width: z.coerce.number().int().min(24).max(64).optional() }), req.query);
   const { ret, sale } = await loadReturn(req);
   const tenant: any = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
   const note = creditNoteAsReceipt(ret as any, sale);
-  const t = { ...tenant, settings: { ...tenant.settings, receiptHeader: note.header } };
-  const user = await User.findById(ret.processedBy, { name: 1 }).lean();
-  if (format === 'html') res.type('html').send(renderReceiptHtml(t, note.sale, user?.name));
-  else if (format === 'text') res.type('text').send(renderReceiptText(t, note.sale, width, user?.name));
-  else res.json({ data: { base64: renderReceiptEscPos(t, note.sale, { width, openDrawer: ret.refundMethod === 'cash', cashierName: user?.name }).toString('base64') } });
+  const t = { ...tenant, settings: { ...tenant.settings, receiptHeader: note.header, receipt: { ...mergeReceipt(tenant.settings?.receipt), title: 'CREDIT NOTE' } } };
+  const ctx = { ...(await receiptContext(tenant, sale as any, ret.processedBy)), width };
+  if (format === 'html') res.type('html').send(renderReceiptHtml(t, note.sale, ctx));
+  else if (format === 'text') res.type('text').send(renderReceiptText(t, note.sale, ctx));
+  else res.json({ data: { base64: renderReceiptEscPos(t, note.sale, { ...ctx, openDrawer: ret.refundMethod === 'cash' }).toString('base64') } });
 });
 
 /** Sends a receipt by SMS/email in the background (never blocks checkout). */
@@ -151,7 +151,7 @@ router.post('/sales/:id/send-receipt', requirePermission('sales.read'), async (r
   const currency = tenant.settings?.currency ?? 'KES';
   const data = {
     business: tenant.name, number: sale.number, total: formatMoney(sale.totalCents, currency), paid: formatMoney(sale.paidCents, currency),
-    footer: tenant.settings?.receiptFooter ?? '', customer: 'Customer', receiptText: renderReceiptText(tenant as any, sale as any),
+    footer: tenant.settings?.receiptFooter ?? '', customer: 'Customer', receiptText: renderReceiptText(tenant as any, sale as any, await receiptContext(tenant as any, sale)),
   };
   const results: Record<string, unknown> = {};
   if (body.sms && req.capabilities!.modules.includes('sms')) results.sms = await notify({ channel: 'sms', to: body.sms, templateKey: 'receipt', data, dedupeKey: `receipt:${sale._id}:${body.sms}`, ref: { type: 'Sale', id: sale._id } });

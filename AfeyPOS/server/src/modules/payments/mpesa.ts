@@ -49,7 +49,7 @@ export function gatewayFor(cfg: InstanceType<typeof IntegrationConfig>): MpesaGa
 export function callbackUrls(tenantId: Types.ObjectId, token: string) {
   const e = env();
   const base = (e.DEPLOYMENT_MODE === 'branch' ? e.SYNC_HQ_URL || e.SYNC_CLOUD_URL || e.API_PUBLIC_URL : e.API_PUBLIC_URL).replace(/\/$/, '');
-  const root = `${base}/api/v1/hooks/pay/${tenantId}/${token}`;
+  const root = `${base}/api/v1/hooks/pay/${tenantId}/${urlToken(token)}`;
   return {
     stk: `${root}/stk`,
     c2bConfirmation: `${root}/c2b/confirmation`,
@@ -58,6 +58,36 @@ export function callbackUrls(tenantId: Types.ObjectId, token: string) {
     b2cResult: `${root}/b2c/result`,
     timeout: `${root}/timeout`,
   };
+}
+
+/** Words Safaricom refuses in callback URLs (any case), e.g. "mpesa", "safaricom", "exe", "cmd", "sql", "query". */
+export const DARAJA_BLOCKED_URL_WORDS = /m-?pesa|safaricom|exe|cmd|sql|query/i;
+
+/**
+ * The callback secret as it appears in URLs. Random base64url tokens can contain a blocked word by chance
+ * ("...SqL..."), so those are sent hex-encoded instead (hex letters a-f can never spell one). Both forms are accepted.
+ */
+export function urlToken(token: string) {
+  return DARAJA_BLOCKED_URL_WORDS.test(token) ? `h${Buffer.from(token).toString('hex')}` : token;
+}
+
+/** Reasons Safaricom would refuse (or never reach) these callback URLs; empty when they look fine. */
+export function callbackUrlProblems(url: string, environment: 'sandbox' | 'production'): string[] {
+  const problems: string[] = [];
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return [`"${url}" is not a valid address. Set API_PUBLIC_URL in server/.env to this server's public address.`];
+  }
+  const host = u.hostname.toLowerCase();
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.lan') || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.)/.test(host) || host === '::1' || !host.includes('.')) {
+    problems.push(`${u.origin} is a private address that Safaricom cannot reach. Set API_PUBLIC_URL in server/.env to a public HTTPS address of this server (or of head office for branch servers), then restart.`);
+  }
+  if (u.protocol !== 'https:') problems.push(environment === 'production' ? 'Live M-Pesa only calls HTTPS addresses. Put the server behind HTTPS (e.g. the installer\'s --domain option) and use an https:// API_PUBLIC_URL.' : 'Use an HTTPS address: Safaricom may refuse plain http:// callback URLs.');
+  const word = url.match(DARAJA_BLOCKED_URL_WORDS)?.[0];
+  if (word) problems.push(`The address contains "${word}", which Safaricom refuses in callback URLs. Use a domain name without it.`);
+  return problems;
 }
 
 const router = Router();
@@ -422,7 +452,7 @@ registerJob('mpesa.checkIntent', async ({ intentId, final }: { intentId: string;
  * Buy Goods: exactly one waiting sale with the same amount in the last 30 minutes) that sale's intent is
  * completed; otherwise the payment is recorded as unallocated for the cashier to pick.
  */
-async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: string) {
+export async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: string) {
   return runInTenant(tenantId, async () => {
     const event = await MpesaEvent.create({ kind: 'c2b_confirmation', payload, ip });
     const transId = String(payload?.TransID ?? '').trim().toUpperCase();
@@ -439,6 +469,8 @@ async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: string) {
       await event.save();
       return;
     }
+    // Proof that the registered URLs work: shown next to the registration in Settings > Integrations.
+    await IntegrationConfig.updateOne({ _id: cfg._id }, { $set: { 'c2bRegistration.lastConfirmationAt': new Date() } });
     if (await PaymentIntent.exists({ receiptNumber: transId })) {
       event.outcome = 'duplicate';
       await event.save();
@@ -531,7 +563,7 @@ async function callbackTenant(req: Request) {
     return null;
   }
   const tenant = await Tenant.findById(tenantId).lean();
-  if (!tenant || !safeEqual(tenant.callbackToken, token)) return null;
+  if (!tenant || !(safeEqual(tenant.callbackToken, token) || safeEqual(urlToken(tenant.callbackToken), token))) return null;
   return tenant;
 }
 

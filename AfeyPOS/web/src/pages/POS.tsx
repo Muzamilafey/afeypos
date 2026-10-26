@@ -257,7 +257,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
 
   return (
     // Fills the window under the shell's header (48px) and breadcrumb (42px), inside the page padding; the footer is hidden here.
-    <div className="flex flex-col gap-3 lg:h-[calc(100vh-122px)] lg:min-h-[520px] lg:flex-row">
+    <div className="flex flex-col gap-3 lg:h-[calc(100vh-80px)] lg:min-h-[520px] lg:flex-row">
       {/* main: search, transaction lines, totals */}
       <section className="card flex min-w-0 flex-1 flex-col overflow-hidden" aria-label="Current sale">
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 px-4 py-3 dark:border-ink-800">
@@ -696,6 +696,7 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
   const toast = useToast();
   const { has } = useAuth();
   const [to, setTo] = useState('');
+  const [receiptHtml, setReceiptHtml] = useState<string | null>(null);
   // eTIMS signs in the background; give it a few seconds so the printed receipt carries the KRA signature.
   const [sale, setSale] = useState<any>(initial);
   const [waited, setWaited] = useState(!initial.etims || initial.etims.status !== 'pending');
@@ -740,7 +741,11 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
         )}
       </div>
       <div className="mt-4 space-y-2">
-        <Button variant="secondary" className="w-full" onClick={print}><Icon name="printer" className="h-4 w-4" />Print receipt</Button>
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="secondary" onClick={print}><Icon name="printer" className="h-4 w-4" />Print receipt</Button>
+          <Button variant="secondary" aria-expanded={receiptHtml !== null} onClick={() => (receiptHtml !== null ? setReceiptHtml(null) : api<Response>(`/sales/${sale._id}/receipt?format=html`, { raw: true }).then((r) => r.text()).then(setReceiptHtml).catch(toast.error))}><Icon name="eye" className="h-4 w-4" />{receiptHtml !== null ? 'Hide receipt' : 'View receipt'}</Button>
+        </div>
+        {receiptHtml !== null && <iframe title="Receipt" srcDoc={receiptHtml} sandbox="allow-same-origin" className="h-[50vh] w-full rounded-md border border-ink-100 bg-[#e9ebee] dark:border-ink-800" />}
         {(has('sms') || has('email')) && (
           <div className="flex gap-2">
             <Input placeholder="Phone or email for receipt" value={to} onChange={(e) => setTo(e.target.value)} />

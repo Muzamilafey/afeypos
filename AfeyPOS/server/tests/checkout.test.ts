@@ -54,6 +54,35 @@ describe('checkout', () => {
     expect(Buffer.from(escpos.body.data.base64, 'base64')[0]).toBe(0x1b);
   });
 
+  it('prints receipts with the layout chosen in Settings > Receipts', async () => {
+    const sale = (await t.client.get('/sales?limit=1')).body.data[0];
+    // Cashiers cannot change the receipt layout.
+    expect((await cashier.put('/settings/receipt', { receipt: { template: 'bold' } })).status).toBe(403);
+    const saved = await t.client.put('/settings/receipt', {
+      receipt: { template: 'bold', paper: '58mm', title: 'CASH SALE', show: { poweredBy: false, cashier: false }, customFields: [{ label: 'Paybill', value: '123456', position: 'bottom' }], message: 'Double points on Friday', returnPolicy: 'Returns within 7 days' },
+      receiptFooter: 'Karibu tena',
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.data.receipt).toMatchObject({ template: 'bold', paper: '58mm', show: { poweredBy: false, cashier: false, taxPin: true } });
+    const text = (await cashier.get(`/sales/${sale._id}/receipt?format=text`)).text;
+    expect(text).toContain('CASH SALE');
+    expect(text).toMatch(/Paybill:\s+123456/);
+    expect(text).toContain('Double points on Friday');
+    expect(text).toContain('Karibu tena');
+    expect(text).not.toContain('Powered by Afey POS');
+    expect(text).not.toContain('Served by');
+    // 58 mm paper: 32 characters per line.
+    expect(Math.max(...text.split('\n').map((l) => l.length))).toBeLessThanOrEqual(32);
+    const html = (await cashier.get(`/sales/${sale._id}/receipt?format=html`)).text;
+    expect(html).toContain('size:58mm');
+    expect(html).toContain('<svg'); // receipt barcode
+    // Preview renders unsaved settings without saving them.
+    const preview = await t.client.post('/settings/receipt/preview', { receipt: { template: 'elegant', title: 'PREVIEW ONLY' }, format: 'text' });
+    expect(preview.text).toContain('PREVIEW ONLY');
+    expect((await t.client.get('/settings/receipt')).body.data.receipt.title).toBe('CASH SALE');
+    await t.client.put('/settings/receipt', { receipt: {} });
+  });
+
   it('rejects payments that do not equal the total', async () => {
     const p = await createProduct(t.client, { prices: { retail: 5000 }, openingStock: [{ warehouseId: wh, qty: 10 }] });
     const r = await cashier.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: p._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 4000 }] });

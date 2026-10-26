@@ -353,6 +353,8 @@ export const NAVIGATION: NavItem[] = [
   { key: 'gatewayPayments', label: 'Online payments', path: '/payments/online', icon: 'card', module: 'payments', permission: 'payments.reconcile', group: 'finance' },
   { key: 'audit', label: 'Audit trail', path: '/audit', icon: 'shield', permission: 'audit.read', group: 'finance' },
   { key: 'settings', label: 'Settings', path: '/settings', icon: 'settings', permission: 'settings.manage', group: 'admin' },
+  { key: 'receiptSettings', label: 'Receipts', path: '/settings/receipts', icon: 'receipt', module: 'pos', permission: 'settings.manage', group: 'admin' },
+  { key: 'checkoutRules', label: 'Checkout rules', path: '/settings/checkout-rules', icon: 'lock', module: 'pos', permission: 'settings.manage', group: 'admin' },
   { key: 'users', label: 'Users', path: '/settings/users', icon: 'user', permission: 'users.manage', group: 'admin' },
   { key: 'roles', label: 'Roles & permissions', path: '/settings/roles', icon: 'shield', permission: 'users.manage', group: 'admin' },
   { key: 'locations', label: 'Branches & tills', path: '/settings/locations', icon: 'map', permission: 'branches.manage', group: 'admin' },

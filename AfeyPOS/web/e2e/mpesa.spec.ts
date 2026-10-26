@@ -16,6 +16,21 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('article', { name: 'Till simulator' })).toBeVisible();
 
+  // Register the C2B URLs and prove them with a test payment.
+  const card = page.getByRole('article', { name: 'Till simulator' });
+  await expect(card.getByText('Not registered')).toBeVisible();
+  await card.getByRole('button', { name: 'Register C2B URLs' }).click();
+  const c2b = page.getByRole('region', { name: 'C2B URL registration' });
+  await expect(c2b.getByLabel('Short code to register')).toHaveValue('174379');
+  await c2b.getByRole('button', { name: 'Register C2B URLs' }).click();
+  await expect(c2b.getByRole('status')).toContainText('Registered for short code 174379');
+  await c2b.getByRole('button', { name: 'Send test payment' }).click();
+  await expect(c2b.getByRole('status')).toContainText('Test payment');
+  await expect(c2b.getByText('None yet')).toHaveCount(0);
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/c2b-register.png` });
+  await page.keyboard.press('Escape');
+  await expect(card.getByText('Registered (174379)')).toBeVisible();
+
   await page.getByRole('link', { name: 'Checkout', exact: true }).click();
   const scan = page.getByLabel('Scan or search products');
   await scan.fill('MILK500');

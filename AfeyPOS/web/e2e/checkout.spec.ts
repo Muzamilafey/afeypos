@@ -53,6 +53,10 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await page.screenshot({ path: 'test-results/sale-complete.png' });
   await page.getByRole('button', { name: 'New sale' }).click();
 
+  // Checkout is full screen: no sidebar; Go back leaves it.
+  await expect(page.getByRole('navigation', { name: 'Main' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Go back' }).click();
+  await expect(page).not.toHaveURL(/\/pos$/);
   await page.getByRole('link', { name: 'Sales history', exact: true }).click();
   await expect(page.getByText(/RCP-000001/)).toBeVisible();
   await page.getByRole('link', { name: 'Stock levels', exact: true }).click();

@@ -27,7 +27,7 @@ export function BusinessSettingsPage() {
   const setS = (k: string, v: any) => setF({ ...f, settings: { ...s, [k]: v } });
   const save = async () => {
     try {
-      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, receiptHeader: s.receiptHeader ?? '', receiptFooter: s.receiptFooter ?? '', logoFileId: s.logoFileId ?? '', tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders, returns: { windowDays: s.returns?.windowDays ?? 14, approvalAboveCents: s.returns?.approvalAboveCents ?? 0, restockByDefault: s.returns?.restockByDefault ?? true }, staffLogin: { cardRequiresPin: s.staffLogin?.cardRequiresPin ?? true }, ...(s.crm?.birthdayGreeting ? { crm: { birthdayGreeting: { enabled: Boolean(s.crm.birthdayGreeting.enabled), channel: s.crm.birthdayGreeting.channel ?? 'sms', offer: s.crm.birthdayGreeting.offer ?? '' } } } : {}) } } });
+      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, requireOpenShift: s.requireOpenShift, cashierDiscountLimitBp: s.cashierDiscountLimitBp, logoFileId: s.logoFileId ?? '', tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders, returns: { windowDays: s.returns?.windowDays ?? 14, approvalAboveCents: s.returns?.approvalAboveCents ?? 0, restockByDefault: s.returns?.restockByDefault ?? true }, staffLogin: { cardRequiresPin: s.staffLogin?.cardRequiresPin ?? true }, ...(s.crm?.birthdayGreeting ? { crm: { birthdayGreeting: { enabled: Boolean(s.crm.birthdayGreeting.enabled), channel: s.crm.birthdayGreeting.channel ?? 'sms', offer: s.crm.birthdayGreeting.offer ?? '' } } } : {}) } } });
       await reload();
       toast.success('Settings saved');
     } catch (e) { toast.error(e); }
@@ -53,8 +53,7 @@ export function BusinessSettingsPage() {
           <Field label="Address" className="sm:col-span-2"><Input value={f.contact.address ?? ''} onChange={(e) => setF({ ...f, contact: { ...f.contact, address: e.target.value } })} /></Field>
           <Field label="Currency"><Input value={s.currency} maxLength={3} onChange={(e) => setS('currency', e.target.value.toUpperCase())} /></Field>
           <Field label="Timezone" hint="Used for reports and receipts"><Input value={s.timezone} onChange={(e) => setS('timezone', e.target.value)} /></Field>
-          <Field label="Receipt header"><Input value={s.receiptHeader ?? ''} onChange={(e) => setS('receiptHeader', e.target.value)} /></Field>
-          <Field label="Receipt footer"><Input value={s.receiptFooter ?? ''} onChange={(e) => setS('receiptFooter', e.target.value)} /></Field>
+          <div className="rounded-md border border-dashed border-ink-200 p-3 text-sm dark:border-ink-700 sm:col-span-2"><Icon name="receipt" className="mr-1.5 inline h-4 w-4 text-ink-400" />Receipt header, footer, template and fields: <Link className="font-semibold text-brand-600 hover:underline" to="/settings/receipts">Settings &gt; Receipts</Link></div>
           <Field label="Tagline" hint="Shown under your name on the sign-in page"><Input maxLength={120} value={s.tagline ?? ''} onChange={(e) => setS('tagline', e.target.value)} placeholder="e.g. Quality building materials since 2005" /></Field>
           <div className="sm:col-span-2"><BusinessLogoField fileId={s.logoFileId} onChange={(id) => setS('logoFileId', id)} /></div>
         </div></Card>
@@ -349,12 +348,81 @@ function CopyField({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Registers the C2B confirmation and validation URLs with Safaricom for a saved M-Pesa configuration, shows
+ * what will be registered and why Safaricom might refuse it, and proves it works with a test payment.
+ */
+function C2BPanel({ config, onChanged }: { config: any; onChanged?: () => void }) {
+  const toast = useToast();
+  const plan = useQuery({ queryKey: ['c2b-plan', config.id], queryFn: () => api<{ data: { shortCode: string; confirmationUrl: string; validationUrl: string; problems: string[]; blocking: string[]; registration: any } }>(`/settings/integrations/${config.id}/register-c2b`).then((r) => r.data) });
+  const [shortCode, setShortCode] = useState<string | null>(null);
+  const [busy, setBusy] = useState<'register' | 'test' | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  if (!plan.data) return <Loading />;
+  const p = plan.data;
+  const reg = p.registration;
+  const code = shortCode ?? p.shortCode;
+  const warnings = p.problems.filter((x) => !p.blocking.includes(x));
+  const canTest = config.provider === 'mock' || config.environment !== 'production';
+  const register = async () => {
+    setBusy('register'); setResult(null);
+    try {
+      const r = await api<{ data: { message: string } }>(`/settings/integrations/${config.id}/register-c2b`, { body: code && code !== p.shortCode ? { shortCode: code } : {} });
+      setResult({ ok: true, message: r.data.message }); toast.success('C2B URLs registered with Safaricom');
+    } catch (e: any) {
+      setResult({ ok: false, message: e?.message ?? 'Registration failed' });
+    } finally { setBusy(null); plan.refetch(); onChanged?.(); }
+  };
+  const test = async () => {
+    setBusy('test'); setResult(null);
+    try {
+      const r = await api<{ data: { message: string } }>(`/settings/integrations/${config.id}/test-c2b`, { body: { amount: 1 } });
+      setResult({ ok: true, message: r.data.message });
+      // Sandbox confirmations arrive a few seconds later.
+      setTimeout(() => plan.refetch(), config.provider === 'mock' ? 0 : 8000);
+    } catch (e: any) { setResult({ ok: false, message: e?.message ?? 'Test failed' }); } finally { setBusy(null); plan.refetch(); }
+  };
+  return (
+    <section aria-label="C2B URL registration" className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-bold">Customers paying the Paybill / Till (C2B)</h3>
+          <p className="text-xs text-ink-600 dark:text-ink-300">Safaricom sends every payment to these URLs, so sales complete by themselves. Uses the saved settings: save changes first.</p>
+        </div>
+        {reg ? <StatusPill tone={reg.ok ? 'green' : 'red'}>{reg.ok ? 'Registered' : 'Registration failed'} · {dateTime(reg.at)}</StatusPill> : <StatusPill tone="gray">Not registered yet</StatusPill>}
+      </div>
+      <div className="grid gap-2">
+        <CopyField label="Confirmation URL" value={p.confirmationUrl} />
+        <CopyField label="Validation URL" value={p.validationUrl} />
+      </div>
+      <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <Field label="Short code to register" hint={config.settings?.type === 'till' ? 'Buy Goods: the store (head office) number, not the till number.' : 'Your Paybill number.'}>
+          <Input value={code} inputMode="numeric" onChange={(e) => setShortCode(e.target.value.replace(/\D/g, '').slice(0, 7))} />
+        </Field>
+        <div className="flex flex-wrap gap-2">
+          <Button loading={busy === 'register'} disabled={Boolean(busy) || p.blocking.length > 0 || !/^\d{5,7}$/.test(code)} onClick={register}><Icon name="plug" className="h-4 w-4" />Register C2B URLs</Button>
+          {canTest && <Button variant="secondary" loading={busy === 'test'} disabled={Boolean(busy) || !reg?.ok} onClick={test} title={reg?.ok ? undefined : 'Register first'}>Send test payment</Button>}
+        </div>
+      </div>
+      {p.blocking.map((m) => <p key={m} role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-200">{m}</p>)}
+      {warnings.map((m) => <p key={m} className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">{m}</p>)}
+      {result && <p role="status" className={cx('rounded-md px-3 py-2 text-xs', result.ok ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200' : 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-200')}>{result.message}</p>}
+      {reg && !result && <p className={cx('text-xs', reg.ok ? 'text-ink-600 dark:text-ink-300' : 'text-red-700 dark:text-red-300')}>{reg.message}</p>}
+      <dl className="grid grid-cols-2 gap-2 text-xs">
+        <div><dt className="text-ink-500">Registered short code</dt><dd className="font-medium">{reg?.shortCode ?? '—'}</dd></div>
+        <div><dt className="text-ink-500">Last payment received</dt><dd className="font-medium">{reg?.lastConfirmationAt ? dateTime(reg.lastConfirmationAt) : canTest ? 'None yet: send a test payment' : 'None yet: pay KES 1 to check'}</dd></div>
+      </dl>
+    </section>
+  );
+}
+
 export function IntegrationsPage() {
   const toast = useToast();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['integrations'], queryFn: () => api<{ data: any[]; providers: Record<string, string[]>; callbackUrls: Record<string, string> }>('/settings/integrations') });
   const [edit, setEdit] = useState<any>(null);
   const [testing, setTesting] = useState<any>(null);
+  const [c2b, setC2b] = useState<any>(null);
   const [testTo, setTestTo] = useState('');
   const [category, setCategory] = useState<(typeof CATEGORIES)[number]['key']>('all');
   const [error, setError] = useState<unknown>(null);
@@ -441,11 +509,14 @@ export function IntegrationsPage() {
                   <div><dt className="text-ink-500">Credentials</dt><dd className="mt-0.5 font-medium">{r.secretsSet.length ? `${r.secretsSet.length} saved` : 'none needed'}</dd></div>
                   <div><dt className="text-ink-500">Last test</dt><dd className="mt-0.5">{r.lastTest?.at ? <StatusPill tone={r.lastTest.ok ? 'green' : 'red'}>{r.lastTest.ok ? 'Passed' : 'Failed'}{r.lastTest.at ? ` · ${dateTime(r.lastTest.at)}` : ''}</StatusPill> : <span className="text-ink-400">Not tested yet</span>}</dd></div>
                 </dl>
+                {r.kind === 'mpesa' && (
+                  <p className="mt-2 flex items-center gap-1.5 text-xs text-ink-500">C2B URLs: {r.c2bRegistration ? <StatusPill tone={r.c2bRegistration.ok ? 'green' : 'red'}>{r.c2bRegistration.ok ? `Registered (${r.c2bRegistration.shortCode})` : 'Registration failed'}</StatusPill> : <StatusPill tone="amber">Not registered</StatusPill>}</p>
+                )}
                 {r.lastTest?.at && !r.lastTest.ok && r.lastTest.message && <p className="mt-2 rounded-md bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-200">{r.lastTest.message}</p>}
                 <div className="mt-4 flex flex-wrap gap-1.5 border-t border-ink-100 pt-3 dark:border-ink-800">
                   <Button size="sm" onClick={() => { setTestTo(''); setTesting(r); }}><Icon name="check" className="h-3.5 w-3.5" />Test</Button>
                   <Button size="sm" variant="secondary" onClick={() => { setError(null); setEdit({ ...r, secrets: {} }); }}>Configure</Button>
-                  {r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => api(`/settings/integrations/${r.id}/register-c2b`, { body: {} }).then(() => toast.success('C2B URLs registered')).catch(toast.error)}>Register C2B</Button>}
+                  {r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => setC2b(r)}>Register C2B URLs</Button>}
                   {r.kind === 'etims' && <Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/settings/integrations/${r.id}/etims/initialize`, { body: {} }).then((x) => { toast.success(`eTIMS device initialised: SCU ${x.data.sdcId}`); q.refetch(); }).catch(toast.error)}>Initialise device</Button>}
                 </div>
               </article>
@@ -499,6 +570,13 @@ export function IntegrationsPage() {
         </Modal>
       )}
 
+      {c2b && (
+        <Modal open onClose={() => setC2b(null)} title={`Register C2B URLs · ${c2b.name}`} icon="plug" size="lg" subtitle="Lets payments made straight to your Paybill/Till reach Afey POS."
+          footer={<Button variant="secondary" onClick={() => setC2b(null)}>Close</Button>}>
+          <C2BPanel config={c2b} onChanged={() => q.refetch()} />
+        </Modal>
+      )}
+
       {edit && (
         <Modal open variant="drawer" size="lg" onClose={() => setEdit(null)} icon={KIND_INFO[edit.kind as IntegrationKind]?.icon}
           title={`${edit.id ? 'Configure' : 'Connect'} ${edit.kind === 'payment' ? providerLabel('payment', edit.provider) : providerTitle(edit.kind, edit.provider)}`}
@@ -549,6 +627,9 @@ export function IntegrationsPage() {
                 </div>
               </fieldset>
             )}
+            {edit.kind === 'mpesa' && (edit.id
+              ? <C2BPanel config={rows.find((r) => r.id === edit.id) ?? edit} onChanged={() => q.refetch()} />
+              : <p className="rounded-lg border border-dashed border-ink-200 p-3 text-xs text-ink-500 dark:border-ink-700">Save first, then register the C2B URLs here so payments made straight to your Paybill/Till reach Afey POS.</p>)}
             {edit.kind === 'payment' && edit.webhookUrl && (
               <div><CopyField label="Webhook / callback URL" value={edit.webhookUrl} /><p className="mt-1 text-xs text-ink-500">Set this in the provider dashboard if asked. It contains a secret token.</p></div>
             )}

@@ -61,7 +61,7 @@ test('pays through a payment gateway (simulator): pending until the provider con
   await expect(page.getByAltText('Payment link QR code')).toBeVisible();
   await shot(page, 'pos-gateway-qr');
   await page.getByRole('button', { name: 'Cancel' }).click();
-  await page.getByRole('button', { name: 'Back' }).click();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
 
   await page.goto('/payments/online');
   await expect(page.getByRole('cell', { name: /^RCP-/ })).toBeVisible();

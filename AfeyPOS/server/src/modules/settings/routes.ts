@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { MODULES, PAYMENT_PROVIDER_INFO, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
+import { MODULES, PAYMENT_PROVIDER_INFO, RECEIPT_TEMPLATES, mergeReceipt, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import {
   AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
 } from '../../models/index.js';
@@ -20,11 +20,25 @@ import { openSecrets, presentConfig, sealSecrets } from '../integrations/configs
 import { gatewayCallbackUrl, paymentGatewayFor } from '../payments/gateways.js';
 import { createSmsProvider } from '../../integrations/sms/index.js';
 import { createEmailProvider } from '../../integrations/email/index.js';
-import { callbackUrls, gatewayFor } from '../payments/mpesa.js';
+import { callbackUrlProblems, callbackUrls, gatewayFor, handleC2B } from '../payments/mpesa.js';
+import { explainC2BError } from '../../integrations/mpesa/daraja.js';
 import { notify } from '../notifications/service.js';
 import { DEFAULT_TEMPLATES } from '../notifications/templates.js';
-import { CashMovement } from '../../models/index.js';
+import { receiptContext, renderReceiptHtml, renderReceiptText, sampleSale } from '../hardware/receipt.js';
+import { CashMovement, Sale } from '../../models/index.js';
 import { checkUserAccessChange, roleRoutes } from './roles.js';
+
+const showKeys = ['logo', 'tagline', 'address', 'phone', 'email', 'taxPin', 'cashier', 'till', 'branch', 'customer', 'sku', 'unitPrice', 'itemCount', 'taxSummary', 'savings', 'loyalty', 'barcode', 'qr', 'poweredBy'] as const;
+const receiptSchema = z.object({
+  template: z.enum(RECEIPT_TEMPLATES),
+  paper: z.enum(['80mm', '58mm']),
+  fontSize: z.enum(['small', 'normal', 'large']),
+  title: z.string().trim().max(40),
+  show: z.object(Object.fromEntries(showKeys.map((k) => [k, z.boolean()])) as Record<(typeof showKeys)[number], z.ZodBoolean>).partial(),
+  customFields: z.array(z.object({ label: z.string().trim().max(30), value: z.string().trim().max(80), position: z.enum(['top', 'bottom']) })).max(12),
+  message: z.string().max(300),
+  returnPolicy: z.string().max(400),
+}).partial();
 
 const router = Router();
 
@@ -80,6 +94,38 @@ router.patch('/settings/business', requirePermission('settings.manage'), async (
   const t = await runAsPlatform(() => Tenant.findByIdAndUpdate(req.tenant!._id, { $set: set }, { new: true, runValidators: true }).lean());
   await audit(req, { action: 'settings.updated', entity: 'Tenant', entityId: req.tenant!._id, details: { fields: Object.keys(set) } });
   res.json({ data: t });
+});
+
+// ---------- receipts ----------
+const receiptBody = z.object({ receipt: receiptSchema, receiptHeader: z.string().max(200).optional(), receiptFooter: z.string().max(300).optional() });
+
+router.get('/settings/receipt', requirePermission('settings.manage'), async (req, res) => {
+  const t = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
+  res.json({ data: { receipt: mergeReceipt(t!.settings?.receipt), receiptHeader: t!.settings?.receiptHeader ?? '', receiptFooter: t!.settings?.receiptFooter ?? '' } });
+});
+
+router.put('/settings/receipt', requirePermission('settings.manage'), async (req, res) => {
+  const body = parse(receiptBody, req.body);
+  const receipt = mergeReceipt(body.receipt);
+  const set: Record<string, unknown> = { 'settings.receipt': receipt };
+  if (body.receiptHeader !== undefined) set['settings.receiptHeader'] = body.receiptHeader;
+  if (body.receiptFooter !== undefined) set['settings.receiptFooter'] = body.receiptFooter;
+  const t = await runAsPlatform(() => Tenant.findByIdAndUpdate(req.tenant!._id, { $set: set }, { new: true }).lean());
+  await audit(req, { action: 'settings.receipt_updated', entity: 'Tenant', entityId: req.tenant!._id, details: { template: receipt.template, paper: receipt.paper } });
+  res.json({ data: { receipt: mergeReceipt(t!.settings?.receipt), receiptHeader: t!.settings?.receiptHeader ?? '', receiptFooter: t!.settings?.receiptFooter ?? '' } });
+});
+
+/** Renders unsaved receipt settings on a sample sale (or a real one), exactly as it will print. */
+router.post('/settings/receipt/preview', requirePermission('settings.manage'), async (req, res) => {
+  const body = parse(receiptBody.extend({ format: z.enum(['html', 'text']).default('html'), sample: z.enum(['sample', 'latest']).default('sample') }), req.body);
+  const tenant: any = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
+  const t = { ...tenant, settings: { ...tenant.settings, receiptHeader: body.receiptHeader ?? tenant.settings?.receiptHeader, receiptFooter: body.receiptFooter ?? tenant.settings?.receiptFooter } };
+  const real = body.sample === 'latest' ? await Sale.findOne({ status: { $ne: 'voided' } }).sort({ completedAt: -1 }).lean() : null;
+  const sale: any = real ?? sampleSale();
+  const ctx = real ? await receiptContext(tenant, real) : { ...(await receiptContext(tenant, {})), cashierName: 'Jane W.', tillName: 'Till 1 (T1)', branchName: 'Main branch', customer: { name: 'Peter Otieno', phone: '0712 345 678', points: 248 } };
+  const opts = { ...ctx, settings: mergeReceipt(body.receipt) };
+  if (body.format === 'text') res.type('text').send(renderReceiptText(t, sale, opts));
+  else res.type('html').send(renderReceiptHtml(t, sale, opts));
 });
 
 /** Enable or hide modules. Disabling never deletes data. */
@@ -315,14 +361,79 @@ router.post('/settings/integrations/:id/test', requirePermission('integrations.m
   res.json({ data: { ok, message } });
 });
 
-router.post('/settings/integrations/:id/register-c2b', requirePermission('integrations.manage'), async (req, res) => {
-  const cfg = await IntegrationConfig.findOne({ _id: idParam(req.params.id), kind: 'mpesa' });
-  if (!cfg) throw notFound('Integration');
+/** What would be registered: the short code and URLs, plus anything that would make Safaricom refuse them. */
+async function c2bPlan(req: any, cfg: InstanceType<typeof IntegrationConfig>, shortCodeOverride?: string) {
   const t = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
   const urls = callbackUrls(t!._id, t!.callbackToken);
-  const result = await gatewayFor(cfg).registerC2BUrls(urls.c2bConfirmation, urls.c2bValidation, String(cfg.settings?.tillNumber ?? cfg.settings?.shortCode));
-  await audit(req, { action: 'integration.c2b_registered', entity: 'IntegrationConfig', entityId: cfg._id });
-  res.json({ data: result });
+  // Paybill: the Paybill number. Buy Goods: Safaricom registers URLs on the store (head office) number.
+  const shortCode = String(shortCodeOverride || cfg.settings?.shortCode || cfg.settings?.tillNumber || '').trim();
+  const environment = cfg.environment as 'sandbox' | 'production';
+  const problems = cfg.provider === 'mock' ? [] : callbackUrlProblems(urls.c2bConfirmation, environment);
+  // Plain http is only a warning in the sandbox; everything else stops the registration.
+  const blocking = problems.filter((p) => environment === 'production' || !p.startsWith('Use an HTTPS address'));
+  if (!/^\d{5,7}$/.test(shortCode)) blocking.unshift('Set the Paybill or store number (5-7 digits) in the M-Pesa configuration first.');
+  return { tenant: t!, shortCode, confirmationUrl: urls.c2bConfirmation, validationUrl: urls.c2bValidation, problems, blocking };
+}
+
+router.get('/settings/integrations/:id/register-c2b', requirePermission('integrations.manage'), async (req, res) => {
+  const cfg = await IntegrationConfig.findOne({ _id: idParam(req.params.id), kind: 'mpesa' });
+  if (!cfg) throw notFound('Integration');
+  const { tenant: _t, ...plan } = await c2bPlan(req, cfg);
+  res.json({ data: { ...plan, registration: presentConfig(cfg).c2bRegistration ?? null } });
+});
+
+/** Registers this business's C2B confirmation and validation URLs with Safaricom for the short code. */
+router.post('/settings/integrations/:id/register-c2b', requirePermission('integrations.manage'), async (req, res) => {
+  const body = parse(z.object({ shortCode: z.string().trim().regex(/^\d{5,7}$/, 'Short codes are 5-7 digits').optional() }), req.body ?? {});
+  const cfg = await IntegrationConfig.findOne({ _id: idParam(req.params.id), kind: 'mpesa' });
+  if (!cfg) throw notFound('Integration');
+  if (!cfg.enabled) throw badRequest('Enable this M-Pesa configuration first');
+  const plan = await c2bPlan(req, cfg, body.shortCode);
+  if (plan.blocking.length) throw new AppError(422, 'C2B_URL_INVALID', plan.blocking[0], { problems: plan.blocking });
+  let ok = false;
+  let message: string;
+  let response: unknown;
+  try {
+    response = await gatewayFor(cfg).registerC2BUrls(plan.confirmationUrl, plan.validationUrl, plan.shortCode);
+    ok = true;
+    message = `Registered for short code ${plan.shortCode}${(response as any)?.ResponseDescription ? `: ${(response as any).ResponseDescription}` : ''}`;
+  } catch (err) {
+    message = explainC2BError(err, cfg.environment as 'sandbox' | 'production');
+    response = (err as any)?.body;
+  }
+  // A new registration starts over: "Last payment received" then proves these URLs.
+  const previous = cfg.c2bRegistration?.lastConfirmationAt;
+  cfg.c2bRegistration = { lastConfirmationAt: ok ? undefined : previous, at: new Date(), ok, message, shortCode: plan.shortCode, confirmationUrl: plan.confirmationUrl, validationUrl: plan.validationUrl } as any;
+  await cfg.save();
+  await audit(req, { action: ok ? 'integration.c2b_registered' : 'integration.c2b_register_failed', entity: 'IntegrationConfig', entityId: cfg._id, details: { shortCode: plan.shortCode, message } });
+  if (!ok) throw new AppError(422, 'C2B_REGISTER_FAILED', message, { response });
+  res.json({ data: { ok, message, shortCode: plan.shortCode, confirmationUrl: plan.confirmationUrl, validationUrl: plan.validationUrl, warnings: plan.problems, registration: presentConfig(cfg).c2bRegistration } });
+});
+
+/**
+ * Proves C2B end to end. Sandbox: Safaricom sends a test payment to the registered URLs. Simulator: the same
+ * confirmation is processed directly. Live accounts cannot simulate: pay KES 1 to the Paybill/Till instead.
+ */
+router.post('/settings/integrations/:id/test-c2b', requirePermission('integrations.manage'), async (req, res) => {
+  const body = parse(z.object({ amount: z.number().int().min(1).max(1000).default(1), phone: z.string().regex(/^2547\d{8}$|^2541\d{8}$/).default('254708374149') }), req.body ?? {});
+  const cfg = await IntegrationConfig.findOne({ _id: idParam(req.params.id), kind: 'mpesa' });
+  if (!cfg) throw notFound('Integration');
+  if (cfg.environment === 'production' && cfg.provider !== 'mock') throw badRequest('Live accounts cannot simulate payments: pay KES 1 to your Paybill/Till and watch "Last payment received" update.');
+  const plan = await c2bPlan(req, cfg);
+  const buyGoods = cfg.settings?.type === 'till';
+  const shortCode = buyGoods ? String(cfg.settings?.tillNumber || plan.shortCode) : plan.shortCode;
+  if (cfg.provider === 'mock') {
+    const receipt = `TST${Date.now().toString(36).toUpperCase()}`.slice(0, 10);
+    await handleC2B(req.tenant!._id, { TransactionType: buyGoods ? 'Buy Goods' : 'Pay Bill', TransID: receipt, TransTime: '20261025120000', TransAmount: String(body.amount), BusinessShortCode: shortCode, BillRefNumber: 'TEST', MSISDN: body.phone, FirstName: 'TEST', LastName: 'PAYMENT' }, 'simulator');
+    res.json({ data: { ok: true, message: `Test payment ${receipt} of KES ${body.amount} recorded. It appears under Payments as unallocated.` } });
+    return;
+  }
+  try {
+    const r = await gatewayFor(cfg).simulateC2B({ shortCode, amount: body.amount, phone: body.phone, billRef: 'TEST', buyGoods });
+    res.json({ data: { ok: true, message: `Safaricom accepted the test payment (${r.ResponseDescription ?? 'accepted'}). When it reaches this server, "Last payment received" updates within a minute.` } });
+  } catch (err) {
+    throw new AppError(422, 'C2B_TEST_FAILED', explainC2BError(err, 'sandbox'));
+  }
 });
 
 // ---------- notification templates & logs ----------

@@ -70,7 +70,7 @@ describe('receipts', () => {
       { number: 'RCP-000001', completedAt: new Date(), lines: [{ name: 'Sugar', qty: 2, unitCode: 'pc', unitPriceCents: 14500, totalCents: 29000 }], totalCents: 29000, taxCents: 4000, payments: [{ method: 'mpesa', amountCents: 29000, reference: 'QWE123' }] },
     );
     expect(text).toContain('RCP-000001');
-    expect(text).toContain('M-PESA QWE123');
+    expect(text).toContain('M-Pesa QWE123');
     expect(text).toContain('Asante');
   });
 });

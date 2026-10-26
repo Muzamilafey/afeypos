@@ -1,7 +1,7 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { setupApp, teardown, registerTenant, createProduct, openShift, rid, BASE, Client, type Ctx } from './helpers.js';
-import { buildStkCallback } from '../src/modules/payments/mpesa.js';
-import { MockMpesaGateway, darajaTimestamp, stkPassword, parseStkCallback, parseDarajaDate } from '../src/integrations/mpesa/daraja.js';
+import { buildStkCallback, callbackUrlProblems, urlToken } from '../src/modules/payments/mpesa.js';
+import { DarajaClient, MockMpesaGateway, explainC2BError, darajaTimestamp, stkPassword, parseStkCallback, parseDarajaDate } from '../src/integrations/mpesa/daraja.js';
 import { Tenant } from '../src/models/index.js';
 import { runAsPlatform } from '../src/lib/context.js';
 import { drainJobs } from '../src/jobs/queue.js';
@@ -220,5 +220,64 @@ describe('M-Pesa B2C payouts (salaries, refunds)', () => {
     const done = await fiona.post(`/payments/payouts/${id}/simulate`, {});
     expect(done.body.data).toMatchObject({ status: 'succeeded', receiverName: 'Jane Wanjiku' });
     expect(done.body.data.receiptNumber).toBeTruthy();
+  });
+});
+
+describe('C2B URL registration', () => {
+  it('spots URLs Safaricom would refuse', () => {
+    expect(callbackUrlProblems('https://hq.myshop.co.ke/api/v1/hooks/pay/a/b/c2b/confirmation', 'production')).toEqual([]);
+    expect(callbackUrlProblems('http://localhost:4000/x', 'sandbox').join(' ')).toMatch(/private address/);
+    expect(callbackUrlProblems('http://192.168.1.5:4000/x', 'production').join(' ')).toMatch(/HTTPS/);
+    expect(callbackUrlProblems('https://mpesa-shop.co.ke/x', 'production').join(' ')).toMatch(/"mpesa"/);
+    // A random token that happens to spell a refused word is sent hex-encoded instead.
+    expect(urlToken('abcSqLxyz')).toMatch(/^h[0-9a-f]+$/);
+    expect(urlToken('abcdef')).toBe('abcdef');
+  });
+
+  it('explains Daraja errors in plain language', () => {
+    expect(explainC2BError({ body: { errorCode: '500.003.1001', errorMessage: 'Urls are already registered' } }, 'production')).toMatch(/only be registered once/);
+    expect(explainC2BError({ status: 401, body: { errorMessage: 'Invalid Access Token' } }, 'sandbox')).toMatch(/consumer key/);
+    expect(explainC2BError({ body: { errorMessage: 'Invalid ShortCode' } }, 'sandbox')).toMatch(/store \(head office\) number/);
+  });
+
+  it('registers with the configured short code and records the result', async () => {
+    const cfg = (await t.client.get('/settings/integrations')).body.data.find((c: any) => c.name === 'Till sim');
+    const plan = await t.client.get(`/settings/integrations/${cfg.id}/register-c2b`);
+    expect(plan.body.data).toMatchObject({ shortCode: '174379', blocking: [] });
+    const r = await t.client.post(`/settings/integrations/${cfg.id}/register-c2b`, {});
+    expect(r.status).toBe(200);
+    expect(MockMpesaGateway.registrations.at(-1)).toMatchObject({ shortCode: '174379', confirmationUrl: expect.stringMatching(/\/c2b\/confirmation$/), validationUrl: expect.stringMatching(/\/c2b\/validation$/) });
+    expect(MockMpesaGateway.registrations.at(-1)!.confirmationUrl).not.toMatch(/m-?pesa|safaricom/i);
+    const saved = (await t.client.get('/settings/integrations')).body.data.find((c: any) => c.id === cfg.id);
+    expect(saved.c2bRegistration).toMatchObject({ ok: true, shortCode: '174379' });
+    expect(saved.c2bRegistration.lastConfirmationAt).toBeUndefined();
+
+    // A test payment proves the URLs end to end.
+    const test = await t.client.post(`/settings/integrations/${cfg.id}/test-c2b`, { amount: 1 });
+    expect(test.status).toBe(200);
+    const after = (await t.client.get('/settings/integrations')).body.data.find((c: any) => c.id === cfg.id);
+    expect(after.c2bRegistration.lastConfirmationAt).toBeTruthy();
+  });
+
+  it('refuses to register private addresses with Safaricom, and reports Daraja refusals', async () => {
+    const cfg = await t.client.post('/settings/integrations', { kind: 'mpesa', provider: 'daraja', name: 'Sandbox till', environment: 'sandbox', settings: { shortCode: '600999', type: 'paybill' }, secrets: { consumerKey: 'k2', consumerSecret: 's2', passkey: 'p2' } });
+    expect(cfg.status).toBe(201);
+    const r = await t.client.post(`/settings/integrations/${cfg.body.data.id}/register-c2b`, {});
+    expect(r.status).toBe(422);
+    expect(r.body.error.code).toBe('C2B_URL_INVALID');
+    expect(r.body.error.message).toMatch(/API_PUBLIC_URL/);
+
+    // The client itself: an error answer from Safaricom is an error, even with HTTP 200.
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: any) =>
+      String(url).includes('oauth') ? new Response(JSON.stringify({ access_token: 'tok', expires_in: '3599' })) : new Response(JSON.stringify({ errorCode: '500.003.1001', errorMessage: 'Urls are already registered' }), { status: 500 }));
+    try {
+      const client = new DarajaClient({ environment: 'production', consumerKey: 'ck-c2b', consumerSecret: 'cs', passkey: 'p', shortCode: '123456', type: 'paybill' });
+      const err = await client.registerC2BUrls('https://hq.example.co.ke/c', 'https://hq.example.co.ke/v', '123456').catch((e) => e);
+      expect(explainC2BError(err, 'production')).toMatch(/only be registered once/);
+      const body = JSON.parse((fetchMock.mock.calls.at(-1)![1] as any).body);
+      expect(body).toEqual({ ShortCode: '123456', ResponseType: 'Completed', ConfirmationURL: 'https://hq.example.co.ke/c', ValidationURL: 'https://hq.example.co.ke/v' });
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });

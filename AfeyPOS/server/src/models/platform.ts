@@ -17,6 +17,8 @@ const tenantSettingsSchema = new Schema(
     cashierDiscountLimitBp: { type: Number, default: 1000 },
     receiptHeader: String,
     receiptFooter: { type: String, default: 'Thank you for shopping with us!' },
+    /** Receipt template, paper and fields (Settings > Receipts; see RECEIPT_DEFAULTS in shared). */
+    receipt: Schema.Types.Mixed,
     variableWeight: {
       enabled: { type: Boolean, default: false },
       prefixes: { type: [String], default: ['20', '21', '22', '23', '24', '25', '26', '27', '28', '29'] },

@@ -127,6 +127,8 @@ const integrationConfigSchema = new Schema(
     /** AES-256-GCM encrypted JSON of secrets. Never returned by the API. */
     secretsEnc: String,
     lastTest: { at: Date, ok: Boolean, message: String },
+    /** M-Pesa: the last C2B URL registration with Safaricom, and when a confirmation last arrived. */
+    c2bRegistration: { at: Date, ok: Boolean, message: String, shortCode: String, confirmationUrl: String, validationUrl: String, lastConfirmationAt: Date },
   },
   { timestamps: true },
 );

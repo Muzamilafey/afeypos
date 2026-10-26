@@ -1,14 +1,14 @@
 import { Router } from 'express';
 import net from 'node:net';
 import { z } from 'zod';
-import { HardwareDevice, Sale, Till, User, Tenant } from '../../models/index.js';
+import { HardwareDevice, Sale, Till, Tenant } from '../../models/index.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { env } from '../../config/env.js';
-import { renderReceiptEscPos, renderReceiptHtml, renderReceiptText } from './receipt.js';
+import { receiptContext, renderReceiptEscPos, renderReceiptHtml, renderReceiptText } from './receipt.js';
 import { EscPosBuilder } from './escpos.js';
 
 const router = Router();
@@ -111,18 +111,18 @@ router.post('/hardware/devices/:id/test', requirePermission('hardware.manage'), 
 
 /** Receipt in text, HTML (browser printing) or ESC/POS (base64, for the bridge) formats. */
 router.get('/sales/:id/receipt', requirePermission('sales.read'), async (req, res) => {
-  const { format, width } = parse(z.object({ format: z.enum(['html', 'text', 'escpos']).default('html'), width: z.coerce.number().int().min(24).max(64).default(42) }), req.query);
+  const { format, width } = parse(z.object({ format: z.enum(['html', 'text', 'escpos']).default('html'), width: z.coerce.number().int().min(24).max(64).optional() }), req.query);
   const sale = await Sale.findById(idParam(req.params.id)).lean();
   if (!sale) throw notFound('Sale');
   const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
-  const cashier = await User.findById(sale.cashierId, { name: 1 }).lean();
+  const ctx = await receiptContext(tenant as any, sale);
   if (format === 'html') {
-    res.type('html').send(renderReceiptHtml(tenant as any, sale as any, cashier?.name));
+    res.type('html').send(renderReceiptHtml(tenant as any, sale as any, ctx));
   } else if (format === 'text') {
-    res.type('text').send(renderReceiptText(tenant as any, sale as any, width, cashier?.name));
+    res.type('text').send(renderReceiptText(tenant as any, sale as any, { ...ctx, width }));
   } else {
     const openDrawer = sale.payments.some((p) => p.method === 'cash');
-    res.json({ data: { base64: renderReceiptEscPos(tenant as any, sale as any, { width, openDrawer, cashierName: cashier?.name }).toString('base64') } });
+    res.json({ data: { base64: renderReceiptEscPos(tenant as any, sale as any, { ...ctx, width, openDrawer }).toString('base64') } });
   }
 });
 
@@ -136,8 +136,8 @@ router.post('/sales/:id/print', requirePermission('sales.read'), async (req, res
   if (!printer || printer.connection !== 'network' || !printer.settings?.host) throw new AppError(409, 'NO_NETWORK_PRINTER', 'No network receipt printer is configured for this till; use browser printing');
   assertNetworkPrintingAllowed(printer.settings.host);
   const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
-  const cashier = await User.findById(sale.cashierId, { name: 1 }).lean();
-  const bytes = renderReceiptEscPos({ ...(tenant as any), settings: { ...(tenant as any).settings, receiptHeader: body.reprint ? 'REPRINT' : tenant?.settings?.receiptHeader } }, sale as any, { width: printer.settings.width ?? 42, openDrawer: !body.reprint && printer.settings.openDrawerOnCash !== false && sale.payments.some((p) => p.method === 'cash'), cashierName: cashier?.name });
+  const ctx = await receiptContext(tenant as any, sale);
+  const bytes = renderReceiptEscPos(tenant as any, sale as any, { ...ctx, reprint: body.reprint, width: printer.settings.width ?? undefined, openDrawer: !body.reprint && printer.settings.openDrawerOnCash !== false && sale.payments.some((p) => p.method === 'cash') });
   await sendRaw(printer.settings.host, printer.settings.port ?? 9100, bytes);
   if (body.reprint) await audit(req, { action: 'sale.receipt_reprinted', entity: 'Sale', entityId: sale._id });
   res.json({ ok: true });
