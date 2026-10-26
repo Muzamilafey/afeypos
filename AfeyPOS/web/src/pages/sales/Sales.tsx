@@ -7,8 +7,10 @@ import { useList, useLocations } from '../../lib/hooks';
 import { dateTime, money, paymentLabel, qty } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { ReturnWizard } from './Returns';
-import { printReceipt } from '../../lib/printing';
+import { printHtml, printReceipt } from '../../lib/printing';
 import { OverrideModal } from '../POS';
+import { Icon } from '../../components/icons';
+import { CashCount, cashCountTotal, type CashCounts } from '../../components/CashCount';
 import { EmailDocButton, PdfButton } from '../../components/DocumentActions';
 import { Button, Card, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, useConfirm, useToast } from '../../components/ui';
 
@@ -126,7 +128,9 @@ export function ShiftsPage() {
 function ShiftModal({ shift, onClose, onChanged }: { shift: any; onClose: () => void; onChanged: () => void }) {
   const { can } = useAuth();
   const summary = useQuery({ queryKey: ['shift-summary', shift._id], queryFn: () => api<{ data: any }>(`/shifts/${shift._id}/summary`).then((r) => r.data) });
-  const [counted, setCounted] = useState('');
+  const { me } = useAuth();
+  const [counts, setCounts] = useState<CashCounts>({});
+  const countedCents = cashCountTotal(counts, me?.tenant.settings?.currency);
   const [cash, setCash] = useState({ type: 'cash_out', amount: '', reason: '' });
   const [error, setError] = useState<unknown>(null);
   const [approval, setApproval] = useState<{ permission: string; message: string } | null>(null);
@@ -136,7 +140,7 @@ function ShiftModal({ shift, onClose, onChanged }: { shift: any; onClose: () => 
   const close = async (overrideToken?: string) => {
     setError(null);
     try {
-      await api(`/shifts/${shift._id}/close`, { body: { countedCashCents: Math.round(Number(counted) * 100), overrideToken } });
+      await api(`/shifts/${shift._id}/close`, { body: { countedCashCents: countedCents, denominations: counts, overrideToken } });
       onChanged(); onClose();
     } catch (e: any) {
       if (e?.code === 'OVERRIDE_REQUIRED') setApproval({ permission: e.details?.permission ?? 'shifts.manage', message: e.message });
@@ -166,13 +170,14 @@ function ShiftModal({ shift, onClose, onChanged }: { shift: any; onClose: () => 
                   <Button variant="secondary" onClick={async () => { try { await api(`/shifts/${shift._id}/cash`, { body: { type: cash.type, amountCents: Math.round(Number(cash.amount) * 100), reason: cash.reason } }); setCash({ ...cash, amount: '', reason: '' }); summary.refetch(); } catch (e) { setError(e); } }}>Record</Button>
                 </div>
               )}
-              <div className="flex items-end gap-2 border-t border-ink-100 pt-3 dark:border-ink-800">
-                <Field label="Counted cash in drawer"><Input inputMode="decimal" value={counted} onChange={(e) => setCounted(e.target.value)} /></Field>
-                <Button onClick={() => close()} disabled={counted === ''}>Close shift</Button>
+              <div className="space-y-3 border-t border-ink-100 pt-3 dark:border-ink-800">
+                <CashCount counts={counts} onChange={setCounts} label="Counted cash" />
+                {countedCents > 0 && !blind && <p>Difference: <strong>{money(countedCents - s.expectedCashCents)}</strong></p>}
+                <Button onClick={() => close()}>Close shift · {money(countedCents)}</Button>
               </div>
-              {counted !== '' && !blind && <p>Variance: <strong>{money(Math.round(Number(counted) * 100) - s.expectedCashCents)}</strong></p>}
             </>
           )}
+          <Button size="sm" variant="secondary" onClick={() => printHtml(`/shifts/${shift._id}/report`).catch(() => undefined)}><Icon name="printer" className="h-3.5 w-3.5" />{shift.status === 'closed' ? 'Print Z report' : 'Print X report'}</Button>
           {shift.status === 'closed' && <p>Counted {money(shift.countedCashCents)}{blind ? '' : ' · variance '}{!blind && <strong className={shift.varianceCents < 0 ? 'text-red-600' : ''}>{money(shift.varianceCents)}</strong>}</p>}
           <ErrorBox error={error} />
         </div>

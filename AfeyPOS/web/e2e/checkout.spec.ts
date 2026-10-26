@@ -35,8 +35,10 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await page.screenshot({ path: 'test-results/product.png', fullPage: true });
 
   await page.getByRole('link', { name: 'Checkout', exact: true }).click();
-  await page.getByLabel('Opening float').fill('1000');
-  await page.getByRole('button', { name: 'Open shift' }).click();
+  // Start shift: count the float note by note.
+  await page.getByLabel(/Number of .*1,000\.00 notes/).fill('1');
+  await expect(page.getByTestId('cash-count-total')).toContainText('1,000.00');
+  await page.getByRole('button', { name: /^Start shift/ }).click();
   const scan = page.getByLabel('Scan or search products');
   await scan.fill('MILK500');
   await scan.press('Enter');

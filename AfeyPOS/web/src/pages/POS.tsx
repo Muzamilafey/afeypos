@@ -9,7 +9,8 @@ import { getWorkstation, setWorkstation } from '../lib/workstation';
 import { bridgeConfigured, fingerprint } from '../lib/bridge';
 import { money, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
 import { useRealtime } from '../lib/realtime';
-import { printReceipt } from '../lib/printing';
+import { printHtml, printReceipt } from '../lib/printing';
+import { CashCount, cashCountTotal, type CashCounts } from '../components/CashCount';
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
@@ -49,28 +50,111 @@ export function POSPage() {
   if (shift.isLoading) return <div className="p-10"><Spinner /></div>;
   const requireShift = (me?.tenant.checkoutRules ?? mergeCheckoutRules(undefined, me?.tenant.settings ?? {})).shifts.required;
   if (requireShift && !shift.data) return <OpenShift tillId={tillId} tillName={till.name} onOpened={() => shift.refetch()} onChangeTill={() => { setWorkstation({ tillId: undefined }); setTillId(''); }} />;
-  return <Checkout till={till} shift={shift.data} />;
+  return <Checkout till={till} shift={shift.data} onShiftClosed={() => shift.refetch()} />;
 }
 
 function OpenShift({ tillId, tillName, onOpened, onChangeTill }: { tillId: string; tillName: string; onOpened: () => void; onChangeTill: () => void }) {
+  const { me } = useAuth();
+  const [counts, setCounts] = useState<CashCounts>({});
+  const [byTotal, setByTotal] = useState(false);
   const [floatCents, setFloat] = useState<number | null>(0);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const currency = me?.tenant.settings?.currency;
+  const amount = byTotal ? (floatCents ?? 0) : cashCountTotal(counts, currency);
+  const open = async () => {
+    setBusy(true); setError(null);
+    try { await api('/shifts', { body: { tillId, openingFloatCents: amount, denominations: byTotal ? undefined : counts } }); onOpened(); } catch (e) { setError(e); } finally { setBusy(false); }
+  };
   return (
-    <div className="mx-auto max-w-md card p-6">
-      <h2 className="font-semibold">Open shift on {tillName}</h2>
-      <p className="mb-4 text-sm text-ink-500">Count the cash in the drawer before you start selling.</p>
-      <Field label="Opening float"><MoneyInput value={floatCents} onChange={setFloat} autoFocus /></Field>
+    <div className="mx-auto max-w-xl card p-6">
+      <div className="mb-4 flex items-start gap-3">
+        <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><Icon name="play" className="h-5 w-5" /></span>
+        <div><h2 className="text-lg font-bold">Start shift on {tillName}</h2><p className="text-sm text-ink-500">Count the cash in the drawer (the float) before you start selling.</p></div>
+      </div>
+      {byTotal
+        ? <Field label="Opening float"><MoneyInput value={floatCents} onChange={setFloat} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') open(); }} /></Field>
+        : <CashCount counts={counts} onChange={setCounts} autoFocus label="Opening float" />}
+      <button type="button" className="mt-2 text-xs font-semibold text-brand-600 hover:underline" onClick={() => setByTotal(!byTotal)}>{byTotal ? 'Count notes and coins instead' : 'Enter the total instead'}</button>
       <div className="mt-4"><ErrorBox error={error} /></div>
       <div className="mt-4 flex gap-2">
-        <Button className="flex-1" size="lg" loading={busy} onClick={async () => { setBusy(true); try { await api('/shifts', { body: { tillId, openingFloatCents: floatCents ?? 0 } }); onOpened(); } catch (e) { setError(e); } finally { setBusy(false); } }}>Open shift</Button>
+        <Button className="flex-1" size="lg" loading={busy} onClick={open}>Start shift · {money(amount)}</Button>
         <Button variant="secondary" size="lg" onClick={onChangeTill}>Change till</Button>
       </div>
     </div>
   );
 }
 
-function Checkout({ till, shift }: { till: { _id: string; name: string; warehouseId: string; branchId: string }; shift: any }) {
+/**
+ * End shift at the till: count the drawer note by note and coin by coin, then close the shift (a supervisor
+ * may need to approve, per Checkout rules) and print the Z report. In blind mode the expected cash is hidden.
+ */
+function EndShiftModal({ shift, cartHasItems, onClose, onClosed }: { shift: any; cartHasItems: boolean; onClose: () => void; onClosed: () => void }) {
+  const { me } = useAuth();
+  const toast = useToast();
+  const summary = useQuery({ queryKey: ['shift-summary', shift._id], queryFn: () => api<{ data: any }>(`/shifts/${shift._id}/summary`).then((r) => r.data) });
+  const [counts, setCounts] = useState<CashCounts>({});
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [approval, setApproval] = useState<{ permission: string; message: string } | null>(null);
+  const [done, setDone] = useState<any>(null);
+  const counted = cashCountTotal(counts, me?.tenant.settings?.currency);
+  const s = summary.data;
+  const blind = Boolean(s?.blind);
+  const close = async (overrideToken?: string) => {
+    setBusy(true); setError(null);
+    try {
+      const r = await api<{ data: any }>(`/shifts/${shift._id}/close`, { body: { countedCashCents: counted, denominations: counts, notes: notes || undefined, overrideToken } });
+      setDone(r.data);
+      printHtml(`/shifts/${shift._id}/report`).catch(() => undefined);
+    } catch (e: any) {
+      if (e?.code === 'OVERRIDE_REQUIRED') setApproval({ permission: e.details?.permission ?? 'shifts.manage', message: e.message });
+      else setError(e);
+    } finally { setBusy(false); }
+  };
+  if (done) {
+    const v = done.shift?.varianceCents;
+    return (
+      <Modal open onClose={onClosed} title={`Shift ${shift.number} closed`} icon="check" subtitle="The Z report was sent to the printer."
+        footer={<><Button variant="secondary" onClick={() => printHtml(`/shifts/${shift._id}/report`).catch(toast.error)}><Icon name="printer" className="h-4 w-4" />Print Z report again</Button><Button autoFocus onClick={onClosed}>Done</Button></>}>
+        <div className="space-y-3 text-sm">
+          <div className="flex justify-between rounded-lg bg-ink-50 px-4 py-3 dark:bg-ink-800/50"><span>Counted cash</span><b className="text-lg">{money(done.shift.countedCashCents)}</b></div>
+          {!blind && done.expectedCashCents !== undefined && <div className="flex justify-between px-4"><span>Expected</span><span>{money(done.expectedCashCents)}</span></div>}
+          {!blind && v !== undefined && <div className={cx('flex justify-between rounded-lg px-4 py-3 font-bold', v === 0 ? 'bg-emerald-50 text-emerald-800' : v < 0 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}><span>{v === 0 ? 'Balanced' : v < 0 ? 'Short' : 'Over'}</span><span>{money(v)}</span></div>}
+          {blind && <p className="text-ink-500">The count is recorded. A supervisor reviews the difference.</p>}
+        </div>
+      </Modal>
+    );
+  }
+  return (
+    <Modal open onClose={onClose} title={`End shift ${shift.number}`} icon="clock" subtitle={`Started ${new Date(shift.openedAt).toLocaleString()} with a float of ${money(shift.openingFloatCents)}`}
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} disabled={cartHasItems} onClick={() => close()}>Close shift · {money(counted)}</Button></>}>
+      <div className="space-y-4">
+        {cartHasItems && <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">Finish or hold the current sale before ending the shift.</p>}
+        {s && (
+          <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Sales</div><b>{s.sales.count}</b></div>
+            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Takings</div><b>{money(s.sales.totalCents)}</b></div>
+            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Cash sales</div><b>{money(s.paymentsByMethod?.cash?.totalCents ?? 0)}</b></div>
+            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Expected cash</div><b>{blind ? 'Hidden' : money(s.expectedCashCents)}</b></div>
+          </div>
+        )}
+        <CashCount counts={counts} onChange={setCounts} autoFocus={!cartHasItems} label="Counted cash" />
+        {!blind && s && counted > 0 && (
+          <p className={cx('text-sm font-semibold', counted === s.expectedCashCents ? 'text-emerald-700' : counted < s.expectedCashCents ? 'text-red-600' : 'text-amber-700')}>
+            {counted === s.expectedCashCents ? 'Matches the expected cash.' : `${counted < s.expectedCashCents ? 'Short by' : 'Over by'} ${money(Math.abs(counted - s.expectedCashCents))}`}
+          </p>
+        )}
+        <Field label="Notes (optional)"><Input value={notes} maxLength={500} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. 500 note given to supervisor at 4 pm" /></Field>
+        <ErrorBox error={error} />
+      </div>
+      {approval && <OverrideModal permission={approval.permission} message={approval.message} onClose={() => setApproval(null)} onApproved={(token) => { setApproval(null); close(token); }} />}
+    </Modal>
+  );
+}
+
+function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: string; warehouseId: string; branchId: string }; shift: any; onShiftClosed: () => void }) {
   const { me, can, has } = useAuth();
   const toast = useToast();
   const qc = useQueryClient();
@@ -108,6 +192,8 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
   const [voucherOpen, setVoucherOpen] = useState(false);
   const [voucherCode, setVoucherCode] = useState('');
+  const [endingShift, setEndingShift] = useState(false);
+  const [startingShift, setStartingShift] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
   const [lastSale, setLastSale] = useState<any>(null);
   const [error, setError] = useState<unknown>(null);
@@ -260,7 +346,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   };
 
   // Keyboard: the till works without a mouse. Shortcuts act only when no window (payment, customer...) is open.
-  const anyOpen = Boolean(paying || panel || customerOpen || lastSale || removal || loyaltyOpen || voucherOpen);
+  const anyOpen = Boolean(paying || panel || customerOpen || lastSale || removal || loyaltyOpen || voucherOpen || endingShift);
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (anyOpen) return;
@@ -329,6 +415,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
     { key: 'gdisc', label: 'Sale discount', icon: 'tag', tone: 'text-violet-600 bg-violet-50', onClick: () => setPanel({ kind: 'cart' }), disabled: !cart.lines.length || !can('sales.discount') },
     { key: 'resume', label: 'Resume held', icon: 'play', tone: 'text-orange-600 bg-orange-50', onClick: () => setPanel({ kind: 'resume' }), disabled: !held.length, count: held.length },
     { key: 'browse', label: 'Browse products', icon: 'grid', tone: 'text-teal-600 bg-teal-50', onClick: () => setPanel({ kind: 'browse' }) },
+    ...(shift ? [{ key: 'endshift', label: 'End shift', icon: 'clock', tone: 'text-amber-700 bg-amber-50', onClick: () => { setPanel(null); setEndingShift(true); } }] : []),
     { key: 'clear', label: 'Clear sale', icon: 'x', tone: 'text-ink-600 bg-ink-100', onClick: () => { setPanel(null); clearCart(active); }, disabled: !cart.lines.length, lock: needsApproval('clear') },
   ];
 
@@ -365,6 +452,17 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
             </select>
           )}
           <Badge tone="green">{till.name}</Badge>
+          {!shift && (
+            <button type="button" onClick={() => setStartingShift(true)} className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+              <Icon name="play" className="h-3.5 w-3.5" />Start shift
+            </button>
+          )}
+          {shift && (
+            <button type="button" onClick={() => setEndingShift(true)} title={`Shift ${shift.number} since ${new Date(shift.openedAt).toLocaleTimeString()}`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <Icon name="clock" className="h-3.5 w-3.5" />End shift
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-3 px-5 pb-2 pt-4">
@@ -543,6 +641,12 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
         <PaymentModal cart={cart} total={totals.total} till={till} shift={shift} initialMethod={paying} initialVoucher={paying === 'voucher' ? voucherCode : undefined} onClose={() => setPaying(false)}
           onDone={(sale) => { setPaying(false); setLastSale(sale); removeCart(active); pickup.refetch(); qc.invalidateQueries({ queryKey: ['pos-search'] }); searchRef.current?.focus(); }} />
       )}
+      {startingShift && (
+        <Modal open onClose={() => setStartingShift(false)} title="Start shift" icon="play">
+          <OpenShift tillId={till._id} tillName={till.name} onOpened={() => { setStartingShift(false); onShiftClosed(); }} onChangeTill={() => setStartingShift(false)} />
+        </Modal>
+      )}
+      {endingShift && shift && <EndShiftModal shift={shift} cartHasItems={cart.lines.length > 0} onClose={() => { setEndingShift(false); searchRef.current?.focus(); }} onClosed={() => { setEndingShift(false); qc.invalidateQueries({ queryKey: ['shifts'] }); onShiftClosed(); }} />}
       {lastSale && <ReceiptModal sale={lastSale} tillId={till._id} onClose={() => { setLastSale(null); searchRef.current?.focus(); }} />}
     </div>
   );

@@ -96,6 +96,18 @@ test('gift vouchers and the loyalty program, from the back office to the till', 
   await expect(carol.getByText(/Sale RCP-\d+ complete/)).toHaveCount(0);
   await expect(scan).toBeFocused();
 
+  // End shift: count the drawer in notes and coins, close it, back to Start shift.
+  await carol.getByRole('button', { name: 'End shift' }).click();
+  await carol.getByLabel(/Number of .*500\.00 notes/).fill('1');
+  await carol.getByLabel(/Number of .*100\.00 notes/).fill('2');
+  await carol.getByLabel(/Number of .*20\.00 coins/).fill('3');
+  await expect(carol.getByTestId('cash-count-total')).toContainText('760.00');
+  if (process.env.SHOTS) await carol.screenshot({ path: `${process.env.SHOTS}/end-shift.png` });
+  await carol.getByRole('button', { name: /^Close shift/ }).click();
+  await expect(carol.getByText(/Shift SHF-\d+ closed/)).toBeVisible();
+  await carol.getByRole('button', { name: 'Done' }).click();
+  await expect(carol.getByRole('heading', { name: /Start shift on/ })).toBeVisible();
+
   // The voucher kept its 35.00.
   await page.goto('/vouchers');
   await expect(page.getByRole('row', { name: new RegExp(code) })).toContainText('35.00');

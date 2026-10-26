@@ -7,7 +7,7 @@ import { idempotent } from '../../http/idempotency.js';
 import { AppError, notFound } from '../../lib/errors.js';
 import { emitToTenant } from '../../realtime/socket.js';
 import { notify } from '../notifications/service.js';
-import { formatMoney, mergeReceipt } from '@afeypos/shared';
+import { denominationsFor, denominationTotalCents, formatMoney, mergeReceipt } from '@afeypos/shared';
 import { checkout, checkoutSchema } from './checkout.js';
 import { mpesaPhoneOf, processReturn, returnPolicy, returnSchema, voidSale, voidSchema } from './returns.js';
 import { checkoutRulesOf, closeShift, hideExpected, openShift, recordCashMovement, shiftSummary } from './shifts.js';
@@ -181,8 +181,8 @@ router.get('/shifts/current', requirePermission('shifts.open'), async (req, res)
 });
 
 router.post('/shifts', requirePermission('shifts.open'), async (req, res) => {
-  const body = parse(z.object({ tillId: objectId, openingFloatCents: positiveCents.default(0) }), req.body);
-  res.status(201).json({ data: await openShift(req, body.tillId, body.openingFloatCents) });
+  const body = parse(z.object({ tillId: objectId, openingFloatCents: positiveCents.default(0), denominations: z.record(z.string(), z.number().int().nonnegative()).optional() }), req.body);
+  res.status(201).json({ data: await openShift(req, body.tillId, body.openingFloatCents, body.denominations) });
 });
 
 router.get('/shifts/:id/summary', requirePermission('shifts.open'), async (req, res) => {
@@ -191,6 +191,37 @@ router.get('/shifts/:id/summary', requirePermission('shifts.open'), async (req, 
   // Shown even in blind mode: the till only learns that a cash pickup is due, not the amount.
   const max = checkoutRulesOf(req).shifts.maxCashInDrawerCents;
   res.json({ data: { ...hideExpected(req, summary), pickupDue: summary.shift.status === 'open' && max > 0 && summary.expectedCashCents > max } });
+});
+
+/** Printable shift report (X while open, Z once closed), with the note-and-coin counts. */
+router.get('/shifts/:id/report', requirePermission('shifts.open'), async (req, res) => {
+  const summary = hideExpected(req, await shiftSummary(idParam(req.params.id))) as any;
+  const sh = summary.shift;
+  if (!can(req, 'shifts.manage') && String(sh.userId) !== String(req.auth!.userId)) throw notFound('Shift');
+  const tenant: any = await runAsPlatform(() => Tenant.findById(req.tenant!._id, { name: 1, settings: 1 }).lean());
+  const cur = tenant?.settings?.currency ?? 'KES';
+  const m = (c?: number | null) => (c === undefined || c === null ? '—' : formatMoney(c, cur));
+  const [till, cashier] = await Promise.all([Till.findById(sh.tillId, { name: 1 }).lean(), User.findById(sh.userId, { name: 1 }).lean()]);
+  const list = denominationsFor(cur) ?? [];
+  const esc = (x: string) => x.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+  const countTable = (counts: Record<string, number> | undefined, title: string) => {
+    if (!counts) return '';
+    const rows = list.filter((d) => counts[d.key]).map((d) => `<tr><td>${d.kind === 'note' ? 'Note' : 'Coin'} ${esc(m(d.valueCents))}</td><td class="r">× ${counts[d.key]}</td><td class="r">${esc(m(d.valueCents * counts[d.key]!))}</td></tr>`).join('');
+    return `<h3>${title}</h3><table>${rows || '<tr><td>None</td></tr>'}<tr class="t"><td>Total</td><td></td><td class="r">${esc(m(denominationTotalCents(counts, list)))}</td></tr></table>`;
+  };
+  const kv = (k: string, v: string) => `<tr><td>${esc(k)}</td><td class="r">${esc(v)}</td></tr>`;
+  const closed = sh.status === 'closed';
+  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>${closed ? 'Z' : 'X'} report ${esc(sh.number)}</title><style>
+    @page{size:80mm auto;margin:4mm}body{width:72mm;margin:0 auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:#000}
+    h1{font-size:15px;text-align:center;margin:0}h2{font-size:12px;text-align:center;margin:2px 0 8px;font-weight:400}h3{font-size:12px;margin:10px 0 2px;border-bottom:1px dashed #000}
+    table{width:100%;border-collapse:collapse}td{padding:1px 0}.r{text-align:right}.t td{border-top:1px solid #000;font-weight:700}
+  </style></head><body><h1>${esc(tenant?.name ?? '')}</h1><h2>${closed ? 'Z REPORT (shift closed)' : 'X REPORT (shift open)'}</h2>
+  <table>${kv('Shift', sh.number)}${kv('Till', till?.name ?? '')}${kv('Cashier', cashier?.name ?? '')}${kv('Opened', new Date(sh.openedAt).toLocaleString('en-KE'))}${closed ? kv('Closed', new Date(sh.closedAt).toLocaleString('en-KE')) : ''}</table>
+  <h3>Sales</h3><table>${kv('Sales', `${summary.sales.count} · ${m(summary.sales.totalCents)}`)}${kv('Discounts', m(summary.sales.discountCents))}${kv('Tax', m(summary.sales.taxCents))}${kv('Voids', `${summary.voids.count} · ${m(summary.voids.totalCents)}`)}</table>
+  <h3>Payments</h3><table>${Object.entries(summary.paymentsByMethod ?? {}).map(([k, v]: any) => kv(k, m(v.totalCents))).join('') || kv('None', '')}</table>
+  <h3>Cash</h3><table>${kv('Opening float', m(sh.openingFloatCents))}${summary.blind ? '' : kv('Expected in drawer', m(summary.expectedCashCents ?? sh.expectedCashCents))}${closed ? kv('Counted', m(sh.countedCashCents)) : ''}${closed && !summary.blind ? kv('Difference', m(sh.varianceCents)) : ''}</table>
+  ${countTable(sh.openingDenominations, 'Opening float count')}${countTable(sh.denominations, 'Closing cash count')}
+  ${sh.notes ? `<h3>Notes</h3><p>${esc(sh.notes)}</p>` : ''}<p style="margin-top:14px">Cashier signature: ____________</p><p>Supervisor signature: ____________</p></body></html>`);
 });
 
 router.post('/shifts/:id/cash', requirePermission('cash.movement'), async (req, res) => {

@@ -9,3 +9,4 @@ export * from './code128.js';
 export * from './checkoutRules.js';
 export * from './banks.js';
 export * from './loyalty.js';
+export * from './cash.js';

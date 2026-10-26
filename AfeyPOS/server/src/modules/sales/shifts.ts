@@ -6,12 +6,24 @@ import { AppError, forbidden, notFound } from '../../lib/errors.js';
 import { nextNumber } from '../../lib/numbering.js';
 import { audit } from '../../lib/audit.js';
 import { assertBranchAccess, can } from '../../http/auth.js';
-import { mergeCheckoutRules } from '@afeypos/shared';
+import { denominationTotalCents, denominationsFor, mergeCheckoutRules } from '@afeypos/shared';
 import { consumeOverride } from '../auth/routes.js';
 
 export const checkoutRulesOf = (req: Request) => mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
 
-export async function openShift(req: Request, tillId: Types.ObjectId, openingFloatCents: number) {
+/** A note-and-coin count must use this currency's denominations and add up to the amount given. */
+export function checkCount(req: Request, amountCents: number, counts: Record<string, number> | undefined, what: string) {
+  if (!counts) return;
+  const list = denominationsFor(req.tenant!.settings?.currency);
+  if (!list) return;
+  const unknown = Object.keys(counts).filter((k) => !list.some((d) => d.key === k));
+  if (unknown.length) throw new AppError(400, 'BAD_COUNT', `Unknown notes or coins: ${unknown.join(', ')}`);
+  const total = denominationTotalCents(counts, list);
+  if (total !== amountCents) throw new AppError(400, 'COUNT_MISMATCH', `The notes and coins add up to ${(total / 100).toFixed(2)}, not the ${what} of ${(amountCents / 100).toFixed(2)}`);
+}
+
+export async function openShift(req: Request, tillId: Types.ObjectId, openingFloatCents: number, openingDenominations?: Record<string, number>) {
+  checkCount(req, openingFloatCents, openingDenominations, 'opening float');
   const till = await Till.findOne({ _id: tillId, active: true });
   if (!till) throw notFound('Till');
   assertBranchAccess(req, till.branchId);
@@ -27,7 +39,7 @@ export async function openShift(req: Request, tillId: Types.ObjectId, openingFlo
   try {
     return await withTransaction(async () => {
       const number = await nextNumber('shift', 'SHF');
-      const [shift] = await Shift.create([{ number, tillId, branchId: till.branchId, userId: req.auth!.userId, openingFloatCents }]);
+      const [shift] = await Shift.create([{ number, tillId, branchId: till.branchId, userId: req.auth!.userId, openingFloatCents, openingDenominations }]);
       if (openingFloatCents > 0) await CashMovement.create([{ shiftId: shift._id, tillId, type: 'float', amountCents: openingFloatCents, userId: req.auth!.userId, reason: 'Opening float' }]);
       await audit(req, { action: 'shift.opened', entity: 'Shift', entityId: shift._id, details: { till: till.code, openingFloatCents } });
       return shift;
@@ -78,6 +90,7 @@ export async function recordCashMovement(req: Request, shiftId: Types.ObjectId, 
 
 export async function closeShift(req: Request, shiftId: Types.ObjectId, countedCashCents: number, notes?: string, denominations?: Record<string, number>, overrideToken?: string) {
   const rules = checkoutRulesOf(req).shifts;
+  checkCount(req, countedCashCents, denominations, 'counted cash');
   return withTransaction(async () => {
     const shift = await Shift.findOne({ _id: shiftId, status: 'open' });
     if (!shift) throw new AppError(409, 'SHIFT_NOT_OPEN', 'Shift is not open');

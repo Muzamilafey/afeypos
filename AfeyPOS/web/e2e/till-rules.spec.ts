@@ -36,8 +36,9 @@ test('checkout rules: a cashier needs a supervisor to delete an item; payment ti
   await expect(carol.getByRole('link', { name: 'Returns', exact: true })).toHaveCount(0);
   await carol.goto('/returns');
   await expect(carol).toHaveURL(/\/pos$/);
+  await carol.getByRole('button', { name: 'Enter the total instead' }).click();
   await carol.getByLabel('Opening float').fill('500');
-  await carol.getByRole('button', { name: 'Open shift' }).click();
+  await carol.getByRole('button', { name: /^Start shift/ }).click();
 
   const scan = carol.getByLabel('Scan or search products');
   await scan.fill('MILK500');

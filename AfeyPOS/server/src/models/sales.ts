@@ -190,6 +190,8 @@ const shiftSchema = new Schema(
     openedAt: { type: Date, default: () => new Date() },
     closedAt: Date,
     openingFloatCents: { type: Number, default: 0 },
+    /** Notes and coins counted into the drawer at the start ("note-1000": 2, ...). */
+    openingDenominations: { type: Schema.Types.Mixed },
     expectedCashCents: Number,
     countedCashCents: Number,
     varianceCents: Number,

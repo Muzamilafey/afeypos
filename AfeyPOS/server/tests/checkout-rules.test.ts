@@ -84,4 +84,17 @@ describe('checkout rules', () => {
     expect((await sell(500)).body.error.code).toBe('OVERRIDE_REQUIRED');
     await setRules({ discounts: { allowed: true } });
   });
+
+  it('closes a shift with a note-and-coin count that must add up, and prints the Z report', async () => {
+    const current = (await cashier.get(`/shifts/current?tillId=${till}`)).body.data;
+    const bad = await cashier.post(`/shifts/${current._id}/close`, { countedCashCents: 150000, denominations: { 'note-1000': 1, 'note-200': 1 }, overrideToken: await approve('shifts.manage') });
+    expect(bad.body.error.code).toBe('COUNT_MISMATCH');
+    expect((await cashier.post(`/shifts/${current._id}/close`, { countedCashCents: 1000, denominations: { 'note-3': 1 } })).body.error.code).toBe('BAD_COUNT');
+    const ok = await cashier.post(`/shifts/${current._id}/close`, { countedCashCents: 125050, denominations: { 'note-1000': 1, 'note-200': 1, 'coin-20': 2, 'coin-10': 1, 'coin-0.5': 1 }, overrideToken: await approve('shifts.manage') });
+    expect(ok.status).toBe(200);
+    const report = await t.client.get(`/shifts/${current._id}/report`);
+    expect(report.text).toContain('Z REPORT');
+    expect(report.text).toContain('Closing cash count');
+    expect(report.text).toMatch(/Coin Ksh.*0\.50/);
+  });
 });
