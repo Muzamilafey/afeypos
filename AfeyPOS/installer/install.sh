@@ -138,6 +138,8 @@ fi
 # ---------- the app ----------
 say "Getting Afey POS"
 rel="$RELEASES/$(date +%Y%m%d-%H%M%S)"; mkdir -p "$rel"
+# A failed run removes its half-made version; the running one is untouched.
+trap '[ -n "${rel:-}" ] && [ -d "$rel" ] && [ "$(readlink -f "$DIR/app" 2>/dev/null)" != "$(readlink -f "$rel")" ] && rm -rf "$rel"' EXIT
 if [ -n "$SOURCE" ]; then
   [ -f "$SOURCE/package.json" ] && [ -d "$SOURCE/server" ] || die "--source must be the AfeyPOS folder (with package.json and server/)"
   tar -C "$SOURCE" --exclude=node_modules --exclude=./data --exclude=server/.env --exclude='*/dist' --exclude=test-results -cf - . | tar -C "$rel" -xf -
