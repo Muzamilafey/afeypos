@@ -19,6 +19,7 @@
 #   --hq-url URL --sync-token T --branch-code C   branch servers (from head office: Administration > Branch sync)
 #   --encryption-key KEY           branch servers: head office's ENCRYPTION_KEY (from its server/.env)
 #   --mongo-uri URI                use an existing MongoDB replica set (e.g. Atlas) instead of installing one
+#   --mongo-user U --mongo-password P   login for that MongoDB (kept as MONGODB_USERNAME/PASSWORD in server/.env)
 #   --dir /opt/afeypos             install location
 #   --ref HEAD                     branch, tag or commit to install (HEAD = the default branch);   --repo owner/name (default Muzamilafey/afeypos)
 #   --source DIR                   install from a local copy of the AfeyPOS folder instead of downloading
@@ -45,6 +46,7 @@ while [ $# -gt 0 ]; do
     --encryption-key) ENC_KEY="$2"; shift ;;
     --domain) DOMAIN="$2"; shift ;; --shop-host) SHOP_HOST="$2"; shift ;; --hq-url) HQ_URL="$2"; shift ;;
     --sync-token) SYNC_TOKEN="$2"; shift ;; --branch-code) BRANCH_CODE="$2"; shift ;; --mongo-uri) MONGO_URI="$2"; shift ;;
+    --mongo-user) MONGO_USER="$2"; shift ;; --mongo-password) MONGO_PASSWORD="$2"; shift ;;
     --dir) DIR="$2"; shift ;; --ref) REF="$2"; shift ;; --repo) REPO="$2"; shift ;; --source) SOURCE="$2"; shift ;;
     --mongod) MONGOD_BIN="$2"; shift ;; --no-service) NO_SERVICE=1 ;;
     -h|--help) sed -n '2,32p' "$0" 2>/dev/null || echo "See installer/install.sh"; exit 0 ;;
@@ -132,7 +134,6 @@ if [ -z "$MONGO_URI" ]; then
   fi
   "$MONGOD_BIN" --version >/dev/null 2>&1 || die "mongod at $MONGOD_BIN does not run (missing system libraries?)"
   note "MongoDB: $("$MONGOD_BIN" --version | sed -n 1p)"
-  MONGO_URI="mongodb://127.0.0.1:27017/afeypos?replicaSet=rs0"
   LOCAL_DB=1
 else
   LOCAL_DB=0
@@ -167,8 +168,22 @@ else
   RUN_AS=()
 fi
 
+port_busy() { (echo > "/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 if [ "$LOCAL_DB" = 1 ]; then
   say "Setting up the database (replica set, listening on 127.0.0.1 only)"
+  # Afey POS runs its own MongoDB. Another MongoDB already on this server (often on 27017 with a password)
+  # must never be used by mistake: stop ours, keep its remembered port if free, else take the first free
+  # port from 27018. To use an existing MongoDB instead, pass --mongo-uri (see docs/VPS.md).
+  if [ "$NO_SERVICE" = 0 ]; then systemctl stop afeypos-mongodb 2>/dev/null || true; sleep 1; fi
+  if [ -z "${MONGO_PORT:-}" ] && [ -f "$DIR/mongodb/mongod.conf" ]; then MONGO_PORT="$(sed -n 's/^ *port: *\([0-9]*\).*/\1/p' "$DIR/mongodb/mongod.conf" | head -n1)"; fi
+  MONGO_PORT="${MONGO_PORT:-27018}"
+  if port_busy "$MONGO_PORT"; then
+    note "Port $MONGO_PORT is used by another program (another MongoDB?); Afey POS keeps its own database on a free port"
+    MONGO_PORT=27018
+    while port_busy "$MONGO_PORT"; do MONGO_PORT=$((MONGO_PORT + 1)); [ "$MONGO_PORT" -le 27100 ] || die "No free port for the Afey POS database between 27018 and 27100"; done
+  fi
+  MONGO_URI="mongodb://127.0.0.1:$MONGO_PORT/afeypos?replicaSet=rs0"
+  note "Database port: $MONGO_PORT"
   cat > "$DIR/mongodb/mongod.conf" <<EOF
 storage:
   dbPath: $DIR/mongodb/db
@@ -178,7 +193,7 @@ systemLog:
   logAppend: true
 net:
   bindIp: 127.0.0.1
-  port: 27017
+  port: $MONGO_PORT
 replication:
   replSetName: rs0
 EOF
@@ -200,10 +215,18 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload && systemctl enable --now afeypos-mongodb >/dev/null
+    systemctl daemon-reload && systemctl enable afeypos-mongodb >/dev/null
     systemctl restart afeypos-mongodb
-  elif ! (echo > /dev/tcp/127.0.0.1/27017) 2>/dev/null; then
+  else
     "$MONGOD_BIN" --config "$DIR/mongodb/mongod.conf" --fork >/dev/null
+  fi
+  # Our own database must be the one answering before going on.
+  up=0
+  for _ in $(seq 1 30); do if port_busy "$MONGO_PORT"; then up=1; break; fi; sleep 1; done
+  if [ "$up" = 0 ] || { [ "$NO_SERVICE" = 0 ] && ! systemctl is-active --quiet afeypos-mongodb; }; then
+    tail -n 20 "$DIR/mongodb/log/mongod.log" 2>/dev/null || true
+    [ "$NO_SERVICE" = 0 ] && journalctl -u afeypos-mongodb -n 20 --no-pager 2>/dev/null || true
+    die "The Afey POS database did not start on port $MONGO_PORT (see the log above)"
   fi
 fi
 
@@ -211,6 +234,7 @@ fi
 say "Configuring and building (a few minutes the first time)"
 [ "$NO_SERVICE" = 0 ] && chown -R afeypos:afeypos "$rel" "$DATA"
 setup=(--mode "$MODE" --port "$PORT" --mongo-uri "$MONGO_URI" --data-dir "$DATA" --app-dir "$DIR/app")
+[ -n "${MONGO_USER:-}" ] && setup+=(--mongo-user "$MONGO_USER" --mongo-password "${MONGO_PASSWORD:-}")
 [ -n "$PUBLIC_URL" ] && setup+=(--public-url "$PUBLIC_URL")
 [ -n "$SHOP_HOST" ] && setup+=(--shop-host "$SHOP_HOST")
 [ -n "$HQ_URL" ] && setup+=(--hq-url "$HQ_URL")
@@ -289,6 +313,7 @@ cat > /etc/afeypos/install.conf <<EOF 2>/dev/null || true
 MODE=$(printf %q "$MODE") PORT=$(printf %q "$PORT") PUBLIC_URL=$(printf %q "$PUBLIC_URL") DOMAIN=$(printf %q "$DOMAIN") SHOP_HOST=$(printf %q "$SHOP_HOST")
 HQ_URL=$(printf %q "$HQ_URL") BRANCH_CODE=$(printf %q "$BRANCH_CODE") DIR=$(printf %q "$DIR") REF=$(printf %q "$REF") REPO=$(printf %q "$REPO")
 $([ "$LOCAL_DB" = 0 ] && echo "MONGO_URI=$(printf %q "$MONGO_URI")")
+$([ "$LOCAL_DB" = 1 ] && echo "MONGO_PORT=$(printf %q "$MONGO_PORT")")
 EOF
 [ -f /etc/afeypos/install.conf ] && chmod 600 /etc/afeypos/install.conf
 cp "$rel/installer/afeypos-cli.sh" /usr/local/bin/afeypos 2>/dev/null && chmod 755 /usr/local/bin/afeypos || true

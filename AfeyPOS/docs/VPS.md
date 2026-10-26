@@ -78,6 +78,10 @@ sudo bash /opt/afeypos-src/AfeyPOS/installer/install.sh \
   --port 9999
 ```
 
+Afey POS runs **its own MongoDB** (no login, listening on 127.0.0.1 only). If the VPS already has another
+MongoDB (for example on 27017 with a password), the installer leaves it alone and gives Afey POS's database the
+first free port from 27018 (the installer prints it: `Database port: …`).
+
 Afey POS listens on port **9999** on the VPS. Caddy forwards `https://pos.afey.co.ke` (ports 80/443) to it, so 9999
 stays closed to the internet and nobody types it in the address.
 
@@ -88,6 +92,47 @@ This installs:
 - **Caddy**, which gets and renews the HTTPS certificate for `pos.afey.co.ke` by itself;
 - `/opt/afeypos/app/server/.env` with new secrets, `API_PUBLIC_URL=https://pos.afey.co.ke` and secure cookies;
 - daily backups.
+
+### 4b. (Optional) use a MongoDB you already have, with a username and password
+
+Only if you want Afey POS to use an existing MongoDB rather than its own. It must be a **replica set**: a
+single-node one is fine, but a standalone server is not.
+
+Put the login in `/opt/afeypos/app/server/.env`. Replace `USERNAME` and `PASSWORD` with the real ones; special
+characters need no escaping here:
+
+```env
+MONGODB_URI=mongodb://127.0.0.1:27017/afeypos?replicaSet=rs0
+MONGODB_USERNAME=USERNAME
+MONGODB_PASSWORD=PASSWORD
+MONGODB_AUTH_SOURCE=admin
+```
+
+Or give them to the installer:
+
+```bash
+sudo bash /opt/afeypos-src/AfeyPOS/installer/install.sh --source /opt/afeypos-src/AfeyPOS --mode hq --domain pos.afey.co.ke --port 9999 \
+  --mongo-uri 'mongodb://127.0.0.1:27017/afeypos?replicaSet=rs0' --mongo-user 'USERNAME' --mongo-password 'PASSWORD'
+```
+
+The user needs `readWrite` on `afeypos` and `clusterMonitor` (to check the replica set). For example, in `mongosh` as an admin:
+
+```js
+use admin
+db.createUser({ user: "afeypos", pwd: "PASSWORD", roles: [{ role: "readWrite", db: "afeypos" }, { role: "clusterMonitor", db: "admin" }] })
+```
+
+If that MongoDB is not a replica set yet, add this to its `mongod.conf`, restart it and run `rs.initiate()` once in `mongosh`.
+With a login enabled, a replica set also needs a key file (`openssl rand -base64 756 > /etc/mongo-keyfile`,
+`chmod 400`, owned by the mongodb user):
+
+```yaml
+replication:
+  replSetName: rs0
+security:
+  authorization: enabled
+  keyFile: /etc/mongo-keyfile
+```
 
 ### 5. Check it
 
@@ -236,6 +281,9 @@ afeypos reset-password owner@afey.co.ke 'NewPassw0rd!'
 
 | Problem | Fix |
 |---|---|
+| Install stops with *command replSetGetStatus requires authentication* | Another MongoDB with a password is on that port. Re-run the install command: it now gives Afey POS its own database on a free port. Or use your MongoDB with a login (A4b) |
+| *The MongoDB … is not a replica set* | Use Afey POS's own database (leave out `--mongo-uri`), or turn that MongoDB into a replica set (A4b) |
+| *rejected the username or password* | Check `MONGODB_USERNAME`, `MONGODB_PASSWORD` and `MONGODB_AUTH_SOURCE` (where the user was created, usually `admin`) |
 | `https://pos.afey.co.ke` does not open | `nslookup pos.afey.co.ke` must show the VPS IP; `ufw status` must allow 80 and 443; `journalctl -u caddy -n 50` |
 | The shop stays *Offline* | On the shop PC open `https://pos.afey.co.ke/health` in a browser. **Branch sync** shows the last error. Wrong token → issue a new one at head office and rerun B3 with it |
 | Branch sync shows "ENCRYPTION_KEY differs from head office" | The shop was installed with another key: rerun B3 with `$env:AFEY_ENCRYPTION_KEY` set to the VPS key, on an empty database |

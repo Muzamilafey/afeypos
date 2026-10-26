@@ -6,6 +6,7 @@
 //   --mode standalone|hq|branch   one shop (default), head office online, or branch server
 //   --port 9999                   port of the web app and API
 //   --mongo-uri <uri>             default mongodb://127.0.0.1:27017/afeypos?replicaSet=rs0
+//   --mongo-user <u> --mongo-password <p> [--mongo-auth-source admin]   a MongoDB that needs a login
 //   --public-url <url>            address staff use (default http://<this computer's LAN IP>:<port>)
 //   --data-dir <dir>              uploads and backups (default ./data next to the app)
 //   --app-dir <dir>               stable path of the app if this copy is one of several versions
@@ -52,6 +53,16 @@ const run = (cmd, cmdArgs, cwd = root) => {
   if (r.status !== 0) fail(`"${cmd} ${cmdArgs.join(' ')}" failed`);
 };
 
+/** Same as the server: MONGODB_USERNAME / MONGODB_PASSWORD are added to a URI that has no login of its own. */
+function withLogin(uri, username, password, authSource) {
+  if (!username) return uri;
+  const m = /^(mongodb(?:\+srv)?:\/\/)([^/?]*)(.*)$/.exec(uri);
+  if (!m || m[2].includes('@')) return uri;
+  let rest = m[3] || '/';
+  if (!/[?&]authSource=/.test(rest)) rest += `${rest.includes('?') ? '&' : '?'}authSource=${encodeURIComponent(authSource || 'admin')}`;
+  return `${m[1]}${encodeURIComponent(username)}:${encodeURIComponent(password ?? '')}@${m[2]}${rest}`;
+}
+
 function lanIp() {
   for (const list of Object.values(os.networkInterfaces())) {
     for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal && !a.address.startsWith('169.254.')) return a.address;
@@ -94,6 +105,12 @@ set('DEPLOYMENT_MODE', mode);
 if (port) set('PORT', port);
 const p = get('PORT') || '9999';
 if (opt('mongo-uri')) set('MONGODB_URI', opt('mongo-uri'));
+// A MongoDB with a login: kept as separate settings (see server/.env.example).
+if (opt('mongo-user')) {
+  set('MONGODB_USERNAME', opt('mongo-user'));
+  set('MONGODB_PASSWORD', opt('mongo-password') ?? '');
+  set('MONGODB_AUTH_SOURCE', opt('mongo-auth-source') ?? 'admin');
+}
 const dataDir = path.resolve(opt('data-dir', get('UPLOAD_DIR') && path.isAbsolute(get('UPLOAD_DIR')) ? path.dirname(get('UPLOAD_DIR')) : path.join(root, 'data')));
 fs.mkdirSync(path.join(dataDir, 'uploads'), { recursive: true });
 fs.mkdirSync(path.join(dataDir, 'backups'), { recursive: true });
@@ -149,7 +166,7 @@ if (!flag('no-build')) {
 // ---------- 3. database ----------
 if (!flag('no-db')) {
   log('Checking the database');
-  const uri = get('MONGODB_URI');
+  const uri = withLogin(get('MONGODB_URI'), get('MONGODB_USERNAME'), get('MONGODB_PASSWORD'), get('MONGODB_AUTH_SOURCE'));
   const require = createRequire(path.join(root, 'server', 'package.json'));
   let mongodb;
   try {
@@ -157,9 +174,11 @@ if (!flag('no-db')) {
   } catch {
     fail('The MongoDB driver is missing; run without --no-install.');
   }
-  const local = /^mongodb:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(uri);
-  const hostPort = uri.match(/^mongodb:\/\/([^/]+)\//)?.[1] ?? '127.0.0.1:27017';
-  const direct = local ? `mongodb://${hostPort}/?directConnection=true` : uri;
+  const login = uri.match(/^mongodb:\/\/([^@/]*@)/)?.[1] ?? '';
+  const local = /^mongodb:\/\/([^@/]*@)?(127\.0\.0\.1|localhost)(:\d+)?\//.test(uri);
+  const hostPort = uri.match(/^mongodb:\/\/(?:[^@/]*@)?([^/]+)\//)?.[1] ?? '127.0.0.1:27017';
+  const authSource = uri.match(/[?&]authSource=([^&]+)/)?.[1];
+  const direct = local ? `mongodb://${login}${hostPort}/?directConnection=true${authSource ? `&authSource=${authSource}` : ''}` : uri;
   let ok = false;
   for (let i = 0; i < 30 && !ok; i++) {
     const client = new mongodb.MongoClient(direct, { serverSelectionTimeoutMS: 2000 });
@@ -180,6 +199,14 @@ if (!flag('no-db')) {
       }
       if (status?.members?.some((m) => m.stateStr === 'PRIMARY')) ok = true;
     } catch (e) {
+      // A password-protected MongoDB at a local address, and no login given: someone else's database.
+      if (local && !login && /requires authentication|Unauthorized/i.test(String(e?.message))) {
+        fail(`The MongoDB at ${hostPort} needs a login, so it is not the database the installer runs for Afey POS. Either re-run the installer (it now gives Afey POS its own database on a free port), or set MONGODB_USERNAME and MONGODB_PASSWORD in server/.env (or pass --mongo-user/--mongo-password) for a replica set Afey POS may use.`);
+      }
+      if (local && login && /Authentication failed/i.test(String(e?.message))) fail(`The MongoDB at ${hostPort} rejected the username or password (MONGODB_USERNAME / MONGODB_PASSWORD, authSource ${authSource ?? 'admin'}).`);
+      if (/not running with --replSet/i.test(String(e?.message))) {
+        fail(`The MongoDB at ${hostPort} is not a replica set; Afey POS needs one (a single-node replica set is fine) for safe checkout and payments. Either let the installer run Afey POS's own database (leave out --mongo-uri), or add "replication: replSetName: rs0" (and, with a login, "security: keyFile: ...") to that MongoDB's mongod.conf, restart it and run rs.initiate() once. See docs/VPS.md.`);
+      }
       if (i === 29) fail(`Cannot use the database at ${uri.replace(/\/\/[^@]*@/, '//***@')}: ${e.message}`);
     } finally {
       await client.close().catch(() => undefined);

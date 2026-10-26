@@ -26,6 +26,14 @@ const schema = z.object({
   BRANCH_CODE: z.string().optional(),
   MONGODB_URI: z.string().min(1).default('mongodb://127.0.0.1:27017/afeypos?replicaSet=rs0'),
   MONGODB_REQUIRE_REPLICA_SET: bool(true),
+  /**
+   * Optional database login, kept apart from MONGODB_URI so a password needs no URL-encoding. When set (and the
+   * URI has no user of its own) they are added to the connection. MONGODB_AUTH_SOURCE is the database that holds
+   * the user (usually "admin").
+   */
+  MONGODB_USERNAME: z.string().optional(),
+  MONGODB_PASSWORD: z.string().optional(),
+  MONGODB_AUTH_SOURCE: z.string().optional(),
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
   JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
@@ -60,6 +68,15 @@ const schema = z.object({
   SHOP_HOSTNAMES: z.string().default(''),
   /** Extra sites allowed to show the shop in a frame (the Store studio preview), besides CORS_ORIGINS and API_PUBLIC_URL. */
   SHOP_FRAME_ANCESTORS: z.string().default(''),
+  /**
+   * Bank card terminals. The simulated terminal is always available outside production; in production it is
+   * offered only when TERMINAL_SIMULATOR=true (training installations). Its payments are always marked SIMULATED.
+   */
+  TERMINAL_SIMULATOR: bool(false),
+  /** How long each simulated terminal step takes (connecting, card, PIN, processing). 0 = instant. */
+  TERMINAL_SIM_STEP_MS: z.coerce.number().int().min(0).default(1500),
+  /** After this long without a final answer from the terminal, a payment is marked "unknown" and must be reconciled. */
+  TERMINAL_PAYMENT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(180),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -73,6 +90,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
   const env = parsed.data;
+  env.MONGODB_URI = withMongoCredentials(env.MONGODB_URI, env.MONGODB_USERNAME, env.MONGODB_PASSWORD, env.MONGODB_AUTH_SOURCE);
   const key = Buffer.from(env.ENCRYPTION_KEY, 'base64');
   if (key.length !== 32) throw new Error('ENCRYPTION_KEY must decode (base64) to exactly 32 bytes');
   if (env.DEPLOYMENT_MODE === 'branch' && env.SYNC_ENABLED && !(env.SYNC_HQ_URL || env.SYNC_CLOUD_URL)) throw new Error('A branch server with SYNC_ENABLED needs SYNC_HQ_URL');
@@ -81,6 +99,18 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   }
   cached = env;
   return env;
+}
+
+/** Adds MONGODB_USERNAME / MONGODB_PASSWORD (URL-encoded) and authSource to a MongoDB URI that has no login yet. */
+export function withMongoCredentials(uri: string, username?: string, password?: string, authSource?: string): string {
+  if (!username) return uri;
+  const m = /^(mongodb(?:\+srv)?:\/\/)([^/?]*)(.*)$/.exec(uri);
+  if (!m || m[2].includes('@')) return uri;
+  const login = `${encodeURIComponent(username)}:${encodeURIComponent(password ?? '')}@`;
+  let rest = m[3] || '/';
+  const source = authSource || 'admin';
+  if (!/[?&]authSource=/.test(rest)) rest += `${rest.includes('?') ? '&' : '?'}authSource=${encodeURIComponent(source)}`;
+  return `${m[1]}${login}${m[2]}${rest}`;
 }
 
 export function env(): Env {
