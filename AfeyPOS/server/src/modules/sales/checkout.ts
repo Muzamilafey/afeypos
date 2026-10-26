@@ -17,6 +17,7 @@ import { resolveUnit } from '../catalog/units.js';
 import { consumeOverride } from '../auth/routes.js';
 import { changePoints, customerTier, programOf, spendVoucher } from '../loyalty/service.js';
 import { queueSaleForEtims } from '../etims/service.js';
+import { claimForSale } from '../terminals/service.js';
 
 export const PAYMENT_METHODS = ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'voucher', 'gateway', 'other'] as const;
 
@@ -52,6 +53,8 @@ export const checkoutSchema = z.object({
         tenderedCents: positiveCents.optional(),
         reference: z.string().trim().max(100).optional(),
         paymentIntentId: objectId.optional(),
+        /** Card paid on a connected bank card terminal (approved and verified by the terminal's status check). */
+        terminalTransactionId: objectId.optional(),
       }),
     )
     .max(10)
@@ -247,6 +250,16 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
         if (!isMpesa) row.provider = intent.provider;
         break;
       }
+      case 'card': {
+        if (p.paymentIntentId) throw badRequest('Only M-Pesa and gateway payments can reference a payment intent');
+        if (!p.terminalTransactionId) break; // standalone card machine: recorded with the slip's approval code
+        const x = await claimForSale({ txnId: p.terminalTransactionId, amountCents: p.amountCents, tillId: till._id, saleId, saleNumber: number });
+        row.terminalTransactionId = x._id;
+        row.provider = x.provider;
+        row.sandbox = x.sandbox;
+        row.reference = [x.sandbox ? 'SIMULATED – NOT A REAL PAYMENT' : null, x.cardScheme, x.last4 ? `****${x.last4}` : null, x.authCode ? `AUTH ${x.authCode}` : null, x.reference].filter(Boolean).join(' · ').slice(0, 100);
+        break;
+      }
       case 'credit': {
         if (!caps.modules.includes('customerCredit')) throw badRequest('Customer credit is not enabled');
         if (!customer || customer.kind === 'walk_in') throw unprocessable('Select a registered customer for credit sales', 'CUSTOMER_REQUIRED');
@@ -277,6 +290,7 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
       }
       default:
         if (p.paymentIntentId) throw badRequest('Only M-Pesa and gateway payments can reference a payment intent');
+        if (p.terminalTransactionId) throw badRequest('Only card payments can reference a card terminal payment');
     }
     payments.push(row);
   }

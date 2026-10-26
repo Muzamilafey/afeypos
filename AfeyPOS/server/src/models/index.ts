@@ -12,3 +12,4 @@ export * from './hr.js';
 export * from './accounting.js';
 export * from './crm.js';
 export * from './store.js';
+export * from './terminals.js';

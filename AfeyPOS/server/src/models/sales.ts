@@ -59,8 +59,11 @@ const salePaymentSchema = new Schema(
     changeCents: Number,
     reference: String,
     paymentIntentId: ObjectId,
-    /** Gateway that collected a 'gateway' payment (paystack, pawapay...). */
+    /** Gateway that collected a 'gateway' payment (paystack, pawapay...), or the card terminal provider. */
     provider: String,
+    /** Card paid on a connected terminal; `sandbox` marks simulated/test payments (never real money). */
+    terminalTransactionId: ObjectId,
+    sandbox: Boolean,
   },
   { _id: false },
 );

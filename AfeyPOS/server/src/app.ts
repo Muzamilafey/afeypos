@@ -41,6 +41,7 @@ import { syncSettingsRoutes } from './modules/sync/routes.js';
 import { hqSyncRoutes } from './modules/sync/hq.js';
 import { branchReadOnly } from './modules/sync/guards.js';
 import { fileRoutes } from './modules/files/routes.js';
+import { terminalHookRoutes, terminalRoutes } from './modules/terminals/routes.js';
 import './modules/notifications/service.js';
 import './jobs/scheduler.js';
 
@@ -122,6 +123,7 @@ export function createApp() {
   v1.use('/public', publicRoutes);
   // Neutral path: Safaricom rejects callback URLs containing words such as "mpesa".
   v1.use('/hooks/pay', mpesaCallbackRoutes, gatewayCallbackRoutes);
+  v1.use('/hooks/terminal', terminalHookRoutes);
 
   const tenant = Router();
   tenant.use(requireTenant);
@@ -132,6 +134,7 @@ export function createApp() {
   tenant.use(['/payments/mpesa', '/payments/payouts'], requireModule('mpesa'));
   tenant.use(['/payments/gateways', '/payments/online'], requireModule('payments'));
   tenant.use('/payments/intents', requireAnyModule('mpesa', 'payments'));
+  tenant.use(['/payment-terminals', '/payment-terminals-transactions'], requireModule('pos'));
   tenant.use('/reports', requireModule('reports'));
   tenant.use('/etims', requireModule('etims'));
   tenant.use('/biometrics', requireModule('biometrics'));
@@ -148,7 +151,7 @@ export function createApp() {
   tenant.use('/auth', authRoutes);
   tenant.use(authenticate);
   tenant.use(hideCostsUnlessPermitted);
-  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, loyaltyRoutes, onlineOrderRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
+  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, loyaltyRoutes, onlineOrderRoutes, terminalRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
     tenant.use(r);
   }
   v1.use(tenant);

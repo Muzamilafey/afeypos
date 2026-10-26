@@ -19,6 +19,7 @@ export default defineConfig({
     env: {
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
+      TERMINAL_SIM_STEP_MS: '0',
       ...(systemBinary ? { MONGOMS_SYSTEM_BINARY: systemBinary } : {}),
     },
   },

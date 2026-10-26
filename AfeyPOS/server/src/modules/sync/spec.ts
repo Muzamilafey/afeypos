@@ -14,7 +14,7 @@ import {
   AttendanceRecord, AuditLog, CustomRole, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
   IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
   SalesDocument, SerialItem, Shift, StockAdjustment, StockBatch, StockLevel, StockMovement, Stocktake, StockTransfer, Supplier,
-  SupplierQuotation, SupplierReturn, Tenant, Till, UnitOfMeasure, User, Voucher, LoyaltyTransaction, Warehouse,
+  SupplierQuotation, SupplierReturn, Tenant, Till, UnitOfMeasure, User, Voucher, LoyaltyTransaction, Warehouse, PaymentTerminal, TerminalTransaction,
 } from '../../models/index.js';
 
 export interface BranchScope {
@@ -94,6 +94,9 @@ export const SYNC_SPECS: SyncSpec[] = [
   // Paybill/Till payments reach HQ (public callbacks) and belong to the branch that owns the M-Pesa config.
   { model: PaymentIntent, dir: 'both', field: 'updatedAt', owner: inBranch, downFilter: (b) => ({ branchId: new Types.ObjectId(b.branchId) }) },
   { model: MpesaEvent, dir: 'up', field: 'at' },
+  // Card terminals connect to the server their tills use, so a branch server owns its terminals and their payments.
+  { model: PaymentTerminal, dir: 'up', field: 'updatedAt', owner: inBranch },
+  { model: TerminalTransaction, dir: 'up', field: 'updatedAt', owner: inBranch },
   { model: LedgerEntry, dir: 'up', field: 'updatedAt' },
   { model: AttendanceRecord, dir: 'up', field: 'at' },
   { model: LoyaltyTransaction, dir: 'up', field: 'at' },

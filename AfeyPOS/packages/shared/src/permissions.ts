@@ -53,6 +53,9 @@ export const PERMISSIONS = [
   'payments.reconcile',
   'payouts.request',
   'payouts.approve',
+  'terminals.manage',
+  'terminals.refund',
+  'terminals.reconcile',
   'expenses.manage',
   // HR, accounting, CRM, online orders
   'hr.manage',
@@ -100,7 +103,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'customers.read', 'customers.manage', 'suppliers.read', 'credit.approve', 'customers.payments',
     'purchasing.read',
     'sales.create', 'sales.read', 'sales.read.all', 'sales.discount', 'sales.discount.override', 'sales.price.override', 'sales.void', 'sales.items.remove', 'vouchers.manage', 'loyalty.manage', 'sales.return', 'returns.approve', 'sales.credit',
-    'quotations.manage', 'shifts.open', 'shifts.manage', 'cash.movement', 'payments.reconcile', 'expenses.manage',
+    'quotations.manage', 'shifts.open', 'shifts.manage', 'cash.movement', 'payments.reconcile', 'terminals.refund', 'terminals.reconcile', 'expenses.manage',
     'reports.read', 'commissions.read', 'biometrics.enroll', 'hardware.manage', 'hr.manage', 'crm.manage', 'orders.manage',
   ],
   inventory_manager: [
@@ -113,7 +116,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   cashier: ['products.read', 'inventory.read', 'customers.read', 'sales.create', 'sales.read', 'sales.discount', 'shifts.open', 'cash.movement', 'customers.payments', 'orders.manage'],
   accountant: [
     'products.read', 'products.cost', 'inventory.read', 'customers.read', 'suppliers.read', 'suppliers.pay', 'purchasing.read', 'sales.read', 'sales.read.all',
-    'payments.reconcile', 'payouts.request', 'expenses.manage', 'customers.payments', 'reports.read', 'reports.financial', 'commissions.read', 'audit.read',
+    'payments.reconcile', 'terminals.reconcile', 'payouts.request', 'expenses.manage', 'customers.payments', 'reports.read', 'reports.financial', 'commissions.read', 'audit.read',
     'payroll.manage', 'accounting.read', 'accounting.manage',
   ],
   auditor: [
@@ -205,6 +208,9 @@ export const PERMISSION_INFO: Record<Permission, { label: string; group: (typeof
   'payments.reconcile': { label: 'Reconcile M-Pesa and online payments', group: 'Payments', sensitive: true },
   'payouts.request': { label: 'Request M-Pesa payouts', group: 'Payments', sensitive: true },
   'payouts.approve': { label: 'Approve and send M-Pesa payouts', group: 'Payments', sensitive: true },
+  'terminals.manage': { label: 'Set up bank card terminals (pairing, tills, enabling)', group: 'Payments', sensitive: true },
+  'terminals.refund': { label: 'Refund card payments on a card terminal', group: 'Payments', sensitive: true },
+  'terminals.reconcile': { label: 'Reconcile card terminal payments and cancel others’ card payments', group: 'Payments', sensitive: true },
   'hr.manage': { label: 'Manage employees, leave and attendance', group: 'People', sensitive: true },
   'payroll.manage': { label: 'Prepare payroll', group: 'People', sensitive: true },
   'payroll.approve': { label: 'Approve and pay payroll', group: 'People', sensitive: true },

@@ -20,6 +20,10 @@ export async function scheduleRecurring(now = new Date()) {
       await runInTenant(t._id, () => enqueue('store.expireUnpaid', {}, { dedupeKey: `store-expire:${t._id}:${minute.slice(0, 15)}` }));
     }
   }
+  // Card terminals: health of enabled terminals and a safety net for open payments.
+  for (const t of await Tenant.find({ status: 'active' }, { _id: 1 }).lean()) {
+    await runInTenant(t._id, () => enqueue('terminals.health', {}, { dedupeKey: `terminals-health:${t._id}:${minute}` }));
+  }
   if (e.BACKUP_INTERVAL_HOURS > 0) {
     const bucket = Math.floor(now.getTime() / (e.BACKUP_INTERVAL_HOURS * 3600_000));
     await enqueue('backup.scheduled', {}, { tenantId: null, dedupeKey: `backup:${bucket}`, maxAttempts: 3 });
