@@ -40,7 +40,7 @@ const syncAuth: RequestHandler = async (req, _res, next) => {
   if (!b.active) throw forbidden('This branch is deactivated');
   const [warehouses, tills] = await Promise.all([Warehouse.find({ branchId: b._id }, { _id: 1 }).lean(), Till.find({ branchId: b._id }, { _id: 1 }).lean()]);
   req.syncBranch = { branchId: String(b._id), code: b.code, warehouseIds: new Set(warehouses.map((w) => String(w._id))), tillIds: new Set(tills.map((t) => String(t._id))) };
-  await Branch.updateOne({ _id: b._id }, { $set: { 'sync.lastSeenAt': new Date() } });
+  await Branch.updateOne({ _id: b._id }, { $set: { 'sync.lastSeenAt': new Date() } }, { timestamps: false });
   next();
 };
 
@@ -85,7 +85,7 @@ hqSyncRoutes.post('/push', async (req, res) => {
     if (body.collection === 'customers') parties.push({ type: 'customer', id: String(doc._id) });
   }
   if (parties.length) await recomputeBalances(parties);
-  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPushAt': new Date() } });
+  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPushAt': new Date() } }, { timestamps: false });
   send(res, { results });
 });
 
@@ -115,7 +115,7 @@ hqSyncRoutes.get('/pull', async (req, res) => {
   const projection = collection === 'branches' ? { syncTokenHash: 0 } : undefined;
   const docs = await spec.model.collection.find(filter, { projection }).sort({ [f]: 1, _id: 1 }).limit(limit).toArray();
   const last = docs.at(-1);
-  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPullAt': new Date() } });
+  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPullAt': new Date() } }, { timestamps: false });
   send(res, { docs, next: last ? { t: last[f], id: last._id } : null, more: docs.length === limit });
 });
 
@@ -141,7 +141,7 @@ hqSyncRoutes.get('/tombstones', async (req, res) => {
 hqSyncRoutes.post('/report', express.json(), async (req: Request, res) => {
   const b = req.syncBranch!;
   const body = req.body ?? {};
-  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.pendingUp': Number(body.pendingUp) || 0, 'sync.lastError': body.lastError ? String(body.lastError).slice(0, 300) : '', 'sync.serverVersion': String(body.version ?? '').slice(0, 40) } });
+  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.pendingUp': Number(body.pendingUp) || 0, 'sync.lastError': body.lastError ? String(body.lastError).slice(0, 300) : '', 'sync.serverVersion': String(body.version ?? '').slice(0, 40) } }, { timestamps: false });
   res.json({ ok: true });
 });
 

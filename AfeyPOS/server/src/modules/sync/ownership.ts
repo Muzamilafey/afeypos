@@ -56,7 +56,7 @@ export async function assertWarehouseOwned(warehouseId: Types.ObjectId | string)
   const w = await Warehouse.findById(warehouseId, { branchId: 1 }).lean();
   const b = w ? await Branch.findById(w.branchId, { name: 1, code: 1 }).lean() : null;
   if (!w || !b) {
-    throw new AppError(409, 'STOCK_LOCATION_MISSING', 'This till’s store (warehouse) is not on this server yet. Wait for the first sync to finish, then check Administration → Branch sync for errors.');
+    throw new AppError(409, 'STOCK_LOCATION_MISSING', 'This store (warehouse) or its branch is not on this server yet. Open Administration → Branch sync and press "Download everything again".');
   }
   throw new AppError(
     409,

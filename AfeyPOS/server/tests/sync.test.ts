@@ -136,6 +136,21 @@ describe('branch server bootstrap', () => {
 });
 
 describe('branch server tills', () => {
+  it('syncing does not make the branch record look newly changed (it would never settle and never reach the branch)', async () => {
+    const { Branch } = await import('../src/models/index.js');
+    const { runInTenant } = await import('../src/lib/context.js');
+    const before = await runInTenant(hq.tenant.id, () => Branch.findById(b1.id).lean());
+    await runSync();
+    const after = await runInTenant(hq.tenant.id, () => Branch.findById(b1.id).lean());
+    expect(after!.sync?.lastSeenAt).toBeTruthy();
+    expect(new Date(after!.updatedAt as any).getTime()).toBe(new Date(before!.updatedAt as any).getTime());
+    const locs = await branch.get('/settings/locations');
+    expect(locs.body.data.branches.map((b: any) => b.code)).toContain('MSA01');
+    const status = await branch.get('/settings/sync/status');
+    expect(status.body.data.check).toMatchObject({ branchFound: true, storesWithoutBranch: [] });
+    expect(status.body.data.check.tills).toBeGreaterThan(0);
+  });
+
   it('cannot be set up as a new business, and sells only from its own branch tills', async () => {
     const reg = await branch.api.post('/api/v1/public/register').send({ businessName: 'Other', businessType: 'supermarket', ownerName: 'X Y', email: 'x@other.test', password: OWNER_PASSWORD });
     expect(reg.status).toBe(409);

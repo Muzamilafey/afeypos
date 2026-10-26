@@ -22,6 +22,7 @@ interface BranchStatus {
   lastSuccessAt?: string;
   last?: { startedAt: string; finishedAt?: string; ok: boolean; error?: string; pushed: Record<string, number>; pulled: Record<string, number> };
   conflicts: Conflict[];
+  check?: { branchFound: boolean; branchName?: string; warehouses: number; tills: number; totals: { branches: number; warehouses: number; tills: number }; storesWithoutBranch: string[] };
 }
 interface Conflict { _id: string; collectionName: string; docId: string; reason: string; branchCode?: string; at: string }
 
@@ -152,7 +153,44 @@ function BranchSync({ data, onChange }: { data: BranchStatus; onChange: () => vo
         )}
         {!data.enabled && <p className="mt-3 text-sm text-amber-700">Automatic sync is off (SYNC_ENABLED=false in server/.env).</p>}
       </Card>
+      {data.check && <BranchCheck code={data.branchCode} check={data.check} onChange={onChange} />}
       <Conflicts rows={data.conflicts} onChange={onChange} />
     </>
+  );
+}
+
+/** Whether this server has what it needs to sell: its own branch, that branch's stores and tills. */
+function BranchCheck({ code, check, onChange }: { code: string; check: NonNullable<BranchStatus['check']>; onChange: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const ok = check.branchFound && check.warehouses > 0 && check.tills > 0 && !check.storesWithoutBranch.length;
+  const again = async () => {
+    setBusy(true);
+    try {
+      await api('/settings/sync/resync', { body: { scope: 'down' } });
+      const r = await api<{ data: BranchStatus['last'] }>('/settings/sync/run', { body: {} });
+      if (r.data?.ok) toast.success('Downloaded everything again from head office');
+      else toast.error(r.data?.error ?? 'Sync failed');
+      onChange();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const row = (good: boolean, text: string) => <li className="flex items-start gap-2"><Badge tone={good ? 'green' : 'red'}>{good ? 'OK' : 'Missing'}</Badge><span>{text}</span></li>;
+  return (
+    <Card title="This server's branch" className="mt-4" actions={<Button variant="secondary" loading={busy} onClick={again}>Download everything again</Button>}>
+      <ul className="space-y-2 text-sm" data-testid="branch-check">
+        {row(check.branchFound, check.branchFound ? `Branch ${code}: ${check.branchName}` : `Branch ${code} has not arrived from head office (BRANCH_CODE must match the branch code at head office exactly)`)}
+        {row(check.warehouses > 0, `${check.warehouses} store${check.warehouses === 1 ? '' : 's'} of branch ${code}`)}
+        {row(check.tills > 0, `${check.tills} till${check.tills === 1 ? '' : 's'} of branch ${code}`)}
+        {check.storesWithoutBranch.length > 0 && row(false, `Stores whose branch is missing here: ${check.storesWithoutBranch.join(', ')}`)}
+      </ul>
+      <p className="mt-3 text-xs text-ink-500">
+        On this server: {check.totals.branches} branches, {check.totals.warehouses} stores, {check.totals.tills} tills.
+        {ok ? ' Everything needed to sell is here.' : ' If something is missing, press Download everything again (safe: nothing is lost), then check "Records that need attention" below.'}
+      </p>
+    </Card>
   );
 }

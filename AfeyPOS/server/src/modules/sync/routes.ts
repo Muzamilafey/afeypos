@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
-import { Branch, SyncConflict, SyncCursor } from '../../models/index.js';
+import { Branch, SyncConflict, SyncCursor, Till, Warehouse } from '../../models/index.js';
 import { idParam, parse } from '../../http/validate.js';
 import { requireAnyPermission, requirePermission } from '../../http/auth.js';
 import { AppError, forbidden, notFound } from '../../lib/errors.js';
@@ -68,7 +68,20 @@ syncSettingsRoutes.get('/settings/sync/status', requirePermission('settings.mana
   }
   if (e.DEPLOYMENT_MODE === 'branch') {
     const cursors = await SyncCursor.find({}).sort({ key: 1 }).lean();
-    res.json({ data: { role: 'branch', branchCode: e.BRANCH_CODE, hqUrl: e.SYNC_HQ_URL || e.SYNC_CLOUD_URL, enabled: e.SYNC_ENABLED, ...syncState(), cursors, conflicts } });
+    // What this server needs from head office to sell: its own branch, that branch's stores and tills.
+    const code = e.BRANCH_CODE?.toUpperCase();
+    const [branches, warehouses, tills] = await Promise.all([Branch.find({}, { code: 1, name: 1 }).lean(), Warehouse.find({}, { code: 1, name: 1, branchId: 1 }).lean(), Till.find({}, { branchId: 1 }).lean()]);
+    const mine = branches.find((b) => b.code === code);
+    const ids = new Set(branches.map((b) => String(b._id)));
+    const check = {
+      branchFound: Boolean(mine),
+      branchName: mine?.name,
+      warehouses: mine ? warehouses.filter((w) => String(w.branchId) === String(mine._id)).length : 0,
+      tills: mine ? tills.filter((t) => String(t.branchId) === String(mine._id)).length : 0,
+      totals: { branches: branches.length, warehouses: warehouses.length, tills: tills.length },
+      storesWithoutBranch: warehouses.filter((w) => !ids.has(String(w.branchId))).map((w) => `${w.name} (${w.code})`),
+    };
+    res.json({ data: { role: 'branch', branchCode: e.BRANCH_CODE, hqUrl: e.SYNC_HQ_URL || e.SYNC_CLOUD_URL, enabled: e.SYNC_ENABLED, ...syncState(), cursors, conflicts, check } });
     return;
   }
   res.json({ data: { role: 'standalone' } });
