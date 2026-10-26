@@ -11,7 +11,7 @@
  */
 import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
-import { SyncCursor, Tenant } from '../../models/index.js';
+import { PaymentIntent, SyncCursor, Tenant } from '../../models/index.js';
 import { runInTenant, runAsPlatform } from '../../lib/context.js';
 import { logger } from '../../lib/logger.js';
 import { invalidateOwnership } from './ownership.js';
@@ -215,8 +215,19 @@ export function startBranchSync() {
   const tick = () => void syncOnce().catch(() => undefined);
   setTimeout(tick, 2000);
   timer = setInterval(tick, every);
+  // While a till waits for an M-Pesa payment (Paybill/Till or a prompt), sync every few seconds: Safaricom
+  // confirms at head office, and the till should see it quickly. Ends by itself when nothing is waiting.
+  fastTimer = setInterval(() => {
+    if (current) return;
+    void PaymentIntent.collection.countDocuments({ status: 'pending', source: { $in: ['c2b', 'stk'] } }, { limit: 1 })
+      .then((n) => (n ? syncOnce() : undefined))
+      .catch(() => undefined);
+  }, 5000);
 }
+let fastTimer: NodeJS.Timeout | null = null;
 export function stopBranchSync() {
   if (timer) clearInterval(timer);
+  if (fastTimer) clearInterval(fastTimer);
   timer = null;
+  fastTimer = null;
 }

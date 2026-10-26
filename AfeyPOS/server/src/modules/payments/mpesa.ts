@@ -618,3 +618,50 @@ mpesaCallbackRoutes.post('/:tenantId/:token/c2b/confirmation', async (req, res) 
   if (tenant) await handleC2B(tenant._id, req.body, req.ip ?? '');
   res.json({ ResultCode: 0, ResultDesc: 'Success' });
 });
+
+/**
+ * Head office with branch servers: a till's "waiting for a payment to the Paybill/Till" record reaches head
+ * office at the next sync, but Safaricom's confirmation often arrives first and is recorded as unmatched.
+ * When the waiting record arrives (or on the periodic check), this pairs them: same M-Pesa configuration,
+ * same account number (Paybill) or the same amount (Buy Goods, one candidate only), paid after the till
+ * started waiting. The unmatched record gives its receipt to the waiting one, so the payment counts once.
+ */
+export async function matchExpectedToReceived(expected: PaymentIntentDoc): Promise<boolean> {
+  if (expected.status !== 'pending' || expected.awaiting !== 'expected' || expected.source !== 'c2b') return false;
+  const cfg = expected.configId ? await IntegrationConfig.findById(expected.configId).lean() : null;
+  if (!cfg) return false;
+  const since = new Date(new Date(expected.createdAt as unknown as Date).getTime() - 2 * 60_000);
+  const filter: Record<string, unknown> = {
+    configId: cfg._id, source: 'c2b', awaiting: { $exists: false }, status: 'succeeded', allocatedCents: 0,
+    allocatedTo: { $exists: false }, onlineOrderId: { $exists: false }, receiptNumber: { $type: 'string' }, completedAt: { $gte: since },
+  };
+  if (cfg.settings?.type === 'till') filter.paidAmountCents = expected.amountCents;
+  else if (expected.accountReference) filter.accountReference = expected.accountReference;
+  else return false;
+  const candidates = await PaymentIntent.find(filter).sort({ completedAt: 1 }).limit(2);
+  if (candidates.length !== 1) return false;
+  const received = candidates[0]!;
+  const receipt = received.receiptNumber!;
+  // Hand the receipt over first (receipts are unique), then confirm the till's waiting payment with it.
+  const freed = await PaymentIntent.updateOne(
+    { _id: received._id, status: 'succeeded', allocatedCents: 0 },
+    { $set: { status: 'cancelled', resultDesc: `Receipt ${receipt} matched to the till's waiting payment ${expected._id}` }, $unset: { receiptNumber: 1 } },
+  );
+  if (!freed.modifiedCount) return false;
+  const done = await finalizeIntent(expected, {
+    status: 'succeeded', resultCode: 0, resultDesc: 'Paid to M-Pesa Paybill/Till', receiptNumber: receipt, paidAmountCents: received.paidAmountCents ?? expected.amountCents,
+    phone: received.phone ?? undefined, payerName: received.payerName ?? undefined, transactionDate: received.transactionDate ?? undefined,
+  });
+  if (!done) {
+    await PaymentIntent.updateOne({ _id: received._id }, { $set: { status: 'succeeded', receiptNumber: receipt, resultDesc: received.resultDesc } });
+    return false;
+  }
+  await MpesaEvent.updateMany({ paymentIntentId: received._id }, { $set: { paymentIntentId: expected._id, outcome: 'matched_expected_later' } });
+  return true;
+}
+
+/** Periodic safety net at head office: waiting till payments that a confirmation already paid. */
+registerJob('mpesa.matchExpected', async () => {
+  const waiting = await PaymentIntent.find({ source: 'c2b', awaiting: 'expected', status: 'pending', createdAt: { $gt: new Date(Date.now() - 2 * 3600_000) } }).limit(200);
+  for (const w of waiting) await matchExpectedToReceived(w).catch((err) => logger.warn({ err }, 'matching a waiting M-Pesa payment failed'));
+});

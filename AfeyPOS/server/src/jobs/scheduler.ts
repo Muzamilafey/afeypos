@@ -18,6 +18,7 @@ export async function scheduleRecurring(now = new Date()) {
     for (const t of await Tenant.find({ status: 'active' }, { _id: 1 }).lean()) {
       await runInTenant(t._id, () => enqueue('accounting.post', {}, { dedupeKey: `acct:${t._id}:${minute.slice(0, 15)}` }));
       await runInTenant(t._id, () => enqueue('store.expireUnpaid', {}, { dedupeKey: `store-expire:${t._id}:${minute.slice(0, 15)}` }));
+      await runInTenant(t._id, () => enqueue('mpesa.matchExpected', {}, { dedupeKey: `mpesa-match:${t._id}:${minute}` }));
     }
   }
   // Card terminals: health of enabled terminals and a safety net for open payments.

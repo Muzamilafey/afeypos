@@ -266,3 +266,26 @@ describe('head-office dashboard', () => {
     expect(row.sync.pendingUp).toBe(0);
   });
 });
+
+describe('M-Pesa Buy Goods at a branch server', () => {
+  it('a payment to the Till that reaches head office before the till’s waiting record is still matched and reaches the till', async () => {
+    const { handleC2B } = await import('../src/modules/payments/mpesa.js');
+    const { Types } = await import('mongoose');
+    const cfg = await hq.client.post('/settings/integrations', { kind: 'mpesa', provider: 'mock', name: 'Shop till', settings: { shortCode: '174379', type: 'till', tillNumber: '3163960' }, secrets: { consumerKey: 'k', consumerSecret: 's', passkey: 'p' } });
+    expect(cfg.status).toBe(201);
+    await runSync();
+    const ex = await branch.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 100, tillId: b1.tillId });
+    expect(ex.status).toBe(201);
+    expect(ex.body.data.payTo).toEqual({ type: 'till', number: '3163960' });
+    // Safaricom confirms at head office first: nothing is waiting there yet, so it is recorded unmatched.
+    await handleC2B(new Types.ObjectId(hq.tenant.id), { TransID: 'TST1BUYGDS', TransAmount: '1.00', BusinessShortCode: '3163960', BillRefNumber: '', MSISDN: '254712345678', FirstName: 'Asha', TransTime: '20261027021600' }, '127.0.0.1');
+    // The waiting record goes up, head office pairs it with the payment, and the till gets it on the next round.
+    await runSync();
+    await runSync();
+    const i = await branch.get(`/payments/intents/${ex.body.data.id}`);
+    expect(i.body.data).toMatchObject({ status: 'succeeded', receiptNumber: 'TST1BUYGDS', paidAmountCents: 100 });
+    const price = (await branch.get(`/products/${milk._id}`)).body.data.prices.retail as number;
+    const sale = await branch.post('/sales', { clientRequestId: rid(), tillId: b1.tillId, lines: [{ productId: milk._id, qty: 1 }], payments: [{ method: 'mpesa', amountCents: 100, paymentIntentId: ex.body.data.id }, { method: 'cash', amountCents: price - 100 }] });
+    expect(sale.status).toBe(201);
+  });
+});

@@ -7,7 +7,8 @@ import crypto from 'node:crypto';
 import express, { Router, type Request, type RequestHandler } from 'express';
 import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
-import { Branch, MpesaEvent, SyncTombstone, Tenant, Till, Warehouse } from '../../models/index.js';
+import { Branch, MpesaEvent, PaymentIntent, SyncTombstone, Tenant, Till, Warehouse } from '../../models/index.js';
+import { matchExpectedToReceived } from '../payments/mpesa.js';
 import { AppError, badRequest, forbidden, unauthorized } from '../../lib/errors.js';
 import { safeEqual, sha256 } from '../../lib/crypto.js';
 import { runAsPlatform } from '../../lib/context.js';
@@ -77,12 +78,25 @@ hqSyncRoutes.post('/push', async (req, res) => {
       results.push({ id: String(doc._id), outcome: 'rejected_not_owner' });
       continue;
     }
+    if (body.collection === 'paymentintents' && doc.status !== 'succeeded') {
+      const here = await spec.model.collection.findOne({ _id: doc._id }, { projection: { status: 1 } });
+      if (here?.status === 'succeeded') {
+        // Confirmed here (e.g. the Till payment arrived at head office): keep it, and make it the newest so it syncs down.
+        await spec.model.collection.updateOne({ _id: doc._id }, { $set: { updatedAt: new Date() } });
+        results.push({ id: String(doc._id), outcome: 'kept_confirmed' });
+        continue;
+      }
+    }
     const r = await applyRecord(spec, doc, 'hq', b.code);
     results.push({ id: String(doc._id), outcome: r.outcome });
     if (r.outcome !== 'applied') continue;
     if (body.collection === 'stocktransfers') await afterTransferReplicated(r.previous, doc);
     if (body.collection === 'ledgerentries') parties.push({ type: doc.partyType, id: String(doc.partyId) });
     if (body.collection === 'customers') parties.push({ type: 'customer', id: String(doc._id) });
+    if (body.collection === 'paymentintents' && doc.awaiting === 'expected' && doc.status === 'pending') {
+      const intent = await PaymentIntent.findById(doc._id);
+      if (intent) await matchExpectedToReceived(intent).catch(() => false);
+    }
   }
   if (parties.length) await recomputeBalances(parties);
   await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPushAt': new Date() } }, { timestamps: false });
