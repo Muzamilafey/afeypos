@@ -53,7 +53,7 @@ const saleLineSchema = new Schema({
 
 const salePaymentSchema = new Schema(
   {
-    method: { type: String, enum: ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'gateway', 'other'], required: true },
+    method: { type: String, enum: ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'voucher', 'gateway', 'other'], required: true },
     amountCents: { type: Number, required: true },
     tenderedCents: Number,
     changeCents: Number,

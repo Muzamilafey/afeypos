@@ -1,7 +1,7 @@
 import type { Request } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { allocateProportionally, calculateTax, lineAmount, mergeCheckoutRules, percentOf, PRICE_LISTS, roundQty, type Permission, type PriceListKey } from '@afeypos/shared';
+import { allocateProportionally, calculateTax, lineAmount, mergeCheckoutRules, pointsEarned, percentOf, PRICE_LISTS, roundQty, type Permission, type PriceListKey } from '@afeypos/shared';
 import {
   OnlineOrder, CashMovement, Customer, LedgerEntry, PaymentIntent, Product, Promotion, Sale, SalesDocument, SerialItem, Shift, Till, User, Branch,
 } from '../../models/index.js';
@@ -15,9 +15,10 @@ import { adjustReserved, applyMovement } from '../inventory/stock.js';
 import { quotePrice } from '../catalog/pricing.js';
 import { resolveUnit } from '../catalog/units.js';
 import { consumeOverride } from '../auth/routes.js';
+import { changePoints, customerTier, programOf, spendVoucher } from '../loyalty/service.js';
 import { queueSaleForEtims } from '../etims/service.js';
 
-export const PAYMENT_METHODS = ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'gateway', 'other'] as const;
+export const PAYMENT_METHODS = ['cash', 'mpesa', 'card', 'bank', 'credit', 'loyalty', 'voucher', 'gateway', 'other'] as const;
 
 export const checkoutSchema = z.object({
   clientRequestId: z.string().min(8).max(100),
@@ -127,6 +128,7 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
 
   let shift = null;
   const rules = mergeCheckoutRules(settings.checkoutRules, settings);
+  const program = programOf(settings);
   if (rules.shifts.required) {
     shift = await Shift.findOne({ tillId: till._id, status: 'open' });
     if (!shift) throw new AppError(409, 'SHIFT_REQUIRED', 'Open a shift on this till before selling');
@@ -257,12 +259,20 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
       }
       case 'loyalty': {
         if (!caps.modules.includes('loyalty') || !customer) throw badRequest('Loyalty redemption requires a customer and the loyalty module');
-        const value = settings.loyalty?.pointValueCents ?? 100;
+        const value = program.pointValueCents;
         if (p.amountCents % value !== 0) throw badRequest(`Loyalty redemptions must be multiples of ${value / 100}`);
         const points = p.amountCents / value;
-        const r = await Customer.updateOne({ _id: customer._id, loyaltyPoints: { $gte: points } }, { $inc: { loyaltyPoints: -points } });
-        if (r.modifiedCount !== 1) throw unprocessable('Customer does not have enough loyalty points', 'INSUFFICIENT_POINTS');
+        if (points + loyaltyRedeemed < program.minRedeemPoints) throw unprocessable(`At least ${program.minRedeemPoints} points must be used at a time`, 'POINTS_BELOW_MINIMUM');
+        if ((loyaltyRedeemed + points) * value > Math.floor((totalCents * program.maxRedeemBp) / 10000)) throw unprocessable(`Points can pay at most ${program.maxRedeemBp / 100}% of a sale`, 'POINTS_ABOVE_LIMIT');
+        const left = await changePoints({ customerId: customer._id, points: -points, kind: 'redeem', saleId, saleNumber: number, branchId: till.branchId, userId });
+        if (left === null) throw unprocessable('Customer does not have enough loyalty points', 'INSUFFICIENT_POINTS');
         loyaltyRedeemed += points;
+        break;
+      }
+      case 'voucher': {
+        if (!p.reference) throw badRequest('Enter the voucher code');
+        const v = await spendVoucher(p.reference, p.amountCents, { id: saleId, number });
+        row.reference = v.code;
         break;
       }
       default:
@@ -326,9 +336,10 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
   }
   let loyaltyEarned = 0;
   if (customer && customer.kind !== 'walk_in' && caps.modules.includes('loyalty')) {
-    const per = settings.loyalty?.pointsPerUnitCents ?? 10000;
-    loyaltyEarned = Math.floor((totalCents - loyaltyRedeemed * (settings.loyalty?.pointValueCents ?? 100)) / per);
-    if (loyaltyEarned > 0) await Customer.updateOne({ _id: customer._id }, { $inc: { loyaltyPoints: loyaltyEarned } });
+    // Higher CRM tiers earn faster (Loyalty program > tier multipliers); points paid with never earn points.
+    const tier = Object.keys(program.tierMultipliersBp).length ? await customerTier(customer._id, settings.crm?.tiers) : null;
+    loyaltyEarned = pointsEarned(program, totalCents - loyaltyRedeemed * program.pointValueCents, tier);
+    if (loyaltyEarned > 0) await changePoints({ customerId: customer._id, points: loyaltyEarned, kind: 'earn', saleId, saleNumber: number, branchId: till.branchId, userId, note: tier ? `${tier} tier` : undefined });
   }
   let commissionCents = 0;
   const repId = input.salesRepId ?? customer?.salesRepId ?? undefined;

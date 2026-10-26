@@ -34,6 +34,7 @@ import { staffCardRoutes } from './modules/staff/cards.js';
 import { hrRoutes } from './modules/hr/routes.js';
 import { accountingRoutes } from './modules/accounting/routes.js';
 import { crmRoutes } from './modules/crm/routes.js';
+import { loyaltyRoutes } from './modules/loyalty/routes.js';
 import { onlineOrderRoutes, storefrontRoutes } from './modules/store/routes.js';
 import { backupRoutes } from './modules/backups/routes.js';
 import { syncSettingsRoutes } from './modules/sync/routes.js';
@@ -147,7 +148,7 @@ export function createApp() {
   tenant.use('/auth', authRoutes);
   tenant.use(authenticate);
   tenant.use(hideCostsUnlessPermitted);
-  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, onlineOrderRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
+  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, loyaltyRoutes, onlineOrderRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
     tenant.use(r);
   }
   v1.use(tenant);

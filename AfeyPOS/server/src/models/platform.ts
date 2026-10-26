@@ -31,9 +31,15 @@ const tenantSettingsSchema = new Schema(
       valueType: { type: String, enum: ['weight', 'price'], default: 'weight' },
       valueDecimals: { type: Number, default: 3 },
     },
+    /** Loyalty program (see LOYALTY_DEFAULTS in shared). */
     loyalty: {
+      name: String,
       pointsPerUnitCents: { type: Number, default: 10000 },
       pointValueCents: { type: Number, default: 100 },
+      minRedeemPoints: { type: Number, default: 0 },
+      maxRedeemBp: { type: Number, default: 10000 },
+      welcomeBonus: { type: Number, default: 0 },
+      tierMultipliersBp: { type: Schema.Types.Mixed, default: {} },
     },
     stkPendingTimeoutSeconds: { type: Number, default: 180 },
     /** Uploaded file id (see modules/files) shown on the sign-in page and documents. */

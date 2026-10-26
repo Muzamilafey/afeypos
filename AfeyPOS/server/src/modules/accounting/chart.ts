@@ -24,6 +24,7 @@ export const DEFAULT_CHART: AccountDef[] = [
   { code: '2260', name: 'Other payroll deductions payable', type: 'liability', subtype: 'payroll', key: 'payroll_deductions' },
   { code: '2270', name: 'Pension contributions payable', type: 'liability', subtype: 'payroll', key: 'pension' },
   { code: '2300', name: 'Customer store credit', type: 'liability', subtype: 'current_liability', key: 'store_credit' },
+  { code: '2310', name: 'Gift vouchers outstanding', type: 'liability', subtype: 'current_liability', key: 'vouchers' },
   { code: '3000', name: "Owner's capital", type: 'equity', subtype: 'equity', key: 'capital' },
   { code: '3100', name: 'Retained earnings', type: 'equity', subtype: 'equity', key: 'retained' },
   { code: '3200', name: 'Opening balances', type: 'equity', subtype: 'equity', key: 'opening' },

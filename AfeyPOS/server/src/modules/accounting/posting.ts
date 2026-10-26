@@ -21,7 +21,7 @@
  * without touching updatedAt, so branch sync is unaffected), so posting can run any number of times.
  * Accounting runs on head office (which receives every branch's documents) or a standalone shop.
  */
-import { Account, CashMovement, Expense, GoodsReceipt, JournalEntry, LedgerEntry, PayrollRun, Payout, SalaryAdvance, Sale, SaleReturn, StockMovement, SupplierReturn, Warehouse } from '../../models/index.js';
+import { Account, CashMovement, Voucher, Expense, GoodsReceipt, JournalEntry, LedgerEntry, PayrollRun, Payout, SalaryAdvance, Sale, SaleReturn, StockMovement, SupplierReturn, Warehouse } from '../../models/index.js';
 import { requireTenantId } from '../../lib/context.js';
 import { nextNumber } from '../../lib/numbering.js';
 import { badRequest } from '../../lib/errors.js';
@@ -30,7 +30,7 @@ import { DEFAULT_CHART, EXPENSE_CODE_END, EXPENSE_CODE_START } from './chart.js'
 export interface Line { accountCode: string; debitCents?: number; creditCents?: number; branchId?: unknown; partyType?: string; partyId?: unknown; memo?: string }
 
 const FLAG = '_acct';
-const METHOD_KEY: Record<string, string> = { cash: 'cash', mpesa: 'mpesa', card: 'card', bank: 'bank', cheque: 'bank', gateway: 'gateway', credit: 'ar', loyalty: 'loyalty', other: 'cash', account: 'ar', credit_note: 'store_credit' };
+const METHOD_KEY: Record<string, string> = { cash: 'cash', mpesa: 'mpesa', card: 'card', bank: 'bank', cheque: 'bank', gateway: 'gateway', credit: 'ar', loyalty: 'loyalty', voucher: 'vouchers', other: 'cash', account: 'ar', credit_note: 'store_credit' };
 
 export async function ensureChart() {
   const existing = new Set((await Account.find({}, { code: 1 }).lean()).map((a) => a.code));
@@ -214,9 +214,24 @@ async function postCashMovement(c: Codes, m: any) {
   if (m.type !== 'cash_in' && m.type !== 'cash_out') return;
   const amt = Math.abs(m.amountCents);
   const inn = m.type === 'cash_in';
+  // Cash taken for a gift voucher is owed to the holder until the voucher is spent.
+  const other = inn && m.ref?.type === 'Voucher' ? c.of('vouchers') : c.of('cash_transit');
   await postJournal(c, {
     key: `cash:${m._id}`, date: m.at ?? m.createdAt, memo: `Till ${inn ? 'cash in' : 'cash out'}${m.reason ? `: ${m.reason}` : ''}`, source: { type: 'CashMovement', id: m._id },
-    lines: inn ? [{ accountCode: c.of('cash'), debitCents: amt }, { accountCode: c.of('cash_transit'), creditCents: amt }] : [{ accountCode: c.of('cash_transit'), debitCents: amt }, { accountCode: c.of('cash'), creditCents: amt }],
+    lines: inn ? [{ accountCode: c.of('cash'), debitCents: amt }, { accountCode: other, creditCents: amt }] : [{ accountCode: c.of('cash_transit'), debitCents: amt }, { accountCode: c.of('cash'), creditCents: amt }],
+  });
+}
+
+/**
+ * Issued gift vouchers become a liability. Sold for M-Pesa, card or bank: that account is debited (cash sales
+ * are posted with their till cash movement). Given away as a promotion or goodwill: a marketing expense.
+ */
+async function postVoucher(c: Codes, v: any) {
+  if (v.source === 'sold' && (!v.payment?.method || v.payment.method === 'cash')) return;
+  const debit = v.source === 'sold' ? c.method(v.payment.method) : await c.expense('Promotional vouchers');
+  await postJournal(c, {
+    key: `voucher:${v._id}`, date: v.createdAt, memo: `Gift voucher ${v.code} (${v.source})`, source: { type: 'Voucher', id: v._id, number: v.code },
+    lines: [{ accountCode: debit, debitCents: v.initialCents }, { accountCode: c.of('vouchers'), creditCents: v.initialCents }],
   });
 }
 
@@ -281,6 +296,7 @@ const SOURCES: Record<string, SourceDef> = {
   ledger: { model: LedgerEntry, filter: () => ({ [FLAG]: null }), post: postLedger },
   expenses: { model: Expense, filter: () => ({ [FLAG]: null }), post: postExpense },
   stock: { model: StockMovement, filter: () => ({ [FLAG]: null, type: { $in: STOCK_TYPES } }), post: postStockMovement },
+  vouchers: { model: Voucher, filter: () => ({ [FLAG]: null }), post: postVoucher },
   cash: { model: CashMovement, filter: () => ({ [FLAG]: null, type: { $in: ['cash_in', 'cash_out'] } }), post: postCashMovement },
   payroll: { model: PayrollRun, filter: () => ({ [FLAG]: null, status: { $in: ['approved', 'paid'] } }), post: postPayroll },
   advances: { model: SalaryAdvance, filter: () => ({ [FLAG]: null, status: { $in: ['paid', 'settled'] } }), post: postAdvance },

@@ -1,3 +1,4 @@
+import { changePoints, refundVoucher } from '../loyalty/service.js';
 import type { Request } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
@@ -199,7 +200,15 @@ export async function voidSale(req: Request, saleId: Types.ObjectId, input: z.in
       await PaymentIntent.updateOne({ _id: p.paymentIntentId }, { $inc: { allocatedCents: -p.amountCents }, $unset: { allocatedTo: 1, allocatedAt: 1 } });
     }
     const loyaltyPoints = (sale.loyalty?.redeemed ?? 0) - (sale.loyalty?.earned ?? 0);
-    if (sale.customerId && loyaltyPoints !== 0) await Customer.updateOne({ _id: sale.customerId }, { $inc: { loyaltyPoints } });
+    if (sale.customerId && loyaltyPoints !== 0) {
+      // Points earned may already be spent: the balance can go to zero but not below.
+      const ok = await changePoints({ customerId: sale.customerId, points: loyaltyPoints, kind: 'reverse', saleId: sale._id, saleNumber: sale.number, branchId: sale.branchId, userId, note: 'Sale voided' });
+      if (ok === null) {
+        const c = await Customer.findById(sale.customerId, { loyaltyPoints: 1 }).lean();
+        if (c?.loyaltyPoints) await changePoints({ customerId: sale.customerId, points: -c.loyaltyPoints, kind: 'reverse', saleId: sale._id, saleNumber: sale.number, branchId: sale.branchId, userId, note: 'Sale voided (points already spent)' });
+      }
+    }
+    for (const p of sale.payments) if (p.method === 'voucher' && p.reference) await refundVoucher(p.reference, p.amountCents, sale._id);
     sale.status = 'voided';
     sale.voidedAt = new Date();
     sale.voidedBy = userId;

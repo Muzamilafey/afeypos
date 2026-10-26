@@ -48,7 +48,7 @@ async function itemCodeFor(product: any, pkg: string, qtyUnit: string) {
 const QTY_UNIT: Record<string, string> = { pc: 'U', kg: 'KG', g: 'GRM', l: 'LTR', ml: 'MLT', m: 'MTR', pack: 'PA', ctn: 'CT', case: 'CA', box: 'BX', dozen: 'DZ' };
 
 const r2 = (cents: number) => Math.round(cents) / 100;
-const PAYMENT_CODE: Record<string, string> = { cash: '01', credit: '02', bank: '04', card: '05', mpesa: '06', gateway: '06', loyalty: '07', other: '07' };
+const PAYMENT_CODE: Record<string, string> = { cash: '01', credit: '02', bank: '04', card: '05', mpesa: '06', gateway: '06', loyalty: '07', voucher: '07', other: '07' };
 
 export async function etimsConfigForBranch(branchId?: Types.ObjectId | null) {
   return findActiveConfig('etims', branchId);

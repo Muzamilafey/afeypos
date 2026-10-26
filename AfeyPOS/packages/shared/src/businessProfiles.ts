@@ -343,6 +343,8 @@ export const NAVIGATION: NavItem[] = [
   { key: 'payroll', label: 'Payroll', path: '/hr/payroll', icon: 'wallet', module: 'hr', permission: 'payroll.manage', group: 'people' },
   { key: 'leave', label: 'Leave & advances', path: '/hr/leave', icon: 'clock', module: 'hr', permission: 'hr.manage', group: 'people' },
   { key: 'attendance', label: 'Attendance', path: '/hr/attendance', icon: 'clipboard', module: 'hr', permission: 'hr.manage', group: 'people' },
+  { key: 'loyalty', label: 'Loyalty program', path: '/loyalty', icon: 'star', module: 'loyalty', permission: 'customers.read', group: 'parties' },
+  { key: 'vouchers', label: 'Gift vouchers', path: '/vouchers', icon: 'tag', module: 'pos', permission: 'vouchers.manage', group: 'parties' },
   { key: 'crm', label: 'CRM & campaigns', path: '/crm', icon: 'users', module: 'crm', permission: 'customers.read', group: 'parties' },
   { key: 'accounting', label: 'Accounts', path: '/accounting', icon: 'doc', module: 'accounting', permission: 'accounting.read', group: 'finance' },
   { key: 'reports', label: 'Reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'finance' },

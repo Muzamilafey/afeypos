@@ -107,6 +107,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
   const [removal, setRemoval] = useState<{ kind: 'remove' | 'reduce' | 'clear'; lines: { productId: string; name: string; qty: number; amountCents: number }[]; then: () => void } | null>(null);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
   const [voucherOpen, setVoucherOpen] = useState(false);
+  const [voucherCode, setVoucherCode] = useState('');
   const [customerOpen, setCustomerOpen] = useState(false);
   const [lastSale, setLastSale] = useState<any>(null);
   const [error, setError] = useState<unknown>(null);
@@ -289,7 +290,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
     { kind: 'cash', label: 'Cash payment', onClick: () => pay('cash'), disabled: cantPay, hint: 'F9' },
     { kind: 'card', label: 'Card payment', onClick: () => pay('card'), disabled: cantPay },
     { kind: 'loyalty', label: 'Loyalty card', onClick: () => setLoyaltyOpen(true), disabled: !has('loyalty'), title: has('loyalty') ? undefined : 'Turn on the Loyalty module in Settings' },
-    { kind: 'voucher', label: 'Voucher', onClick: () => setVoucherOpen(true), disabled: !cart.lines.length || !has('promotions'), title: has('promotions') ? undefined : 'Turn on Promotions to accept vouchers', badge: cart.couponCode || undefined },
+    { kind: 'voucher', label: 'Voucher', onClick: () => setVoucherOpen(true), disabled: cantPay, badge: cart.couponCode || undefined },
     { kind: 'customer', label: cart.customer ? `Customer: ${cart.customer.name}` : 'Customer', onClick: () => setCustomerOpen(true), hint: 'F4', badge: cart.customer ? '✓' : undefined },
     { kind: 'hold', label: 'Hold sale', onClick: suspend, disabled: !cart.lines.length || !rules.items.holdAllowed, hint: 'F8', title: rules.items.holdAllowed ? undefined : 'Holding sales is turned off in Checkout rules' },
   ];
@@ -491,7 +492,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
             searchRef.current?.focus();
           }} />
       )}
-      {voucherOpen && <VoucherModal current={cart.couponCode} onClose={() => { setVoucherOpen(false); searchRef.current?.focus(); }} onApply={async (code) => {
+      {voucherOpen && <VoucherModal current={cart.couponCode} coupons={has('promotions')} onPay={(code) => { setVoucherOpen(false); setVoucherCode(code); setPaying('voucher'); }} onClose={() => { setVoucherOpen(false); searchRef.current?.focus(); }} onApply={async (code) => {
         const next = { ...cart, couponCode: code };
         await requoteAll(next);
         setVoucherOpen(false);
@@ -510,7 +511,7 @@ function Checkout({ till, shift }: { till: { _id: string; name: string; warehous
       }} />}
       {customerOpen && <CustomerPicker onClose={() => setCustomerOpen(false)} onPick={(c) => { setCustomerOpen(false); const next = { ...cart, customer: c, priceList: (c?.priceList as PriceListKey) && caps.priceLists.includes(c?.priceList as PriceListKey) ? (c!.priceList as PriceListKey) : cart.priceList }; requoteAll(next); }} />}
       {paying && (
-        <PaymentModal cart={cart} total={totals.total} till={till} shift={shift} initialMethod={paying} onClose={() => setPaying(false)}
+        <PaymentModal cart={cart} total={totals.total} till={till} shift={shift} initialMethod={paying} initialVoucher={paying === 'voucher' ? voucherCode : undefined} onClose={() => setPaying(false)}
           onDone={(sale) => { setPaying(false); setLastSale(sale); removeCart(active); pickup.refetch(); qc.invalidateQueries({ queryKey: ['pos-search'] }); searchRef.current?.focus(); }} />
       )}
       {lastSale && <ReceiptModal sale={lastSale} tillId={till._id} onClose={() => { setLastSale(null); searchRef.current?.focus(); }} />}
@@ -599,16 +600,48 @@ function CustomerPicker({ onClose, onPick }: { onClose: () => void; onPick: (c: 
   );
 }
 
-/** Voucher / coupon code: prices are re-quoted with it and the checkout re-checks it on the server. */
-function VoucherModal({ current, onClose, onApply }: { current: string; onClose: () => void; onApply: (code: string) => Promise<void> }) {
-  const [code, setCode] = useState(current);
+/**
+ * Pay with Voucher: a gift voucher with a balance (GV-...) pays for the sale; a discount coupon (a code set up
+ * under Promotions) lowers the prices. Both are re-checked on the server when the sale completes.
+ */
+function VoucherModal({ current, coupons, onClose, onApply, onPay }: { current: string; coupons: boolean; onClose: () => void; onApply: (code: string) => Promise<void>; onPay: (code: string) => void }) {
+  const [mode, setMode] = useState<'gift' | 'coupon'>('gift');
+  const [code, setCode] = useState('');
+  const [coupon, setCoupon] = useState(current);
+  const [info, setInfo] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const check = async () => {
+    setBusy(true); setError(null); setInfo(null);
+    try { setInfo((await api<{ data: any }>('/vouchers/check', { query: { code: code.trim().toUpperCase() } })).data); } catch (e) { setError(e); } finally { setBusy(false); }
+  };
   const apply = async (c: string) => { setBusy(true); try { await onApply(c.trim().toUpperCase()); } finally { setBusy(false); } };
   return (
-    <Modal open onClose={onClose} title="Pay with voucher" icon="tag" subtitle="Scan or type the voucher code. Its discount is applied to the items it covers." size="sm"
-      footer={<>{current && <Button variant="ghost" onClick={() => apply('')}>Remove voucher</Button>}<Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} disabled={!code.trim()} onClick={() => apply(code)}>Apply voucher</Button></>}>
-      <Field label="Voucher code"><Input autoFocus value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} onKeyDown={(e) => { if (e.key === 'Enter' && code.trim()) apply(code); }} placeholder="e.g. KARIBU10" /></Field>
-      <p className="mt-2 text-xs text-ink-500">Vouchers are created as coupon promotions under Promotions.</p>
+    <Modal open onClose={onClose} title="Pay with voucher" icon="tag" size="sm"
+      footer={mode === 'gift'
+        ? <><Button variant="secondary" onClick={onClose}>Cancel</Button>{info?.usable ? <Button onClick={() => onPay(info.code)}>Pay with this voucher</Button> : <Button loading={busy} disabled={!code.trim()} onClick={check}>Check voucher</Button>}</>
+        : <>{current && <Button variant="ghost" onClick={() => apply('')}>Remove coupon</Button>}<Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} disabled={!coupon.trim()} onClick={() => apply(coupon)}>Apply coupon</Button></>}>
+      {coupons && (
+        <div className="mb-3 flex gap-1 rounded-lg bg-ink-100 p-1 text-sm dark:bg-ink-800" role="radiogroup" aria-label="Voucher type">
+          {([['gift', 'Gift voucher'], ['coupon', 'Discount coupon']] as const).map(([k, l]) => <button key={k} type="button" role="radio" aria-checked={mode === k} onClick={() => { setMode(k); setError(null); }} className={cx('flex-1 rounded-md py-1.5', mode === k ? 'bg-white font-semibold shadow dark:bg-ink-700' : 'text-ink-500')}>{l}</button>)}
+        </div>
+      )}
+      {mode === 'gift' ? (
+        <>
+          <Field label="Voucher code"><Input autoFocus value={code} onChange={(e) => { setCode(e.target.value.toUpperCase()); setInfo(null); }} onKeyDown={(e) => { if (e.key === 'Enter' && code.trim()) { e.preventDefault(); if (info?.usable) onPay(info.code); else check(); } }} placeholder="Scan the voucher, e.g. GV-ABCD2345" /></Field>
+          {info && (
+            <div className={cx('mt-3 rounded-lg p-3 text-sm', info.usable ? 'bg-[#84603a] text-white' : 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-200')} data-testid="voucher-info">
+              {info.usable ? <><div className="text-xs uppercase tracking-widest opacity-80">Balance</div><div className="text-2xl font-black">{money(info.balanceCents)}</div><div className="text-xs opacity-90">of {money(info.initialCents)}{info.expiresAt ? ` · valid until ${new Date(info.expiresAt).toLocaleDateString()}` : ''}</div></> : info.problem}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <Field label="Coupon code"><Input autoFocus value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} onKeyDown={(e) => { if (e.key === 'Enter' && coupon.trim()) apply(coupon); }} placeholder="e.g. KARIBU10" /></Field>
+          <p className="mt-2 text-xs text-ink-500">Coupons are set up as promotions with a code under Promotions.</p>
+        </>
+      )}
+      <div className="mt-2"><ErrorBox error={error} /></div>
     </Modal>
   );
 }
@@ -623,11 +656,7 @@ function LoyaltyCardModal({ onClose, onFound }: { onClose: () => void; onFound: 
     if (!q) return;
     setBusy(true); setError(null);
     try {
-      const list = (await api<{ data: any[] }>('/customers', { query: { q, limit: 5 } })).data.filter((c) => c.kind !== 'walk_in');
-      const exact = list.find((c) => c.code?.toUpperCase() === q.toUpperCase() || (c.phone ?? '').replace(/\D/g, '').endsWith(q.replace(/\D/g, '').slice(-9)));
-      const hit = exact ?? (list.length === 1 ? list[0] : null);
-      if (!hit) setError(new ApiError(404, 'NOT_FOUND', list.length ? 'Several customers match: scan the card or type the full code' : `No customer with card or phone "${q}"`));
-      else onFound(hit);
+      onFound((await api<{ data: any }>('/loyalty/lookup', { query: { code: q } })).data);
     } catch (e) { setError(e); } finally { setBusy(false); }
   };
   return (
@@ -640,9 +669,10 @@ function LoyaltyCardModal({ onClose, onFound }: { onClose: () => void; onFound: 
   );
 }
 
-function PaymentModal({ cart, total, till, shift, initialMethod, onClose, onDone }: { cart: Cart; total: number; till: { _id: string }; shift: any; initialMethod?: string; onClose: () => void; onDone: (sale: any) => void }) {
+function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher, onClose, onDone }: { cart: Cart; total: number; till: { _id: string }; shift: any; initialMethod?: string; initialVoucher?: string; onClose: () => void; onDone: (sale: any) => void }) {
   const { has, can, me } = useAuth();
   const terminals: { name: string; bank: string; terminalId: string }[] = me?.tenant.settings?.cardTerminals ?? [];
+  const [voucher, setVoucher] = useState<{ code: string; info: any | null }>({ code: initialVoucher ?? '', info: null });
   const [card, setCard] = useState({ terminal: terminals[0]?.name ?? '', type: 'Visa', issuer: '', last4: '', approval: '' });
   const toast = useToast();
   // Stable id for this payment attempt: retries after a network error replay instead of double-selling.
@@ -690,11 +720,38 @@ function PaymentModal({ cart, total, till, shift, initialMethod, onClose, onDone
     { key: 'bank', label: 'Bank' },
     ...(has('customerCredit') && cart.customer && cart.customer.kind !== 'walk_in' ? [{ key: 'credit', label: 'On account' }] : []),
     ...(has('loyalty') && cart.customer?.loyaltyPoints ? [{ key: 'loyalty', label: `Points (${cart.customer.loyaltyPoints})` }] : []),
+    { key: 'voucher', label: 'Gift voucher' },
   ];
+  // Gift voucher: look up the balance; Points: offer what the program allows on this sale.
+  const checkVoucher = async (code = voucher.code) => {
+    setError(null);
+    try {
+      const info = (await api<{ data: any }>('/vouchers/check', { query: { code: code.trim().toUpperCase() } })).data;
+      setVoucher({ code: info.code, info });
+      if (info.usable) setAmount(Math.min(info.balanceCents, remaining));
+    } catch (e) { setVoucher({ code, info: null }); setError(e); }
+  };
+  useEffect(() => {
+    if (method === 'voucher' && voucher.code && !voucher.info) checkVoucher();
+    if (method === 'loyalty' && cart.customer) {
+      api<{ data: { amountCents: number; points: number; minRedeemPoints: number } }>('/loyalty/redeemable', { query: { customerId: cart.customer._id, totalCents: total } })
+        .then((r) => { setAmount(Math.min(r.data.amountCents, remaining)); if (!r.data.points) setError(new ApiError(422, 'POINTS', r.data.minRedeemPoints ? `Not enough points for this sale (at least ${r.data.minRedeemPoints} needed)` : 'No points can be used on this sale')); })
+        .catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [method]);
 
   const addPayment = () => {
     if (!amount || amount <= 0) return;
     const a = Math.min(amount, remaining);
+    if (method === 'voucher') {
+      if (!voucher.info?.usable) { checkVoucher(); return; }
+      const use = Math.min(a, voucher.info.balanceCents - payments.filter((p) => p.method === 'voucher' && p.reference === voucher.code).reduce((x, p) => x + p.amountCents, 0));
+      if (use <= 0) { setError(new ApiError(422, 'VOUCHER', 'This voucher is already used in full on this sale')); return; }
+      setPayments((ps) => [...ps, { method, amountCents: use, reference: voucher.code, label: `Voucher ${voucher.code}` }]);
+      setVoucher({ code: '', info: null });
+      return;
+    }
     if (method === 'card') {
       // Bank card machine: the approval code on the slip proves the payment; the machine and card are recorded.
       if (!/^[A-Za-z0-9]{4,12}$/.test(card.approval.trim())) { setError(new ApiError(400, 'CARD_APPROVAL', 'Enter the approval code printed on the card machine slip')); return; }
@@ -776,6 +833,15 @@ function PaymentModal({ cart, total, till, shift, initialMethod, onClose, onDone
                     <Field label="Approval code"><Input autoFocus value={card.approval} maxLength={12} placeholder="From the slip" onChange={(e) => setCard({ ...card, approval: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') addPayment(); }} /></Field>
                   </div>
                   {gateways.data?.some((g) => g.provider === 'pesapal') && <button type="button" className="text-xs font-semibold text-brand-600 hover:underline" onClick={() => setMethod('gateway')}>No card machine? Let the customer pay by card online with Pesapal (QR code) →</button>}
+                </div>
+              )}
+              {method === 'voucher' && (
+                <div className="space-y-2 rounded-lg border border-[#e7d8c6] bg-[#f7efe6] p-3 dark:border-[#5b4329] dark:bg-[#2a2016]">
+                  <div className="flex items-end gap-2">
+                    <Field label="Voucher code" className="flex-1"><Input autoFocus={!initialVoucher} value={voucher.code} onChange={(e) => setVoucher({ code: e.target.value.toUpperCase(), info: null })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (voucher.info?.usable) addPayment(); else checkVoucher(); } }} placeholder="GV-ABCD2345" /></Field>
+                    <Button variant="secondary" onClick={() => checkVoucher()}>Check</Button>
+                  </div>
+                  {voucher.info && <p className="text-sm" data-testid="voucher-balance">{voucher.info.usable ? <>Balance <b>{money(voucher.info.balanceCents)}</b>{voucher.info.balanceCents > remaining ? ` · ${money(voucher.info.balanceCents - remaining)} stays on the voucher` : ''}</> : <span className="text-red-600">{voucher.info.problem}</span>}</p>}
                 </div>
               )}
               {method === 'bank' && <Field label="Reference (bank transfer)"><Input value={reference} onChange={(e) => setReference(e.target.value)} /></Field>}

@@ -14,7 +14,7 @@ import {
   AttendanceRecord, AuditLog, CustomRole, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
   IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
   SalesDocument, SerialItem, Shift, StockAdjustment, StockBatch, StockLevel, StockMovement, Stocktake, StockTransfer, Supplier,
-  SupplierQuotation, SupplierReturn, Tenant, Till, User, Warehouse,
+  SupplierQuotation, SupplierReturn, Tenant, Till, User, Voucher, LoyaltyTransaction, Warehouse,
 } from '../../models/index.js';
 
 export interface BranchScope {
@@ -69,6 +69,9 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: SupplierQuotation, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
   { model: BiometricTemplate, dir: 'both', field: 'updatedAt' },
   { model: CustomerActivity, dir: 'both', field: 'updatedAt' },
+  // Vouchers can be sold at one branch and spent at another. Offline branches cannot see a balance spent
+  // elsewhere until they sync, so a voucher spent twice offline shows up at head office (newest wins).
+  { model: Voucher, dir: 'both', field: 'updatedAt' },
   // Online orders are taken at HQ; the branch that fulfils them receives and completes them.
   { model: OnlineOrder, dir: 'both', field: 'updatedAt', owner: inBranch, downFilter: (b) => ({ branchId: new Types.ObjectId(b.branchId) }) },
 
@@ -92,6 +95,7 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: MpesaEvent, dir: 'up', field: 'at' },
   { model: LedgerEntry, dir: 'up', field: 'updatedAt' },
   { model: AttendanceRecord, dir: 'up', field: 'at' },
+  { model: LoyaltyTransaction, dir: 'up', field: 'at' },
   { model: AuditLog, dir: 'up', field: 'at' },
 ];
 

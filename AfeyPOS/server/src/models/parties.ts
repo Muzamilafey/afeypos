@@ -16,6 +16,9 @@ const customerSchema = new Schema(
     balanceCents: { type: Number, default: 0 },
     paymentTermsDays: { type: Number, default: 30 },
     loyaltyPoints: { type: Number, default: 0 },
+    /** Loyalty card number (LC + 10 digits), scanned at the till. */
+    loyaltyCardNo: { type: String, trim: true, uppercase: true },
+    loyaltyJoinedAt: Date,
     dateOfBirth: Date,
     salesRepId: { type: ObjectId, ref: 'User' },
     notes: String,
@@ -34,6 +37,7 @@ const customerSchema = new Schema(
 );
 customerSchema.index({ tenantId: 1, code: 1 }, { unique: true });
 customerSchema.index({ tenantId: 1, tags: 1 });
+customerSchema.index({ tenantId: 1, loyaltyCardNo: 1 }, { unique: true, partialFilterExpression: { loyaltyCardNo: { $type: 'string' } } });
 customerSchema.index({ tenantId: 1, phone: 1 });
 customerSchema.index({ tenantId: 1, name: 'text', phone: 'text', email: 'text' });
 export const Customer = tenantModel('Customer', customerSchema);
