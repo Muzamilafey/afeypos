@@ -55,4 +55,4 @@ const tillSchema = new Schema(
   { timestamps: true },
 );
 tillSchema.index({ tenantId: 1, code: 1 }, { unique: true });
-export const Till = tenantModel('Till', tillSchema);
+export const Till = tenantModel('Till', tillSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });

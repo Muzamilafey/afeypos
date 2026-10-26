@@ -17,6 +17,7 @@ import { authRoutes, recoveryRoutes } from './modules/auth/routes.js';
 import { salesRoutes } from './modules/sales/routes.js';
 import { documentRoutes } from './modules/sales/documents.js';
 import { documentPdfRoutes } from './modules/documents/routes.js';
+import { hideCostsUnlessPermitted } from './http/costVisibility.js';
 import { catalogRoutes } from './modules/catalog/routes.js';
 import { inventoryRoutes } from './modules/inventory/routes.js';
 import { partyRoutes } from './modules/parties/routes.js';
@@ -145,6 +146,7 @@ export function createApp() {
   tenant.use('/auth', recoveryRoutes);
   tenant.use('/auth', authRoutes);
   tenant.use(authenticate);
+  tenant.use(hideCostsUnlessPermitted);
   for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, onlineOrderRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
     tenant.use(r);
   }

@@ -354,6 +354,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'audit', label: 'Audit trail', path: '/audit', icon: 'shield', permission: 'audit.read', group: 'finance' },
   { key: 'settings', label: 'Settings', path: '/settings', icon: 'settings', permission: 'settings.manage', group: 'admin' },
   { key: 'users', label: 'Users', path: '/settings/users', icon: 'user', permission: 'users.manage', group: 'admin' },
+  { key: 'roles', label: 'Roles & permissions', path: '/settings/roles', icon: 'shield', permission: 'users.manage', group: 'admin' },
   { key: 'locations', label: 'Branches & tills', path: '/settings/locations', icon: 'map', permission: 'branches.manage', group: 'admin' },
   { key: 'sync', label: 'Branch sync', path: '/settings/sync', icon: 'refresh', module: 'multiBranch', permission: 'settings.manage', group: 'admin' },
   { key: 'onlineShop', label: 'Online shop', path: '/settings/online-shop', icon: 'store', module: 'onlineStore', permission: 'settings.manage', group: 'admin' },

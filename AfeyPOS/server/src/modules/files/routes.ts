@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { parse } from '../../http/validate.js';
-import { requirePermission } from '../../http/auth.js';
+import { requirePermission, signedIn } from '../../http/auth.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 
@@ -51,7 +51,7 @@ router.post('/files', requirePermission('products.manage'), async (req, res) => 
   res.status(201).json({ data: { id, url: `/api/v1/files/${id}`, mime: type.mime, bytes: data.length } });
 });
 
-router.get('/files/:id', async (req, res) => {
+router.get('/files/:id', signedIn('product photos, logos and attachments of this business'), async (req, res) => {
   const id = String(req.params.id);
   if (!/^[a-f0-9]{32}\.(png|jpg|webp|pdf)$/.test(id)) throw notFound('File');
   const file = path.join(tenantDir(String(req.tenant!._id)), id);

@@ -1,11 +1,12 @@
 import { Router } from 'express';
+import { userPermissions } from '../../lib/access.js';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { navigationFor, type Permission } from '@afeypos/shared';
 import { AttendanceRecord, Session, User, IdempotencyRecord } from '../../models/index.js';
 import { authenticateCard } from '../staff/cards.js';
 import { parse, idParam } from '../../http/validate.js';
-import { authenticate, signShortToken, verifyShortToken } from '../../http/auth.js';
+import { authenticate, signedIn, signShortToken, verifyShortToken } from '../../http/auth.js';
 import { decrypt, encrypt, generateTotpSecret, hashPassword, verifyPassword, verifyTotp } from '../../lib/crypto.js';
 import { AppError, badRequest, forbidden, notFound, unauthorized } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
@@ -106,7 +107,8 @@ router.post('/logout', async (req, res) => {
  * Manager override: a supervisor authorises a restricted action on the cashier's screen.
  * Returns a single-use token valid for 2 minutes carrying the approved permission.
  */
-router.post('/override', authLimiter, authenticate, async (req, res) => {
+// Any signed-in cashier may ask; the supervisor's own permissions decide.
+router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor to approve'), async (req, res) => {
   const body = parse(
     z.object({ email: z.string().trim().toLowerCase().email().optional(), cardCode: z.string().trim().max(40).optional(), password: z.string().optional(), pin: z.string().optional(), permission: z.string() }),
     req.body,
@@ -121,8 +123,8 @@ router.post('/override', authLimiter, authenticate, async (req, res) => {
     const secretOk = sup && (body.password ? await verifyPassword(body.password, sup.passwordHash) : body.pin && sup.pinHash ? await verifyPassword(body.pin, sup.pinHash) : false);
     if (!sup || !secretOk) throw unauthorized('Supervisor credentials are invalid');
   }
-  const { permissionsForRoles } = await import('@afeypos/shared');
-  if (!permissionsForRoles(sup.roles as any).has(body.permission as Permission)) throw forbidden('Supervisor lacks the required permission');
+  // Same effective permissions as a sign-in: custom roles count and per-user denials apply.
+  if (!(await userPermissions(sup)).has(body.permission as Permission)) throw forbidden('Supervisor lacks the required permission');
   const token = signShortToken({ sub: String(sup._id), tid: String(req.tenant!._id), perm: body.permission, for: String(req.auth!.userId), jti: crypto.randomUUID() }, 'override', 120);
   await audit(req, { action: 'auth.override_granted', entity: 'User', entityId: sup._id, details: { permission: body.permission, forUser: String(req.auth!.userId) } });
   res.json({ overrideToken: token, supervisor: { id: sup._id, name: sup.name } });
@@ -147,6 +149,8 @@ router.post('/biometric-login', authLimiter, async (req, res) => {
 });
 
 router.use(authenticate);
+// Below: the signed-in user's own account (profile, sessions, password, PIN, two-factor).
+router.use(signedIn('own account'));
 
 router.get('/me', async (req, res) => {
   const a = req.auth!;

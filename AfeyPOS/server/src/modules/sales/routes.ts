@@ -2,9 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { Sale, SaleReturn, Customer, Tenant, User, Payout } from '../../models/index.js';
 import { parse, idParam, objectId, pagination, positiveCents, escapeRegex } from '../../http/validate.js';
-import { can, requirePermission, assertBranchAccess } from '../../http/auth.js';
+import { can, requirePermission, assertBranchAccess, requireAnyPermission } from '../../http/auth.js';
 import { idempotent } from '../../http/idempotency.js';
-import { forbidden, notFound } from '../../lib/errors.js';
+import { notFound } from '../../lib/errors.js';
 import { emitToTenant } from '../../realtime/socket.js';
 import { notify } from '../notifications/service.js';
 import { formatMoney } from '@afeypos/shared';
@@ -72,10 +72,8 @@ router.get('/sales/:id', requirePermission('sales.read'), async (req, res) => {
 });
 
 /** Cashiers without sales.return can still start a return; the service asks for a supervisor's approval. */
-const canStartReturn = (req: any, _res: any, next: any) => {
-  if (!can(req, 'sales.return') && !can(req, 'sales.create')) throw forbidden('Missing permission: sales.return');
-  next();
-};
+// Cashiers start returns (approval rules apply in processReturn); dedicated returns staff too.
+const canStartReturn = requireAnyPermission('sales.return', 'sales.create');
 
 router.post('/sales/:id/returns', canStartReturn, idempotent('sale-return'), async (req, res) => {
   const input = parse(returnSchema, req.body);

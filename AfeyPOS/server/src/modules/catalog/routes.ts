@@ -215,6 +215,8 @@ router.put('/products/:id', requirePermission('products.manage'), async (req, re
   if (!before) throw notFound('Product');
   if (JSON.stringify(before.prices) !== JSON.stringify(input.prices) && !req.auth!.permissions.has('prices.manage')) throw badRequest('You need the prices.manage permission to change prices');
   const data = normalizeProduct(input, req.capabilities!);
+  // Staff who cannot see cost prices cannot change them either (their editor does not show the cost).
+  if (!req.auth!.permissions.has('products.cost')) data.costCents = before.costCents ?? 0;
   if (before.trackSerials !== data.trackSerials || before.trackBatches !== data.trackBatches) {
     const hasStock = await StockLevel.exists({ productId: id, qty: { $ne: 0 } });
     if (hasStock) throw badRequest('Batch/serial tracking can only be changed when the product has no stock');
@@ -287,12 +289,13 @@ router.patch('/promotions/:id', requirePermission('prices.manage'), requireModul
 });
 
 // ---- CSV import / export ----
-router.get('/products-export.csv', requirePermission('products.read'), async (_req, res) => {
+router.get('/products-export.csv', requirePermission('products.read'), async (req, res) => {
+  const showCost = req.auth!.permissions.has('products.cost');
   const products = await Product.find({}).sort({ sku: 1 }).lean();
   const cats = new Map((await Category.find({}).lean()).map((c) => [String(c._id), c.name]));
   const rows = products.map((p) => ({
     sku: p.sku, name: p.name, type: p.type, category: p.categoryId ? cats.get(String(p.categoryId)) ?? '' : '', baseUnit: p.baseUnit,
-    barcode: p.barcodes.find((b) => b.unitCode === p.baseUnit)?.code ?? '', cost: (p.costCents ?? 0) / 100,
+    barcode: p.barcodes.find((b) => b.unitCode === p.baseUnit)?.code ?? '', ...(showCost ? { cost: (p.costCents ?? 0) / 100 } : {}),
     retail: (p.prices?.retail ?? 0) / 100, wholesale: p.prices?.wholesale ? p.prices.wholesale / 100 : '', contractor: p.prices?.contractor ? p.prices.contractor / 100 : '',
     taxRatePercent: p.taxRateBp === null || p.taxRateBp === undefined ? '' : p.taxRateBp / 100, reorderLevel: p.reorderLevel, active: p.active,
   }));
@@ -328,7 +331,7 @@ router.post('/products-import', requirePermission('products.manage'), async (req
       const baseUnit = r.baseUnit || 'pc';
       const data: Record<string, unknown> = {
         name: r.name, type: ['stock', 'service', 'non_stock'].includes(r.type) ? r.type : 'stock', baseUnit, categoryId,
-        costCents: toMoney(r.cost) ?? 0,
+        ...(req.auth!.permissions.has('products.cost') ? { costCents: toMoney(r.cost) ?? 0 } : {}),
         prices: { retail: toMoney(r.retail) ?? 0, wholesale: toMoney(r.wholesale), contractor: toMoney(r.contractor) },
         taxRateBp: r.taxRatePercent === undefined || r.taxRatePercent === '' ? null : Math.round(Number(r.taxRatePercent) * 100),
         reorderLevel: Number(r.reorderLevel || 0),

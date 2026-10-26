@@ -16,6 +16,7 @@ import { AccountingPage, LedgerPage } from './pages/accounting/Accounting';
 import { CrmPage } from './pages/crm/CRM';
 import { OnlineOrdersPage, StoreSettingsPage } from './pages/OnlineOrders';
 import { StoreStudioPage } from './pages/StoreStudio';
+import { RolesPage } from './pages/settings/Roles';
 import { PurchasingPage } from './pages/sales/Purchasing';
 import { DocumentsPage } from './pages/sales/Documents';
 import { ProductEditPage, ProductsPage } from './pages/inventory/Products';
@@ -96,6 +97,7 @@ export function App() {
         <Route path="audit" element={<Gate perm="audit.read"><AuditPage /></Gate>} />
         <Route path="settings" element={<Gate perm="settings.manage"><BusinessSettingsPage /></Gate>} />
         <Route path="settings/users" element={<Gate perm="users.manage"><UsersPage /></Gate>} />
+        <Route path="settings/roles" element={<Gate perm="users.manage"><RolesPage /></Gate>} />
         <Route path="settings/locations" element={<Gate perm="branches.manage"><LocationsPage /></Gate>} />
         <Route path="settings/sync" element={<Gate perm="settings.manage"><SyncPage /></Gate>} />
         <Route path="settings/integrations" element={<Gate perm="integrations.manage"><IntegrationsPage /></Gate>} />

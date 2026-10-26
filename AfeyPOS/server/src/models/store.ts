@@ -44,4 +44,4 @@ const onlineOrderSchema = new Schema(
 onlineOrderSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 onlineOrderSchema.index({ tenantId: 1, clientRequestId: 1 }, { unique: true });
 onlineOrderSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
-export const OnlineOrder = tenantModel('OnlineOrder', onlineOrderSchema);
+export const OnlineOrder = tenantModel('OnlineOrder', onlineOrderSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });

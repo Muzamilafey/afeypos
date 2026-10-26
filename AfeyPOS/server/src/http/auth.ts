@@ -1,7 +1,8 @@
 import type { Request, RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
 import { Types } from 'mongoose';
-import { permissionsForRoles, type ModuleKey, type Permission, type Role } from '@afeypos/shared';
+import type { ModuleKey, Permission } from '@afeypos/shared';
+import { userPermissions, userWarehouses } from '../lib/access.js';
 import { env } from '../config/env.js';
 import { Session, User } from '../models/index.js';
 import { AppError, forbidden, unauthorized } from '../lib/errors.js';
@@ -50,9 +51,11 @@ export async function resolveAuth(token: string, tenantId?: Types.ObjectId): Pro
 
   const u = await User.findOne({ _id: claims.sub, status: 'active' }).lean();
   if (!u) throw unauthorized('Account is disabled');
+  // Recomputed on every request, so role and permission changes apply at once.
+  const [permissions, warehouseIds] = await Promise.all([userPermissions(u), userWarehouses(u)]);
   return {
-    kind: 'tenant', userId: u._id, name: u.name, email: u.email, roles: u.roles as Role[], permissions: permissionsForRoles(u.roles as Role[]),
-    sessionId: session._id, tenantId, branchIds: (u.branchIds ?? []) as Types.ObjectId[],
+    kind: 'tenant', userId: u._id, name: u.name, email: u.email, roles: u.roles as string[], permissions,
+    sessionId: session._id, tenantId, branchIds: (u.branchIds ?? []) as Types.ObjectId[], warehouseIds,
   };
 }
 
@@ -66,17 +69,57 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   if (!token) throw unauthorized();
   req.auth = await resolveAuth(token, req.tenant?._id);
   const ctx = currentContext();
-  if (ctx) ctx.userId = req.auth.userId;
+  if (ctx) {
+    ctx.userId = req.auth.userId;
+    // Branch-restricted users only see and write their branches' records (db/branchScopePlugin).
+    if (req.auth.branchIds.length) ctx.branchScope = { branchIds: req.auth.branchIds, warehouseIds: req.auth.warehouseIds };
+  }
   next();
 };
 
+/** Marks a handler as an access check, so the route audit (tests/permissions-audit) can see every route is guarded. */
+export const GUARD = Symbol('afey.guard');
+export function markGuard<T extends RequestHandler>(fn: T, description: string): T {
+  return Object.assign(fn, { [GUARD]: description });
+}
+
 export function requirePermission(...perms: Permission[]): RequestHandler {
-  return (req, _res, next) => {
+  return markGuard((req, _res, next) => {
     const a = req.auth;
     if (!a) throw unauthorized();
     for (const p of perms) if (!a.permissions.has(p)) throw forbidden(`Missing permission: ${p}`);
     next();
-  };
+  }, perms.join('+'));
+}
+
+/** Passes with at least one of the permissions. */
+export function requireAnyPermission(...perms: Permission[]): RequestHandler {
+  return markGuard((req, _res, next) => {
+    const a = req.auth;
+    if (!a) throw unauthorized();
+    if (!perms.some((p) => a.permissions.has(p))) throw forbidden(`Missing permission: ${perms.join(' or ')}`);
+    next();
+  }, perms.join('|'));
+}
+
+/** Passes for users holding one of the built-in roles (for actions reserved to owners/administrators). */
+export function requireRole(...roles: string[]): RequestHandler {
+  return markGuard((req, _res, next) => {
+    if (!req.auth) throw unauthorized();
+    if (!roles.some((r) => req.auth!.roles.includes(r))) throw forbidden('Only owners and administrators can do this');
+    next();
+  }, `role:${roles.join('|')}`);
+}
+
+/**
+ * Any signed-in user may use the route (their own account, or data every staff member needs). Must be stated
+ * explicitly: the route audit test fails for signed-in routes without a guard.
+ */
+export function signedIn(reason: string): RequestHandler {
+  return markGuard((req, _res, next) => {
+    if (!req.auth) throw unauthorized();
+    next();
+  }, `signed-in: ${reason}`);
 }
 
 export function requireModule(...modules: ModuleKey[]): RequestHandler {
@@ -100,6 +143,13 @@ export function assertBranchAccess(req: Request, branchId: Types.ObjectId | stri
   const a = req.auth;
   if (!a || !branchId || a.branchIds.length === 0) return;
   if (!a.branchIds.some((b) => String(b) === String(branchId))) throw forbidden('You do not have access to this branch');
+}
+
+/** For users limited to some branches: the warehouse must belong to one of them. */
+export function assertWarehouseAccess(req: Request, warehouseId: Types.ObjectId | string | undefined | null) {
+  const a = req.auth;
+  if (!a || !warehouseId || a.branchIds.length === 0) return;
+  if (!a.warehouseIds.some((w) => String(w) === String(warehouseId))) throw forbidden('You do not have access to this warehouse');
 }
 
 export function can(req: Request, p: Permission): boolean {

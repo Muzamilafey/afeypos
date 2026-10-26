@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { MODULES, PAYMENT_PROVIDER_INFO, PAYMENT_PROVIDERS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
+import { MODULES, PAYMENT_PROVIDER_INFO, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import {
   AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
 } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
-import { requireModule, requirePermission } from '../../http/auth.js';
+import { requireModule, requirePermission, signedIn } from '../../http/auth.js';
 import { AppError, badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { hashPassword } from '../../lib/crypto.js';
@@ -24,6 +24,7 @@ import { callbackUrls, gatewayFor } from '../payments/mpesa.js';
 import { notify } from '../notifications/service.js';
 import { DEFAULT_TEMPLATES } from '../notifications/templates.js';
 import { CashMovement } from '../../models/index.js';
+import { checkUserAccessChange, roleRoutes } from './roles.js';
 
 const router = Router();
 
@@ -96,7 +97,9 @@ const userSchema = z.object({
   name: z.string().trim().min(2).max(120),
   email: z.string().trim().toLowerCase().email(),
   phone: z.string().max(30).optional(),
-  roles: z.array(z.enum(TENANT_ROLES as [string, ...string[]])).min(1),
+  roles: z.array(z.enum(TENANT_ROLES as [string, ...string[]]).or(z.string().regex(/^custom:[a-z0-9-]{2,40}$/))).min(1).max(10),
+  extraPermissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length).default([]),
+  deniedPermissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length).default([]),
   branchIds: z.array(objectId).default([]),
   commissionRateBp: z.number().int().min(0).max(5000).default(0),
   jobTitle: z.string().trim().max(80).optional(),
@@ -116,36 +119,38 @@ router.get('/settings/users', requirePermission('users.manage'), async (_req, re
 
 router.post('/settings/users', requirePermission('users.manage'), async (req, res) => {
   const body = parse(userSchema.extend({ password: passwordSchema, pin: z.string().regex(/^\d{4,8}$/).optional() }), req.body);
-  if (body.roles.includes('tenant_owner') && !req.auth!.roles.includes('tenant_owner')) throw forbidden('Only owners can create owners');
+  await checkUserAccessChange(req, null, { roles: body.roles, extraPermissions: body.extraPermissions, deniedPermissions: body.deniedPermissions, branchIds: body.branchIds.map(String) });
   const u = await User.create({ ...body, employeeNo: body.employeeNo || (await nextEmployeeNo()), passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined });
-  await audit(req, { action: 'user.created', entity: 'User', entityId: u._id, details: { roles: body.roles } });
+  await audit(req, { action: 'user.created', entity: 'User', entityId: u._id, details: { roles: body.roles, extraPermissions: body.extraPermissions, deniedPermissions: body.deniedPermissions, branchIds: body.branchIds } });
   res.status(201).json({ data: present(u.toObject()) });
 });
 
 router.patch('/settings/users/:id', requirePermission('users.manage'), async (req, res) => {
   const id = idParam(req.params.id);
-  const body = parse(userSchema.partial().extend({ status: z.enum(['active', 'disabled']).optional(), password: passwordSchema.optional(), pin: z.string().regex(/^\d{4,8}$/).or(z.literal('')).optional() }), req.body);
+  // .partial() keeps defaults out, so fields not sent stay as they are.
+  const body = parse(userSchema.extend({ extraPermissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length), deniedPermissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length), branchIds: z.array(objectId) }).partial().extend({ status: z.enum(['active', 'disabled']).optional(), password: passwordSchema.optional(), pin: z.string().regex(/^\d{4,8}$/).or(z.literal('')).optional() }), req.body);
   const target = await User.findById(id);
   if (!target) throw notFound('User');
-  const touchesOwner = target.roles.includes('tenant_owner') || body.roles?.includes('tenant_owner');
-  if (touchesOwner && !req.auth!.roles.includes('tenant_owner')) throw forbidden('Only owners can modify owner accounts');
-  if (String(id) === String(req.auth!.userId) && (body.status === 'disabled' || (body.roles && !body.roles.includes('tenant_owner') && target.roles.includes('tenant_owner')))) {
-    throw badRequest('You cannot disable or demote your own owner account');
-  }
+  // Any change to an account (even a password reset) needs authority over that account.
+  await checkUserAccessChange(req, target.toObject() as any, {
+    roles: body.roles ?? (target.roles as string[]), extraPermissions: body.extraPermissions ?? target.extraPermissions ?? [], deniedPermissions: body.deniedPermissions ?? target.deniedPermissions ?? [],
+    branchIds: (body.branchIds ?? target.branchIds ?? []).map(String), status: body.status,
+  });
   const { password, pin, ...rest } = body;
   Object.assign(target, rest);
   if (password) target.passwordHash = await hashPassword(password);
   // Managers set or clear a till PIN (needed with the staff card); '' removes it.
   if (pin !== undefined) target.pinHash = pin ? await hashPassword(pin) : undefined;
   await target.save();
-  if (body.status === 'disabled' || password || body.roles) await revokeAllSessions(target._id);
-  await audit(req, { action: 'user.updated', entity: 'User', entityId: id, details: { fields: Object.keys(body).filter((k) => k !== 'password' && k !== 'pin'), passwordReset: Boolean(password), pinChanged: pin !== undefined } });
+  if (body.status === 'disabled' || password) await revokeAllSessions(target._id);
+  await audit(req, { action: 'user.updated', entity: 'User', entityId: id, details: { fields: Object.keys(body).filter((k) => k !== 'password' && k !== 'pin'), roles: body.roles, extraPermissions: body.extraPermissions, deniedPermissions: body.deniedPermissions, branchIds: body.branchIds, status: body.status, passwordReset: Boolean(password), pinChanged: pin !== undefined } });
   res.json({ data: present(target.toObject()) });
 });
 
 // ---------- branches, warehouses, tills ----------
-router.get('/settings/locations', async (_req, res) => {
-  // Readable by every signed-in user: needed to pick a till/warehouse.
+router.get('/settings/locations', signedIn('needed to choose a till or warehouse'), async (_req, res) => {
+  // Every signed-in user sees branch and warehouse names (stock transfers name the other side);
+  // tills are branch-scoped, so restricted users only get their own branches' tills.
   const [branches, warehouses, tills] = await Promise.all([Branch.find({}).lean(), Warehouse.find({}).lean(), Till.find({}).lean()]);
   res.json({ data: { branches, warehouses, tills } });
 });
@@ -406,5 +411,6 @@ router.patch('/repairs/:id', requirePermission('sales.create'), requireModule('r
   res.json({ data: r });
 });
 
+router.use(roleRoutes);
 export const settingsRoutes = router;
 export type { ModuleKey };

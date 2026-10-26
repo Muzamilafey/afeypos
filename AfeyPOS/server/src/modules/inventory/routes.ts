@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { roundQty } from '@afeypos/shared';
 import { Product, SerialItem, StockAdjustment, StockBatch, StockLevel, StockMovement, StockTransfer, Stocktake, Warehouse, Sale } from '../../models/index.js';
 import { idParam, objectId, pagination, parse } from '../../http/validate.js';
-import { can, requireModule, requirePermission } from '../../http/auth.js';
+import { assertWarehouseAccess, can, requireModule, requirePermission } from '../../http/auth.js';
 import { idempotent } from '../../http/idempotency.js';
 import { withTransaction } from '../../db/connection.js';
 import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
@@ -14,7 +14,7 @@ import { registerJob } from '../../jobs/queue.js';
 import { emitToTenant } from '../../realtime/socket.js';
 import { notify } from '../notifications/service.js';
 import { Tenant, User } from '../../models/index.js';
-import { runAsPlatform } from '../../lib/context.js';
+import { runAsPlatform, runUnscoped } from '../../lib/context.js';
 import { ownsWarehouse } from '../sync/ownership.js';
 
 const router = Router();
@@ -157,7 +157,10 @@ router.post('/inventory/transfers', requirePermission('inventory.transfer'), req
   const t = await withTransaction(async () => {
     const number = await nextNumber('transfer', 'TRF');
     const [tr] = await StockTransfer.create([{ number, fromWarehouseId: body.fromWarehouseId, toWarehouseId: body.toWarehouseId, notes: body.notes, lines: body.lines, createdBy: req.auth!.userId }]);
-    if (body.dispatchNow) await dispatchTransfer(req, tr);
+    if (body.dispatchNow) {
+      assertWarehouseAccess(req, tr.fromWarehouseId);
+      await runUnscoped(() => dispatchTransfer(req, tr));
+    }
     return tr;
   });
   res.status(201).json({ data: t });
@@ -181,7 +184,9 @@ router.post('/inventory/transfers/:id/dispatch', requirePermission('inventory.tr
   const tr = await withTransaction(async () => {
     const t = await StockTransfer.findOne({ _id: idParam(req.params.id), status: 'draft' });
     if (!t) throw notFound('Draft transfer');
-    await dispatchTransfer(req, t);
+    // Only someone at the sending warehouse dispatches; the stock steps then touch both warehouses.
+    assertWarehouseAccess(req, t.fromWarehouseId);
+    await runUnscoped(() => dispatchTransfer(req, t));
     return t;
   });
   res.json({ data: tr });
@@ -192,13 +197,15 @@ router.post('/inventory/transfers/:id/receive', requirePermission('inventory.tra
   const tr = await withTransaction(async () => {
     const t = await StockTransfer.findOne({ _id: idParam(req.params.id), status: 'in_transit' });
     if (!t) throw notFound('In-transit transfer');
-    for (const l of t.lines) {
+    // Only someone at the receiving warehouse receives.
+    assertWarehouseAccess(req, t.toWarehouseId);
+    await runUnscoped(async () => { for (const l of t.lines) {
       const received = body.lines?.find((x) => String(x.productId) === String(l.productId))?.receivedQty ?? l.qty!;
       if (received > l.qty!) throw unprocessable('Received quantity cannot exceed dispatched quantity');
       await adjustInTransit(l.productId, t.toWarehouseId, -l.qty!);
       if (received > 0) await applyMovement({ productId: l.productId, warehouseId: t.toWarehouseId, qty: received, type: 'transfer_in', unitCostCents: l.unitCostCents ?? 0, ref: { type: 'StockTransfer', id: t._id, number: t.number }, userId: req.auth!.userId });
       l.receivedQty = received;
-    }
+    } });
     t.status = 'received';
     t.receivedBy = req.auth!.userId;
     t.receivedAt = new Date();

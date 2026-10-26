@@ -13,7 +13,25 @@
 
 ## Authorisation
 
-Server-enforced RBAC (`packages/shared/src/permissions.ts`) with roles: owner, business administrator, branch manager, inventory manager, procurement officer, cashier, accountant, auditor, salesperson, warehouse operator. Branch restrictions per user. Module gates on the server. Adjustments require approval by a different user. Only owners can create owners or change modules.
+Permissions are enforced on the server; the web app only hides what a user cannot use.
+
+**Roles.** Built-in roles (owner, business administrator, branch manager, inventory manager, procurement officer, cashier, accountant, auditor, salesperson, warehouse operator) are defined in `packages/shared/src/permissions.ts`. Owners and administrators can add **custom roles** (any set of the 54 permissions) under *Administration → Roles & permissions*, and adjust a single user (**allow** a permission their roles lack, or **deny** one their roles give). A user's access is: built-in roles + custom roles + allowed - denied. Owners always have everything. Access is recomputed on every request, so changes apply at once without a new sign-in; supervisor approvals (PIN, card or fingerprint) use the supervisor's effective permissions the same way.
+
+**Deny by default.** Every route a signed-in user can reach declares who may use it (`requirePermission`, `requireAnyPermission`, `requireRole` or an explicit `signedIn(reason)`). `server/tests/route-guards.test.ts` walks the live router and fails if any signed-in route has no rule, and pins the short list open to every signed-in user (their own account, the list of tills, uploaded pictures, asking a supervisor).
+
+**No escalation.** Except for owners:
+- you can only give permissions you hold (to users or in custom roles);
+- you cannot change a user who can do things you cannot (including resetting their password);
+- you cannot change your own roles, permissions or branches;
+- only owners create or change owners, and the last active owner cannot be removed or disabled.
+
+**Branches.** A user limited to some branches (User.branchIds) only sees and changes those branches' records. This is enforced under the routes by `server/src/db/branchScopePlugin.ts`, like tenant isolation: queries on branch-owned records (sales, returns, quotations, shifts, tills, expenses, online orders, payment intents, stock levels, movements, batches, adjustments, stocktakes, transfers, purchase orders, supplier quotations, goods received notes, supplier returns, employees, payroll runs) are filtered to their branches or warehouses, and new records elsewhere are refused. Stock transfers are dispatched only at the sending warehouse and received only at the receiving one. Reports refuse another branch's id. Branch-limited managers can only create users limited to (some of) their own branches.
+
+**Cost prices.** Cost prices, average cost, profit and margins are removed from every response (and CSV export) for users without *See cost prices and margins* (`products.cost`), e.g. cashiers and salespeople. Supplier prices on purchasing documents stay visible to purchasing and receiving staff. Product edits by such users keep the existing cost.
+
+**Refused attempts** (permission, role or branch) are written to the audit trail as `access.denied` (at most once a minute per user, reason and path).
+
+Module gates are also enforced on the server; adjustments need approval by a different user; only owners change modules.
 
 ## Single-business data scoping
 
@@ -34,10 +52,12 @@ See ARCHITECTURE.md. One business per installation; records carry its id and the
 
 ## Audit trails
 
-`AuditLog` (setup, logins, sales, voids, returns, overrides, price and credit-limit changes, adjustments, integrations, backups, biometrics).
+`AuditLog` (setup, logins, sales, voids, returns, overrides, price and credit-limit changes, adjustments, integrations, backups, biometrics, user and role changes with the permissions added or removed, refused access attempts).
 
 ## Known limitations
 
 - No WAF or bot protection in the app itself; use the reverse proxy/CDN.
+- Customers, suppliers and products are shared by all branches (not branch-scoped). The books (journal entries) are not branch-scoped either: give accounting permissions only to staff who may see the whole business.
+- A supervisor's branch limits are not checked when they approve an override at a till.
 - Rate limits and SMS token buckets are per process (use a shared store if you run many instances).
 - KRA eTIMS fiscal submission is not implemented.

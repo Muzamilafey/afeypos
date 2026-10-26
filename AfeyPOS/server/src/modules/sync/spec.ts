@@ -11,7 +11,7 @@
  */
 import { Types, type Model } from 'mongoose';
 import {
-  AttendanceRecord, AuditLog, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
+  AttendanceRecord, AuditLog, CustomRole, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
   IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
   SalesDocument, SerialItem, Shift, StockAdjustment, StockBatch, StockLevel, StockMovement, Stocktake, StockTransfer, Supplier,
   SupplierQuotation, SupplierReturn, Tenant, Till, User, Warehouse,
@@ -47,6 +47,8 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: Warehouse, dir: 'down', field: 'updatedAt' },
   { model: Till, dir: 'down', field: 'updatedAt' },
   { model: User, dir: 'down', field: 'updatedAt' },
+  // Custom roles give users their permissions on branch servers too.
+  { model: CustomRole, dir: 'down', field: 'updatedAt' },
   { model: Category, dir: 'down', field: 'updatedAt' },
   { model: Brand, dir: 'down', field: 'updatedAt' },
   { model: Product, dir: 'down', field: 'updatedAt' },

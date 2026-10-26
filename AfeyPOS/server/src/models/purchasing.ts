@@ -32,7 +32,7 @@ const purchaseOrderSchema = new Schema(
   { timestamps: true },
 );
 purchaseOrderSchema.index({ tenantId: 1, number: 1 }, { unique: true });
-export const PurchaseOrder = tenantModel('PurchaseOrder', purchaseOrderSchema);
+export const PurchaseOrder = tenantModel('PurchaseOrder', purchaseOrderSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });
 
 const grnSchema = new Schema(
   {
@@ -70,7 +70,7 @@ const grnSchema = new Schema(
 );
 grnSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 grnSchema.index({ tenantId: 1, clientRequestId: 1 }, { unique: true, partialFilterExpression: { clientRequestId: { $type: 'string' } } });
-export const GoodsReceipt = tenantModel('GoodsReceipt', grnSchema);
+export const GoodsReceipt = tenantModel('GoodsReceipt', grnSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });
 
 const supplierReturnSchema = new Schema(
   {
@@ -86,7 +86,7 @@ const supplierReturnSchema = new Schema(
   { timestamps: true },
 );
 supplierReturnSchema.index({ tenantId: 1, number: 1 }, { unique: true });
-export const SupplierReturn = tenantModel('SupplierReturn', supplierReturnSchema);
+export const SupplierReturn = tenantModel('SupplierReturn', supplierReturnSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });
 
 /**
  * Request for quotation sent to one supplier, and the supplier's answer (prices per line). A request to several
@@ -133,4 +133,4 @@ const supplierQuotationSchema = new Schema(
 supplierQuotationSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 supplierQuotationSchema.index({ tenantId: 1, groupId: 1 });
 supplierQuotationSchema.index({ tenantId: 1, supplierId: 1, createdAt: -1 });
-export const SupplierQuotation = tenantModel('SupplierQuotation', supplierQuotationSchema);
+export const SupplierQuotation = tenantModel('SupplierQuotation', supplierQuotationSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });

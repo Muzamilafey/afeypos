@@ -9,7 +9,7 @@ import { z } from 'zod';
 import type { Permission } from '@afeypos/shared';
 import { Sale, User } from '../../models/index.js';
 import { idParam, parse } from '../../http/validate.js';
-import { can } from '../../http/auth.js';
+import { can, markGuard } from '../../http/auth.js';
 import { forbidden, notFound, unprocessable } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { notify } from '../notifications/service.js';
@@ -58,10 +58,19 @@ export async function emailDocument(req: Request, kind: DocumentKind, id: unknow
 
 const router = Router();
 
-router.get('/pdf/:kind/:id', async (req, res) => {
+/** Access depends on the document type (purchasing vs sales permissions), checked per request. */
+const readGuard = markGuard(async (req, _res, next) => {
+  await checkAccess(req, kindOf(req), idParam(req.params.id), READ[kindOf(req)].perm);
+  next();
+}, 'document read permission by type');
+const sendGuard = markGuard(async (req, _res, next) => {
+  await checkAccess(req, kindOf(req), idParam(req.params.id), SEND[kindOf(req)]);
+  next();
+}, 'document send permission by type');
+
+router.get('/pdf/:kind/:id', readGuard, async (req, res) => {
   const kind = kindOf(req);
   const id = idParam(req.params.id);
-  await checkAccess(req, kind, id, READ[kind].perm);
   const doc = await buildDocument(req.tenant!._id, kind, id);
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${doc.filename}"`);
@@ -69,10 +78,9 @@ router.get('/pdf/:kind/:id', async (req, res) => {
   res.send(doc.buffer);
 });
 
-router.post('/email/:kind/:id', async (req, res) => {
+router.post('/email/:kind/:id', sendGuard, async (req, res) => {
   const kind = kindOf(req);
   const id = idParam(req.params.id);
-  await checkAccess(req, kind, id, SEND[kind]);
   const body = parse(z.object({ to: z.string().trim().email().optional().or(z.literal('')), cc: z.array(z.string().trim().email()).max(5).default([]), message: z.string().trim().max(2000).optional() }), req.body ?? {});
   const r = await emailDocument(req, kind, id, { to: body.to || undefined, cc: body.cc, message: body.message });
   if (!r.queued) throw unprocessable(`Email not sent: ${r.reason}`, 'EMAIL_NOT_SENT');

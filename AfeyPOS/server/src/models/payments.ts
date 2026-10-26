@@ -59,7 +59,7 @@ paymentIntentSchema.index({ tenantId: 1, configId: 1, providerRef: 1 }, { partia
 paymentIntentSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
 paymentIntentSchema.index({ tenantId: 1, awaiting: 1, status: 1, accountReference: 1 }, { partialFilterExpression: { awaiting: { $type: 'string' } } });
 paymentIntentSchema.index({ tenantId: 1, originatorConversationId: 1 }, { partialFilterExpression: { originatorConversationId: { $type: 'string' } } });
-export const PaymentIntent = tenantModel('PaymentIntent', paymentIntentSchema);
+export const PaymentIntent = tenantModel('PaymentIntent', paymentIntentSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 export type PaymentIntentDoc = InstanceType<typeof PaymentIntent>;
 
 const mpesaEventSchema = new Schema(

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { roleName, useRoleCatalog, UserPermissionsEditor } from './Roles';
 import { MODULE_INFO, MODULES, PAYMENT_PROVIDER_INFO, PAYMENT_PROVIDERS, ROLE_LABELS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import { api, download } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -7,7 +9,7 @@ import { useLocations } from '../../lib/hooks';
 import { dateTime, money } from '../../lib/format';
 import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { DataTable } from '../../components/DataTable';
-import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
+import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
 import { StaffAccessPanel } from './StaffAccess';
 import { BridgePairingCard, FingerprintReadersCard } from './ThisComputer';
@@ -169,13 +171,21 @@ export function UsersPage() {
   const list = useQuery({ queryKey: ['users'], queryFn: () => api<{ data: any[] }>('/settings/users').then((r) => r.data) });
   const [edit, setEdit] = useState<any>(null);
   const [error, setError] = useState<unknown>(null);
+  const [showPerms, setShowPerms] = useState(false);
+  const cat = useRoleCatalog();
   const roles = TENANT_ROLES.filter((r) => r !== 'tenant_owner' || me!.user.roles.includes('tenant_owner'));
+  // Branch-limited managers can only give access to (some of) their own branches.
+  const myBranches: string[] = me!.user.branchIds ?? [];
+  const branchChoices = (locs.data?.branches ?? []).filter((b) => !myBranches.length || myBranches.includes(b._id));
+  const self = edit?._id === me!.user.id;
   const save = async () => {
     setError(null);
     try {
-      const body: any = { name: edit.name, email: edit.email, phone: edit.phone || undefined, roles: edit.roles, branchIds: edit.branchIds ?? [], commissionRateBp: Number(edit.commissionRateBp ?? 0), employeeNo: edit.employeeNo || undefined, jobTitle: edit.jobTitle || undefined };
+      const body: any = { name: edit.name, email: edit.email, phone: edit.phone || undefined, roles: edit.roles, extraPermissions: edit.extraPermissions ?? [], deniedPermissions: edit.deniedPermissions ?? [], branchIds: edit.branchIds ?? [], commissionRateBp: Number(edit.commissionRateBp ?? 0), employeeNo: edit.employeeNo || undefined, jobTitle: edit.jobTitle || undefined };
       if (edit.password) body.password = edit.password;
       if (edit.pin) body.pin = edit.pin;
+      // Your own access is changed by someone else (the server refuses it too).
+      if (self) { delete body.roles; delete body.extraPermissions; delete body.deniedPermissions; delete body.branchIds; }
       if (edit._id) await api(`/settings/users/${edit._id}`, { method: 'PATCH', body: { ...body, pin: undefined } });
       else await api('/settings/users', { body });
       setEdit(null);
@@ -185,10 +195,10 @@ export function UsersPage() {
   };
   return (
     <div>
-      <PageHeader title="Users & roles" actions={<Button onClick={() => setEdit({ name: '', email: '', roles: ['cashier'], branchIds: [] })}><Icon name="plus" className="h-4 w-4" />Add user</Button>} />
-      <div className="card"><DataTable rows={list.data} loading={list.isLoading} error={list.error} onRowClick={(r: any) => setEdit({ ...r })} columns={[
+      <PageHeader title="Users" subtitle={<>Staff accounts. Define what each role may do under <Link className="text-brand-600 underline" to="/settings/roles">Roles &amp; permissions</Link>.</>} actions={<Button onClick={() => { setShowPerms(false); setEdit({ name: '', email: '', roles: ['cashier'], branchIds: myBranches.length === 1 ? [...myBranches] : [], extraPermissions: [], deniedPermissions: [] }); }}><Icon name="plus" className="h-4 w-4" />Add user</Button>} />
+      <div className="card"><DataTable rows={list.data} loading={list.isLoading} error={list.error} onRowClick={(r: any) => { setShowPerms(false); setEdit({ ...r, extraPermissions: r.extraPermissions ?? [], deniedPermissions: r.deniedPermissions ?? [] }); }} columns={[
         { key: 'n', header: 'Name', render: (r: any) => <div><div className="font-medium">{r.name}</div><div className="text-xs text-ink-500">{r.email}</div></div> },
-        { key: 'r', header: 'Roles', render: (r: any) => <div className="flex flex-wrap gap-1">{r.roles.map((x: string) => <Badge key={x}>{ROLE_LABELS[x as keyof typeof ROLE_LABELS] ?? x}</Badge>)}</div> },
+        { key: 'r', header: 'Roles', render: (r: any) => <div className="flex flex-wrap gap-1">{r.roles.map((x: string) => <Badge key={x} tone={x.startsWith('custom:') ? 'blue' : 'gray'}>{ROLE_LABELS[x as keyof typeof ROLE_LABELS] ?? roleName(cat.data, x)}</Badge>)}{(r.extraPermissions?.length > 0 || r.deniedPermissions?.length > 0) && <Badge tone="amber">adjusted</Badge>}</div> },
         { key: 'b', header: 'Branches', render: (r: any) => (r.branchIds?.length ? r.branchIds.map((b: string) => locs.data?.branches.find((x) => x._id === b)?.name).join(', ') : 'All') },
         { key: 'e', header: 'Employee no.', render: (r: any) => r.employeeNo ?? '—' },
         { key: 'sec', header: 'Sign-in', render: (r: any) => <div className="flex gap-1">{r.twoFactorEnabled && <Badge tone="green">2FA</Badge>}{r.hasPin && <Badge>PIN</Badge>}{r.card && <Badge tone="blue">Card</Badge>}</div> },
@@ -209,8 +219,22 @@ export function UsersPage() {
             {!edit._id && <Field label="Till PIN (optional, 4-8 digits)"><Input inputMode="numeric" value={edit.pin ?? ''} onChange={(e) => setEdit({ ...edit, pin: e.target.value })} /></Field>}
             {me!.capabilities.modules.includes('salesReps') && <Field label="Commission %"><Input inputMode="decimal" value={(edit.commissionRateBp ?? 0) / 100} onChange={(e) => setEdit({ ...edit, commissionRateBp: Math.round(Number(e.target.value) * 100) })} /></Field>}
           </div>
-          <div className="mt-4"><div className="label">Roles</div><div className="grid gap-2 sm:grid-cols-3">{roles.map((r) => <Checkbox key={r} label={ROLE_LABELS[r]} checked={edit.roles.includes(r)} onChange={(v) => setEdit({ ...edit, roles: v ? [...edit.roles, r] : edit.roles.filter((x: string) => x !== r) })} />)}</div></div>
-          {(locs.data?.branches.length ?? 0) > 1 && <div className="mt-4"><div className="label">Branch access (none selected = all)</div><div className="flex flex-wrap gap-3">{locs.data!.branches.map((b) => <Checkbox key={b._id} label={b.name} checked={(edit.branchIds ?? []).includes(b._id)} onChange={(v) => setEdit({ ...edit, branchIds: v ? [...(edit.branchIds ?? []), b._id] : edit.branchIds.filter((x: string) => x !== b._id) })} />)}</div></div>}
+          {self && <p className="mt-4 rounded-sm bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">You cannot change your own roles, permissions or branches. Ask another administrator.</p>}
+          <fieldset disabled={self} className="disabled:opacity-60">
+            <div className="mt-4"><div className="label">Roles</div><div className="grid gap-2 sm:grid-cols-3">
+              {roles.map((r) => <Checkbox key={r} label={ROLE_LABELS[r]} checked={edit.roles.includes(r)} onChange={(v) => setEdit({ ...edit, roles: v ? [...edit.roles, r] : edit.roles.filter((x: string) => x !== r) })} />)}
+              {(cat.data?.custom ?? []).map((r) => <Checkbox key={r.key} label={`${r.name} (custom)`} checked={edit.roles.includes(r.key)} onChange={(v) => setEdit({ ...edit, roles: v ? [...edit.roles, r.key] : edit.roles.filter((x: string) => x !== r.key) })} />)}
+            </div></div>
+            {(locs.data?.branches.length ?? 0) > 1 && <div className="mt-4"><div className="label">{myBranches.length ? 'Branch access (choose at least one of your branches)' : 'Branch access (none selected = all branches)'}</div><div className="flex flex-wrap gap-3">{branchChoices.map((b) => <Checkbox key={b._id} label={b.name} checked={(edit.branchIds ?? []).includes(b._id)} onChange={(v) => setEdit({ ...edit, branchIds: v ? [...(edit.branchIds ?? []), b._id] : edit.branchIds.filter((x: string) => x !== b._id) })} />)}</div></div>}
+            {cat.data && (
+              <div className="mt-4">
+                <button type="button" className="flex items-center gap-1.5 text-sm font-semibold text-brand-600 hover:underline" onClick={() => setShowPerms(!showPerms)} aria-expanded={showPerms}>
+                  <Icon name="chevron" className={cx('h-4 w-4 transition', showPerms && 'rotate-90')} />Adjust permissions for this user{(edit.extraPermissions?.length || edit.deniedPermissions?.length) ? ` (${edit.extraPermissions.length} added, ${edit.deniedPermissions.length} taken away)` : ''}
+                </button>
+                {showPerms && <div className="mt-3"><UserPermissionsEditor cat={cat.data} roles={edit.roles} extra={edit.extraPermissions ?? []} denied={edit.deniedPermissions ?? []} isOwnerTarget={edit.roles.includes('tenant_owner')} onChange={(extra, denied) => setEdit({ ...edit, extraPermissions: extra, deniedPermissions: denied })} /></div>}
+              </div>
+            )}
+          </fieldset>
           {edit._id && <StaffAccessPanel user={list.data?.find((u: any) => u._id === edit._id) ?? edit} onChanged={() => qc.invalidateQueries({ queryKey: ['users'] })} />}
           <div className="mt-3"><ErrorBox error={error} /></div>
         </Modal>

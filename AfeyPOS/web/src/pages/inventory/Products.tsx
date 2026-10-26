@@ -43,7 +43,7 @@ export function ProductsPage() {
             { key: 'name', header: 'Product', render: (r: any) => <div><div className="font-medium">{r.name}</div><div className="text-xs text-ink-500">{r.attributes?.author ? `${r.attributes.author} · ` : ''}{r.sku}{r.barcodes?.[0] ? ` · ${r.barcodes[0].code}` : ''}</div></div> },
             { key: 'type', header: 'Type', render: (r: any) => (r.type === 'stock' ? (r.trackSerials ? <Badge tone="blue">serialised</Badge> : r.trackBatches ? <Badge tone="blue">batches</Badge> : 'stock') : r.type) },
             { key: 'price', header: 'Retail', className: 'num', render: (r: any) => money(r.prices?.retail) },
-            { key: 'cost', header: 'Cost', className: 'num', render: (r: any) => money(r.costCents) },
+            ...(can('products.cost') ? [{ key: 'cost', header: 'Cost', className: 'num', render: (r: any) => money(r.costCents) }] : []),
             { key: 'stock', header: 'In stock', className: 'num', render: (r: any) => (r.trackStock ? <span className={r.stock.qty <= r.reorderLevel ? 'font-medium text-red-600' : ''}>{qty(r.stock.qty)} {r.baseUnit}</span> : '—') },
             { key: 'status', header: '', render: (r: any) => (!r.active ? <Badge>archived</Badge> : null) },
           ]} />
@@ -205,11 +205,11 @@ export function ProductEditPage() {
         )}
         <Card title="Prices" className="lg:col-span-2">
           <div className="grid gap-3 sm:grid-cols-4">
-            <Field label="Cost (per base unit)"><MoneyInput value={p.costCents} onChange={(v) => set('costCents', v ?? 0)} /></Field>
+            {can('products.cost') && <Field label="Cost (per base unit)"><MoneyInput value={p.costCents} onChange={(v) => set('costCents', v ?? 0)} /></Field>}
             {caps.priceLists.map((pl) => <Field key={pl} label={`${pl} price`}><MoneyInput value={p.prices?.[pl]} onChange={(v) => set('prices', { ...p.prices, [pl]: v })} /></Field>)}
             <Field label="Tax rate %" hint="Blank = business default"><Input inputMode="decimal" value={p.taxRateBp === null || p.taxRateBp === undefined ? '' : p.taxRateBp / 100} onChange={(e) => set('taxRateBp', e.target.value === '' ? null : Math.round(Number(e.target.value) * 100))} /></Field>
           </div>
-          {p.prices?.retail && p.costCents ? <p className="mt-2 text-xs text-ink-500">Retail margin {Math.round(((p.prices.retail - p.costCents) / p.prices.retail) * 100)}% (before tax)</p> : null}
+          {can('products.cost') && p.prices?.retail && p.costCents ? <p className="mt-2 text-xs text-ink-500">Retail margin {Math.round(((p.prices.retail - p.costCents) / p.prices.retail) * 100)}% (before tax)</p> : null}
           {caps.modules.includes('bulkDiscounts') && (
             <div className="mt-4">
               <div className="label">Quantity price tiers (price per base unit)</div>
@@ -257,7 +257,7 @@ export function ProductEditPage() {
           <Card title="Opening stock" className="lg:col-span-3">
             <div className="grid gap-3 sm:grid-cols-5">
               <Field label={`Quantity (${p.baseUnit})`}><Input type="number" step="any" value={opening.qty} onChange={(e) => setOpening({ ...opening, qty: e.target.value })} /></Field>
-              <Field label="Unit cost"><MoneyInput value={opening.costCents} onChange={(v) => setOpening({ ...opening, costCents: v })} /></Field>
+              {can('products.cost') && <Field label="Unit cost"><MoneyInput value={opening.costCents} onChange={(v) => setOpening({ ...opening, costCents: v })} /></Field>}
               {p.trackBatches && <><Field label="Batch no."><Input value={opening.batchNo} onChange={(e) => setOpening({ ...opening, batchNo: e.target.value })} /></Field><Field label="Expiry"><Input type="date" value={opening.expiryDate} onChange={(e) => setOpening({ ...opening, expiryDate: e.target.value })} /></Field></>}
               {p.trackSerials && <Field label="Serial numbers" className="sm:col-span-2"><Input value={opening.serials} onChange={(e) => setOpening({ ...opening, serials: e.target.value })} placeholder="Comma separated" /></Field>}
             </div>

@@ -1,5 +1,5 @@
 import { Schema, model } from 'mongoose';
-import { ROLES } from '@afeypos/shared';
+import { CUSTOM_ROLE_PREFIX, PERMISSIONS, ROLES } from '@afeypos/shared';
 import { ObjectId, tenantModel } from './common.js';
 
 const userSchema = new Schema(
@@ -9,7 +9,14 @@ const userSchema = new Schema(
     phone: String,
     passwordHash: { type: String, required: true },
     pinHash: String,
-    roles: { type: [String], enum: ROLES, required: true },
+    /** Built-in roles and custom roles ("custom:<slug>", see CustomRole). */
+    roles: {
+      type: [String], required: true,
+      validate: { validator: (rs: string[]) => rs.every((r) => (ROLES as readonly string[]).includes(r) || /^custom:[a-z0-9-]{2,40}$/.test(r)), message: 'Unknown role' },
+    },
+    /** Granted on top of the roles, or taken away from them, for this user only. */
+    extraPermissions: { type: [String], enum: PERMISSIONS, default: [] },
+    deniedPermissions: { type: [String], enum: PERMISSIONS, default: [] },
     /** Branches this user may operate in. Empty = all branches. */
     branchIds: { type: [ObjectId], ref: 'Branch', default: [] },
     status: { type: String, enum: ['active', 'disabled'], default: 'active' },
@@ -39,6 +46,21 @@ userSchema.index({ tenantId: 1, email: 1 }, { unique: true });
 userSchema.index({ tenantId: 1, 'card.codeHash': 1 }, { unique: true, partialFilterExpression: { 'card.codeHash': { $type: 'string' } } });
 userSchema.index({ tenantId: 1, employeeNo: 1 }, { unique: true, partialFilterExpression: { employeeNo: { $type: 'string' } } });
 export const User = tenantModel('User', userSchema);
+
+/** A role the business defines itself: a name and a set of permissions. Users get it by key in their roles. */
+const customRoleSchema = new Schema(
+  {
+    key: { type: String, required: true, match: new RegExp(`^${CUSTOM_ROLE_PREFIX}[a-z0-9-]{2,40}$`) },
+    name: { type: String, required: true, trim: true },
+    description: String,
+    permissions: { type: [String], enum: PERMISSIONS, default: [] },
+    createdBy: ObjectId,
+    updatedBy: ObjectId,
+  },
+  { timestamps: true },
+);
+customRoleSchema.index({ tenantId: 1, key: 1 }, { unique: true });
+export const CustomRole = tenantModel('CustomRole', customRoleSchema);
 
 /** Refresh sessions are looked up by id before tenant context exists, so they are not plugin-scoped; every query filters tenantId explicitly. */
 const sessionSchema = new Schema(

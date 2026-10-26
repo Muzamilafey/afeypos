@@ -45,7 +45,7 @@ const employeeSchema = new Schema(
 );
 employeeSchema.index({ tenantId: 1, employeeNo: 1 }, { unique: true });
 employeeSchema.index({ tenantId: 1, userId: 1 }, { unique: true, partialFilterExpression: { userId: { $type: 'objectId' } } });
-export const Employee = tenantModel('Employee', employeeSchema);
+export const Employee = tenantModel('Employee', employeeSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 
 const leaveSchema = new Schema(
   {
@@ -158,4 +158,4 @@ const payrollRunSchema = new Schema(
 );
 payrollRunSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 payrollRunSchema.index({ tenantId: 1, period: 1 });
-export const PayrollRun = tenantModel('PayrollRun', payrollRunSchema);
+export const PayrollRun = tenantModel('PayrollRun', payrollRunSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });

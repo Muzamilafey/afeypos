@@ -8,7 +8,7 @@ server in their own building.
 
 | Data | Edited on | Direction |
 |---|---|---|
-| Business settings and modules, branches, stores, tills, staff (incl. password/PIN hashes), categories, brands, products, prices, customer prices, promotions, suppliers, notification templates, integrations for the branch | HQ | HQ → branches |
+| Business settings and modules, branches, stores, tills, staff (incl. password/PIN hashes), custom roles, categories, brands, products, prices, customer prices, promotions, suppliers, notification templates, integrations for the branch | HQ | HQ → branches |
 | Sales, returns, voids, sales documents, shifts, cash movements, expenses, M-Pesa/gateway payments, stock levels/movements/batches/serials of the branch's own stores, adjustments, stocktakes, goods received, supplier returns, customer/supplier ledger entries, attendance, audit log | the branch | branch → HQ |
 | Customers, stock transfers, supplier quotations, purchase orders, fingerprint templates | either | both (newest edit wins) |
 | Other branches' stock | owning branch | HQ → branches, read-only (to see stock elsewhere) |

@@ -18,6 +18,8 @@ import {
 } from '../../models/index.js';
 import { objectId, parse } from '../../http/validate.js';
 import { requirePermission, requireModule } from '../../http/auth.js';
+import { forbidden } from '../../lib/errors.js';
+import { withoutCosts } from '../../http/costVisibility.js';
 import { toCsv } from '../../lib/csv.js';
 import { ageing } from '../parties/routes.js';
 import { retailReports } from './retail.js';
@@ -61,6 +63,8 @@ export function period(req: Request) {
   const start = localMidnightUtc(from, tz);
   const endDay = new Date(Date.UTC(+to.slice(0, 4), +to.slice(5, 7) - 1, +to.slice(8, 10) + 1)).toISOString().slice(0, 10);
   const end = localMidnightUtc(endDay, tz);
+  // Users limited to some branches cannot ask for another branch's figures.
+  if (q.branchId && req.auth!.branchIds.length && !req.auth!.branchIds.some((b) => String(b) === String(q.branchId))) throw forbidden('You do not have access to this branch');
   const branchIds = q.branchId ? [q.branchId] : req.auth!.branchIds.length ? req.auth!.branchIds : null;
   return { from, to, start, end, tz, branchIds, format: q.format, query: q as Record<string, any> };
 }
@@ -69,7 +73,7 @@ export function send(res: Response, format: string, name: string, rows: Record<s
   if (format === 'csv') {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${name}.csv"`);
-    res.send(toCsv(rows));
+    res.send(toCsv(withoutCosts(res.req, rows)));
     return;
   }
   res.json({ data: rows, ...extra });

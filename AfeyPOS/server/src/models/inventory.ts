@@ -19,7 +19,7 @@ const stockLevelSchema = new Schema(
 );
 stockLevelSchema.index({ tenantId: 1, productId: 1, warehouseId: 1 }, { unique: true });
 stockLevelSchema.index({ tenantId: 1, warehouseId: 1 });
-export const StockLevel = tenantModel('StockLevel', stockLevelSchema);
+export const StockLevel = tenantModel('StockLevel', stockLevelSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });
 
 export const MOVEMENT_TYPES = [
   'opening', 'purchase_receipt', 'sale', 'sale_return', 'supplier_return', 'adjustment', 'damage', 'wastage', 'expiry',
@@ -47,7 +47,7 @@ const stockMovementSchema = new Schema(
 stockMovementSchema.index({ tenantId: 1, productId: 1, at: -1 });
 stockMovementSchema.index({ tenantId: 1, warehouseId: 1, at: -1 });
 stockMovementSchema.index({ tenantId: 1, 'ref.type': 1, 'ref.id': 1 });
-export const StockMovement = tenantModel('StockMovement', stockMovementSchema);
+export const StockMovement = tenantModel('StockMovement', stockMovementSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });
 
 const stockBatchSchema = new Schema(
   {
@@ -62,7 +62,7 @@ const stockBatchSchema = new Schema(
 );
 stockBatchSchema.index({ tenantId: 1, productId: 1, warehouseId: 1, batchNo: 1 }, { unique: true });
 stockBatchSchema.index({ tenantId: 1, expiryDate: 1 });
-export const StockBatch = tenantModel('StockBatch', stockBatchSchema);
+export const StockBatch = tenantModel('StockBatch', stockBatchSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });
 
 const serialItemSchema = new Schema(
   {
@@ -97,7 +97,7 @@ const adjustmentSchema = new Schema(
   { timestamps: true },
 );
 adjustmentSchema.index({ tenantId: 1, number: 1 }, { unique: true });
-export const StockAdjustment = tenantModel('StockAdjustment', adjustmentSchema);
+export const StockAdjustment = tenantModel('StockAdjustment', adjustmentSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });
 
 const transferSchema = new Schema(
   {
@@ -116,7 +116,7 @@ const transferSchema = new Schema(
   { timestamps: true },
 );
 transferSchema.index({ tenantId: 1, number: 1 }, { unique: true });
-export const StockTransfer = tenantModel('StockTransfer', transferSchema);
+export const StockTransfer = tenantModel('StockTransfer', transferSchema, { branchScope: [{ path: 'fromWarehouseId', kind: 'warehouse' }, { path: 'toWarehouseId', kind: 'warehouse' }] });
 
 const stocktakeSchema = new Schema(
   {
@@ -133,4 +133,4 @@ const stocktakeSchema = new Schema(
   { timestamps: true },
 );
 stocktakeSchema.index({ tenantId: 1, number: 1 }, { unique: true });
-export const Stocktake = tenantModel('Stocktake', stocktakeSchema);
+export const Stocktake = tenantModel('Stocktake', stocktakeSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });

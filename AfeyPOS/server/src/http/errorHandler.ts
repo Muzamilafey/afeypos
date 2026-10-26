@@ -3,9 +3,24 @@ import mongoose from 'mongoose';
 import { AppError } from '../lib/errors.js';
 import { TenantContextError } from '../lib/context.js';
 import { logger } from '../lib/logger.js';
+import { audit } from '../lib/audit.js';
+
+// One audit entry per user, rule and path per minute is enough to see attempts without flooding the log.
+const lastDenied = new Map<string, number>();
+function recordDenied(req: Parameters<ErrorRequestHandler>[1], err: AppError) {
+  const a = req.auth;
+  if (!a) return;
+  const key = `${a.userId}:${err.code}:${err.message}:${req.method} ${req.route?.path ?? req.path}`;
+  const now = Date.now();
+  if ((lastDenied.get(key) ?? 0) > now - 60_000) return;
+  lastDenied.set(key, now);
+  if (lastDenied.size > 5000) lastDenied.clear();
+  audit(req, { action: 'access.denied', details: { reason: err.message, code: err.code, method: req.method, path: req.originalUrl.split('?')[0] } }).catch((e) => logger.warn({ err: e }, 'could not record denied access'));
+}
 
 export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   if (err instanceof AppError) {
+    if (err.status === 403 && err.code !== 'MODULE_DISABLED') recordDenied(req, err);
     res.status(err.status).json({ error: { code: err.code, message: err.message, details: err.details, requestId: req.id } });
     return;
   }

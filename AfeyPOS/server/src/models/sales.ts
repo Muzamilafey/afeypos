@@ -114,7 +114,7 @@ saleSchema.index({ tenantId: 1, completedAt: -1 });
 saleSchema.index({ tenantId: 1, customerId: 1, completedAt: -1 });
 saleSchema.index({ tenantId: 1, shiftId: 1 });
 saleSchema.index({ tenantId: 1, 'lines.serials': 1 });
-export const Sale = tenantModel('Sale', saleSchema);
+export const Sale = tenantModel('Sale', saleSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 export type SaleDoc = InstanceType<typeof Sale>;
 
 const saleReturnSchema = new Schema(
@@ -147,7 +147,7 @@ saleReturnSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 saleReturnSchema.index({ tenantId: 1, clientRequestId: 1 }, { unique: true });
 saleReturnSchema.index({ tenantId: 1, createdAt: -1 });
 saleReturnSchema.index({ tenantId: 1, saleId: 1 });
-export const SaleReturn = tenantModel('SaleReturn', saleReturnSchema);
+export const SaleReturn = tenantModel('SaleReturn', saleReturnSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 
 const salesDocumentSchema = new Schema(
   {
@@ -178,7 +178,7 @@ const salesDocumentSchema = new Schema(
 );
 salesDocumentSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 salesDocumentSchema.index({ tenantId: 1, type: 1, status: 1, createdAt: -1 });
-export const SalesDocument = tenantModel('SalesDocument', salesDocumentSchema);
+export const SalesDocument = tenantModel('SalesDocument', salesDocumentSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 
 const shiftSchema = new Schema(
   {
@@ -204,7 +204,7 @@ const shiftSchema = new Schema(
 );
 shiftSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 shiftSchema.index({ tenantId: 1, tillId: 1 }, { unique: true, partialFilterExpression: { status: 'open' } });
-export const Shift = tenantModel('Shift', shiftSchema);
+export const Shift = tenantModel('Shift', shiftSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 
 const cashMovementSchema = new Schema(
   {
@@ -241,7 +241,7 @@ const expenseSchema = new Schema(
 );
 expenseSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 expenseSchema.index({ tenantId: 1, date: -1 });
-export const Expense = tenantModel('Expense', expenseSchema);
+export const Expense = tenantModel('Expense', expenseSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 
 const repairSchema = new Schema(
   {

@@ -43,7 +43,9 @@ describe('checkout', () => {
     expect(s.changeCents).toBe(8000);
     expect(s.taxCents).toBe(Math.round((12000 * 1600) / 11600));
     expect(s.netCents + s.taxCents).toBe(12000);
-    expect(s.costCents).toBe(9000);
+    // Cost of goods is recorded, but cashiers do not see cost prices.
+    expect(s.costCents).toBeUndefined();
+    expect((await t.client.get(`/sales/${s._id}`)).body.data.costCents).toBe(9000);
     expect(await stock(p._id)).toBe(8);
     const receipt = await cashier.get(`/sales/${s._id}/receipt?format=text`);
     expect(receipt.text).toContain(s.number);
