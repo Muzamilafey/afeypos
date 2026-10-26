@@ -156,8 +156,10 @@ else
   [ -n "$top" ] && [ -f "$src/package.json" ] || die "The download does not contain Afey POS (repo $REPO, ref $REF)"
   cp -a "$src/." "$rel/" && rm -rf "$DIR/tmp/src" "$DIR/tmp/app.tar.gz"
 fi
-# Keep the configuration (secrets) of the current version.
-[ -f "$DIR/server/.env" ] && cp -p "$DIR/server/.env" "$rel/server/.env"
+# Keep the configuration (secrets) of the current version: the running app's server/.env, or one placed in
+# $DIR/server/.env. Losing it would mean new secrets and an ENCRYPTION_KEY that cannot read saved credentials.
+if [ -f "$DIR/app/server/.env" ]; then cp -p "$DIR/app/server/.env" "$rel/server/.env"
+elif [ -f "$DIR/server/.env" ]; then cp -p "$DIR/server/.env" "$rel/server/.env"; fi
 mkdir -p /etc/afeypos
 
 # ---------- service user and database ----------
