@@ -95,7 +95,7 @@ else
   say "Downloading Node.js $NODE_MAJOR"
   base="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x"
   sums="$DIR/tmp/node-SHASUMS256.txt"; fetch "$base/SHASUMS256.txt" "$sums"
-  file=$(grep -o "node-v[0-9.]*-linux-${NARCH}.tar.xz" "$sums" | head -1); [ -n "$file" ] || die "No Node.js build for linux-$NARCH"
+  file=$(grep -m1 -o "node-v[0-9.]*-linux-${NARCH}.tar.xz" "$sums"); [ -n "$file" ] || die "No Node.js build for linux-$NARCH"
   fetch "$base/$file" "$DIR/tmp/$file"
   (cd "$DIR/tmp" && grep " $file\$" "$sums" | sha256sum -c --status) || die "Node.js checksum mismatch"
   rm -rf "$RUNTIME/node" && mkdir -p "$RUNTIME/node" && tar -xJf "$DIR/tmp/$file" -C "$RUNTIME/node" --strip-components=1
@@ -128,7 +128,7 @@ if [ -z "$MONGO_URI" ]; then
     MONGOD_BIN="$RUNTIME/mongodb/bin/mongod"
   fi
   "$MONGOD_BIN" --version >/dev/null 2>&1 || die "mongod at $MONGOD_BIN does not run (missing system libraries?)"
-  note "MongoDB: $("$MONGOD_BIN" --version | head -1)"
+  note "MongoDB: $("$MONGOD_BIN" --version | sed -n 1p)"
   MONGO_URI="mongodb://127.0.0.1:27017/afeypos?replicaSet=rs0"
   LOCAL_DB=1
 else
@@ -143,10 +143,12 @@ if [ -n "$SOURCE" ]; then
   tar -C "$SOURCE" --exclude=node_modules --exclude=./data --exclude=server/.env --exclude='*/dist' --exclude=test-results -cf - . | tar -C "$rel" -xf -
 else
   fetch "https://codeload.github.com/$REPO/tar.gz/$REF" "$DIR/tmp/app.tar.gz"
-  tar -xzf "$DIR/tmp/app.tar.gz" -C "$DIR/tmp" && top=$(tar -tzf "$DIR/tmp/app.tar.gz" | head -1 | cut -d/ -f1)
-  src="$DIR/tmp/$top/AfeyPOS"; [ -d "$src" ] || src="$DIR/tmp/$top"
-  [ -f "$src/package.json" ] || die "The download does not contain Afey POS (repo $REPO, ref $REF)"
-  cp -a "$src/." "$rel/" && rm -rf "$DIR/tmp/$top"
+  # Extract into an empty folder and take its only top-level directory (no "| head": SIGPIPE under pipefail).
+  rm -rf "$DIR/tmp/src" && mkdir -p "$DIR/tmp/src" && tar -xzf "$DIR/tmp/app.tar.gz" -C "$DIR/tmp/src"
+  top=""; for d in "$DIR/tmp/src"/*/; do top="${d%/}"; break; done
+  src="$top/AfeyPOS"; [ -d "$src" ] || src="$top"
+  [ -n "$top" ] && [ -f "$src/package.json" ] || die "The download does not contain Afey POS (repo $REPO, ref $REF)"
+  cp -a "$src/." "$rel/" && rm -rf "$DIR/tmp/src" "$DIR/tmp/app.tar.gz"
 fi
 # Keep the configuration (secrets) of the current version.
 [ -f "$DIR/app/server/.env" ] && cp -p "$DIR/app/server/.env" "$rel/server/.env"
