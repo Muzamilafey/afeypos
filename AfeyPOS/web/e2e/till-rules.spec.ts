@@ -11,7 +11,7 @@ test('checkout rules: a cashier needs a supervisor to delete an item; payment ti
   await page.getByRole('checkbox', { name: 'Removing an item needs a supervisor' }).check({ force: true });
   await page.getByRole('checkbox', { name: 'Returns' }).uncheck();
   await page.getByRole('button', { name: 'Add card machine' }).click();
-  await page.getByRole('group', { name: 'Card machine 1' }).getByLabel('Name').fill('Till 1 Equity PDQ');
+  await page.getByRole('group', { name: 'Card machine 1' }).getByLabel('Name', { exact: true }).fill('Till 1 Equity PDQ');
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/checkout-rules.png`, fullPage: true });
   await page.getByRole('button', { name: 'Save rules' }).click();
   await expect(page.getByText(/Checkout rules saved/)).toBeVisible();

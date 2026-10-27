@@ -19,13 +19,13 @@ test('inventory menu: units, categories, brands, stock alerts and barcode verify
 
   await menu.getByRole('link', { name: 'Categories', exact: true }).click();
   await page.getByRole('button', { name: 'Add category' }).click();
-  await page.getByRole('dialog').getByLabel('Name').fill('Frozen desserts');
+  await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Frozen desserts');
   await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('cell', { name: /Frozen desserts/ }).first()).toBeVisible();
 
   await menu.getByRole('link', { name: 'Brands', exact: true }).click();
   await page.getByRole('button', { name: 'Add brand' }).click();
-  await page.getByRole('dialog').getByLabel('Name').fill('Brookside');
+  await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Brookside');
   await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('cell', { name: 'Brookside' }).first()).toBeVisible();
 

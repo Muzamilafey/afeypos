@@ -103,10 +103,13 @@ beforeAll(async () => {
   const till2 = await hq.client.post('/settings/tills', { branchId: br2.body.data.branch._id, warehouseId: br2.body.data.warehouse._id, name: 'THK till 1', code: 'THK1' });
   b2 = { id: br2.body.data.branch._id, warehouseId: br2.body.data.warehouse._id, tillId: till2.body.data._id };
 
-  const tok = await hq.client.post(`/settings/branches/${b1.id}/sync-token`, {});
+  // Issuing a branch token needs an administrator to confirm (here the owner, with username/email and password).
+  const approve = async () => ({ 'X-Approval': (await hq.client.post('/auth/override', { email: 'owner@chain.test', password: OWNER_PASSWORD, permission: 'settings.manage' })).body.overrideToken as string });
+  expect((await hq.client.post(`/settings/branches/${b1.id}/sync-token`, {})).status).toBe(403);
+  const tok = await hq.client.post(`/settings/branches/${b1.id}/sync-token`, {}, await approve());
   expect(tok.status).toBe(200);
   expect(tok.body.data.env).toMatchObject({ DEPLOYMENT_MODE: 'branch', BRANCH_CODE: 'MSA01', SYNC_ENABLED: 'true' });
-  const tok2 = await hq.client.post(`/settings/branches/${b2.id}/sync-token`, {});
+  const tok2 = await hq.client.post(`/settings/branches/${b2.id}/sync-token`, {}, await approve());
   [branch, branch2] = await Promise.all([startBranch(tok.body.data.env), startBranch(tok2.body.data.env)]);
 }, 90_000);
 

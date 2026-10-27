@@ -20,7 +20,7 @@ test('bank card terminal: self-service setup, then a verified card payment at th
   await wiz.getByRole('radio', { name: /Afey terminal simulator/ }).click();
   await wiz.getByRole('button', { name: 'Next' }).click();
   await expect(wiz.getByRole('radio', { name: /LAN \/ Wi-Fi/ })).toBeDisabled();
-  await wiz.getByLabel('Name').fill('Till 1 card terminal');
+  await wiz.getByLabel('Name', { exact: true }).fill('Till 1 card terminal');
   await wiz.getByRole('button', { name: 'Create and continue' }).click();
 
   // 3-5. Find the terminal, pair with the code on its screen, test the connection.

@@ -36,7 +36,7 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   await page.goto('/settings/users');
   await page.getByRole('button', { name: 'Add user' }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('Name').fill('Juma Cashier');
+  await dialog.getByLabel('Name', { exact: true }).fill('Juma Cashier');
   await dialog.getByLabel('Email').fill('juma@mandera.test');
   await dialog.getByLabel('Password').fill('Juma12345');
   await dialog.getByLabel(/Till PIN/).fill('2468');
@@ -55,7 +55,7 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   // Register the reader and start the bridge with its key.
   await page.goto('/settings/hardware');
   await page.getByRole('button', { name: 'Register reader' }).click();
-  await page.getByRole('dialog').getByLabel('Name').fill('Till 1 reader');
+  await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Till 1 reader');
   await page.getByRole('dialog').getByLabel('Make').selectOption('simulator');
   await page.getByRole('dialog').getByRole('button', { name: 'Register' }).click();
   const reader = JSON.parse((await page.getByTestId('reader-config').textContent())!);

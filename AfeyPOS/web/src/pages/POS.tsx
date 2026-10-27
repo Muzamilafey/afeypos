@@ -1057,10 +1057,33 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
  * Supervisor approval on the cashier's screen: scanning the supervisor's staff card approves at once (no PIN),
  * or, with a reader paired, the fingerprint tab listens for a finger as soon as it is chosen.
  */
-export function OverrideModal({ permission, message, onClose, onApproved }: { permission: string; message: string; onClose: () => void; onApproved: (token: string) => void }) {
+export function OverrideModal({ permission, message, onClose, onApproved, title = 'Supervisor approval', who = 'supervisor', allowLogin = false }: {
+  permission: string; message: string; onClose: () => void; onApproved: (token: string) => void;
+  title?: string; who?: string;
+  /** Also offer username or email with PIN or password (not at the till, where card and finger are the rule). */
+  allowLogin?: boolean;
+}) {
   const { me } = useAuth();
-  const [mode, setMode] = useState<'card' | 'finger'>('card');
+  const [mode, setMode] = useState<'card' | 'finger' | 'login'>('card');
   const [card, setCard] = useState('');
+  const [login, setLogin] = useState('');
+  const [secret, setSecret] = useState('');
+  const approveLogin = async () => {
+    if (!login.trim() || !secret || busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ overrideToken: string }>('/auth/override', { body: { email: login.trim().toLowerCase(), password: secret, pin: /^\d{4,8}$/.test(secret) ? secret : undefined, permission, tillId: getWorkstation().tillId || undefined } });
+      approvedRef.current(r.overrideToken);
+    } catch (e) {
+      setError(e);
+      setSecret('');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const cardRef = useRef<HTMLInputElement>(null);
@@ -1120,9 +1143,9 @@ export function OverrideModal({ permission, message, onClose, onApproved }: { pe
     return () => { ctrl.abort(); setListening(false); };
   }, [mode, permission, me]);
   const fingerOk = bridgeConfigured();
-  const modes = [{ key: 'card', label: 'Staff card' }, ...(fingerOk ? [{ key: 'finger', label: 'Fingerprint' }] : [])] as { key: typeof mode; label: string }[];
+  const modes = [{ key: 'card', label: 'Staff card' }, ...(fingerOk ? [{ key: 'finger', label: 'Fingerprint' }] : []), ...(allowLogin ? [{ key: 'login', label: 'Username / email' }] : [])] as { key: typeof mode; label: string }[];
   return (
-    <Modal open onClose={onClose} title="Supervisor approval" size="sm" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button>{mode === 'card' && <Button loading={busy} disabled={!card.trim()} onClick={() => approveCard()}>Approve</Button>}</>}>
+    <Modal open onClose={onClose} title={title} size="sm" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button>{mode === 'card' && <Button loading={busy} disabled={!card.trim()} onClick={() => approveCard()}>Approve</Button>}{mode === 'login' && <Button loading={busy} disabled={!login.trim() || !secret} onClick={approveLogin}>Confirm</Button>}</>}>
       <p className="mb-3 text-sm">{message}</p>
       {modes.length > 1 && (
         <div className="mb-3 flex gap-1 rounded-lg bg-ink-100 p-1 text-sm dark:bg-ink-800" role="radiogroup" aria-label="Approve with">
@@ -1131,8 +1154,8 @@ export function OverrideModal({ permission, message, onClose, onApproved }: { pe
       )}
       <div className="space-y-3">
         {mode === 'card' && (
-          <Field label="Supervisor card" hint="Scan the card: it approves straight away.">
-            <Input ref={cardRef} autoFocus type="password" autoComplete="off" value={card} placeholder="Scan the supervisor's card"
+          <Field label={`${who[0]!.toUpperCase()}${who.slice(1)} card`} hint="Scan the card: it approves straight away.">
+            <Input ref={cardRef} autoFocus type="password" autoComplete="off" value={card} placeholder={`Scan the ${who}'s card`}
               onChange={(e) => setCard(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); approveCard(); } }} />
           </Field>
         )}
@@ -1141,9 +1164,16 @@ export function OverrideModal({ permission, message, onClose, onApproved }: { pe
             <span className={`flex h-20 w-20 items-center justify-center rounded-full ${listening ? 'animate-pulse bg-brand-100 text-brand-700 ring-4 ring-brand-200 dark:bg-brand-950 dark:ring-brand-800' : 'bg-ink-100 text-ink-400 dark:bg-ink-800'}`}>
               <svg viewBox="0 0 24 24" className="h-10 w-10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M12 11v4m-4-4a4 4 0 0 1 8 0v2a8 8 0 0 1-1 4M5 9a7 7 0 0 1 13.7-2M5 13v-2m14 2c0 2-.4 3.7-1 5M9 21c1-2 1.5-4 1.5-6v-4a1.5 1.5 0 0 1 3 0" /></svg>
             </span>
-            <p className="text-sm font-medium">{listening ? 'Waiting for the supervisor’s finger…' : 'Getting the reader ready…'}</p>
-            <p className="text-xs text-ink-500">The supervisor places an enrolled finger on the reader.</p>
+            <p className="text-sm font-medium">{listening ? `Waiting for the ${who}’s finger…` : 'Getting the reader ready…'}</p>
+            <p className="text-xs text-ink-500">The {who} places an enrolled finger on the reader.</p>
           </div>
+        )}
+        {mode === 'login' && (
+          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); approveLogin(); }}>
+            <Field label="Username or email"><Input autoFocus autoComplete="off" value={login} onChange={(e) => setLogin(e.target.value)} placeholder="e.g. amina or amina@shop.co.ke" /></Field>
+            <Field label="PIN or password"><Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} /></Field>
+            <button type="submit" className="hidden" />
+          </form>
         )}
         <ErrorBox error={error} />
       </div>

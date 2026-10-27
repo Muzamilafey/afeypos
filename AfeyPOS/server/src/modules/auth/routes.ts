@@ -22,11 +22,14 @@ export const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: () => (env(
 
 const router = Router();
 
-const loginSchema = z.object({ email: z.string().trim().toLowerCase().email(), password: z.string().min(1).max(200) });
+// "email" also takes a username.
+const loginSchema = z.object({ email: z.string().trim().toLowerCase().min(3).max(200), password: z.string().min(1).max(200) });
+/** A user by email or username (anything with an @ is an email). */
+export const userByLogin = (login: string) => User.findOne(login.includes('@') ? { email: login } : { username: login });
 
 router.post('/login', authLimiter, async (req, res) => {
   const body = parse(loginSchema, req.body);
-  const user = await User.findOne({ email: body.email });
+  const user = await userByLogin(body.email);
   const u = await checkCredentials(User, user, body.password);
   if (u.twoFactor?.enabled) {
     const mfaToken = signShortToken({ sub: String(u._id), tid: String(req.tenant!._id) }, 'mfa', 300);
@@ -54,8 +57,8 @@ router.post('/mfa', authLimiter, async (req, res) => {
 
 /** Quick PIN sign-in for cashiers on a shared till. PIN users cannot have 2FA bypassed: users with 2FA must use password. */
 router.post('/pin-login', authLimiter, async (req, res) => {
-  const body = parse(z.object({ email: z.string().trim().toLowerCase().email(), pin: z.string().regex(/^\d{4,8}$/) }), req.body);
-  const u = await User.findOne({ email: body.email, status: 'active' });
+  const body = parse(z.object({ email: z.string().trim().toLowerCase().min(3).max(200), pin: z.string().regex(/^\d{4,8}$/) }), req.body);
+  const u = await userByLogin(body.email).where({ status: 'active' });
   if (u?.lockedUntil && u.lockedUntil > new Date()) throw new AppError(423, 'ACCOUNT_LOCKED', 'Account temporarily locked');
   if (!u || !u.pinHash || u.twoFactor?.enabled || !(await verifyPassword(body.pin, u.pinHash))) {
     if (u) await User.updateOne({ _id: u._id }, { $inc: { failedLogins: 1 } });
@@ -110,7 +113,7 @@ router.post('/logout', async (req, res) => {
 // Any signed-in cashier may ask; the supervisor's own permissions decide.
 router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor to approve'), async (req, res) => {
   const body = parse(
-    z.object({ email: z.string().trim().toLowerCase().email().optional(), cardCode: z.string().trim().max(40).optional(), password: z.string().optional(), pin: z.string().optional(), permission: z.string(), tillId: objectId.optional() }),
+    z.object({ email: z.string().trim().toLowerCase().min(3).max(200).optional(), cardCode: z.string().trim().max(40).optional(), password: z.string().optional(), pin: z.string().optional(), permission: z.string(), tillId: objectId.optional() }),
     req.body,
   );
   let sup;
@@ -120,8 +123,9 @@ router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor 
     sup = await authenticateCard(req, body.cardCode).catch(() => null);
     if (!sup) throw unauthorized('Supervisor card is not recognised');
   } else {
-    sup = body.email ? await User.findOne({ email: body.email, status: 'active' }) : null;
-    const secretOk = sup && (body.password ? await verifyPassword(body.password, sup.passwordHash) : body.pin && sup.pinHash ? await verifyPassword(body.pin, sup.pinHash) : false);
+    sup = body.email ? await userByLogin(body.email).where({ status: 'active' }) : null;
+    // One box for "PIN or password": either may match.
+    const secretOk = sup && ((body.password ? await verifyPassword(body.password, sup.passwordHash) : false) || (body.pin && sup.pinHash ? await verifyPassword(body.pin, sup.pinHash) : false));
     if (!sup || !secretOk) throw unauthorized('Supervisor credentials are invalid');
   }
   // Same effective permissions as a sign-in: custom roles count and per-user denials apply.

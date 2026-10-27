@@ -1,13 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Types } from 'mongoose';
-import { setupApp, teardown, type Ctx } from './helpers.js';
+import { setupApp, teardown } from './helpers.js';
 import { applyRecord } from '../src/modules/sync/apply.js';
 import { specFor } from '../src/modules/sync/spec.js';
 import { SyncConflict, UnitOfMeasure } from '../src/models/index.js';
 
-let ctx: Ctx;
 beforeAll(async () => {
-  ctx = await setupApp();
+  await setupApp();
 });
 afterAll(teardown);
 

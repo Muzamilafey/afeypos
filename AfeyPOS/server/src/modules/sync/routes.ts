@@ -2,7 +2,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
-import { Branch, SyncConflict, SyncCursor, Till, Warehouse } from '../../models/index.js';
+import { Branch, SyncConflict, SyncCursor, Till, User, Warehouse } from '../../models/index.js';
+import { consumeOverride } from '../auth/routes.js';
 import { idParam, parse } from '../../http/validate.js';
 import { requireAnyPermission, requirePermission } from '../../http/auth.js';
 import { AppError, forbidden, notFound } from '../../lib/errors.js';
@@ -19,14 +20,28 @@ const ownerOnly = (req: any) => {
 };
 
 /** HQ: give a branch its own server. The token is shown once. */
+/**
+ * Issuing or stopping a branch server's access needs an administrator to confirm on the spot (fingerprint, staff
+ * card, or username/email with PIN or password), even when one is already signed in: a single-use approval.
+ */
+async function adminApproval(req: any) {
+  const token = String(req.get('X-Approval') ?? '');
+  if (!token) throw new AppError(403, 'OVERRIDE_REQUIRED', 'An administrator must confirm this', { permission: 'settings.manage' });
+  const by = await consumeOverride(token, 'settings.manage', String(req.tenant!._id), String(req.auth!.userId));
+  const admin = await User.findById(by, { roles: 1, name: 1 }).lean();
+  if (!admin?.roles.some((r) => r === 'tenant_owner' || r === 'business_admin')) throw forbidden('Only an owner or administrator can confirm this');
+  return admin;
+}
+
 syncSettingsRoutes.post('/settings/branches/:id/sync-token', requirePermission('branches.manage'), async (req, res) => {
   ownerOnly(req);
+  const admin = await adminApproval(req);
   if (env().DEPLOYMENT_MODE !== 'hq') throw new AppError(409, 'NOT_HQ', 'Branch servers connect to a head-office server (DEPLOYMENT_MODE=hq)');
   const token = randomToken(32);
   const b = await Branch.findOneAndUpdate({ _id: idParam(req.params.id) }, { $set: { hasServer: true, syncTokenHash: sha256(token) } }, { new: true });
   if (!b) throw notFound('Branch');
   invalidateOwnership();
-  await audit(req, { action: 'sync.branch_token_issued', entity: 'Branch', entityId: b._id, details: { code: b.code } });
+  await audit(req, { action: 'sync.branch_token_issued', entity: 'Branch', entityId: b._id, details: { code: b.code, confirmedBy: admin.name } });
   res.json({
     data: {
       token,
@@ -40,10 +55,11 @@ syncSettingsRoutes.post('/settings/branches/:id/sync-token', requirePermission('
 /** HQ: take the branch back to being run from head office (its server can no longer sync). */
 syncSettingsRoutes.delete('/settings/branches/:id/sync-token', requirePermission('branches.manage'), async (req, res) => {
   ownerOnly(req);
+  const admin = await adminApproval(req);
   const b = await Branch.findOneAndUpdate({ _id: idParam(req.params.id) }, { $set: { hasServer: false }, $unset: { syncTokenHash: 1 } }, { new: true });
   if (!b) throw notFound('Branch');
   invalidateOwnership();
-  await audit(req, { action: 'sync.branch_token_revoked', entity: 'Branch', entityId: b._id, details: { code: b.code } });
+  await audit(req, { action: 'sync.branch_token_revoked', entity: 'Branch', entityId: b._id, details: { code: b.code, confirmedBy: admin.name } });
   res.json({ data: { id: b._id, hasServer: false } });
 });
 

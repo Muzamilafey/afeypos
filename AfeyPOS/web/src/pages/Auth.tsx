@@ -197,7 +197,7 @@ export function LoginPage() {
             </div>
             {(mode === 'password' || mode === 'pin') && (
               <>
-                <IconInput icon="mail" aria-label="Email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" />
+                <IconInput icon="mail" aria-label="Email or username" type="text" autoComplete="username" autoCapitalize="none" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email or username" />
                 {secretInput}
               </>
             )}

@@ -5,6 +5,8 @@ import { ObjectId, tenantModel } from './common.js';
 const userSchema = new Schema(
   {
     email: { type: String, required: true, lowercase: true, trim: true },
+    /** Optional short sign-in name (e.g. "amina"), usable instead of the email to sign in and to approve. */
+    username: { type: String, lowercase: true, trim: true },
     name: { type: String, required: true },
     phone: String,
     passwordHash: { type: String, required: true },
@@ -43,6 +45,7 @@ const userSchema = new Schema(
   { timestamps: true },
 );
 userSchema.index({ tenantId: 1, email: 1 }, { unique: true });
+userSchema.index({ tenantId: 1, username: 1 }, { unique: true, partialFilterExpression: { username: { $type: 'string' } } });
 userSchema.index({ tenantId: 1, 'card.codeHash': 1 }, { unique: true, partialFilterExpression: { 'card.codeHash': { $type: 'string' } } });
 userSchema.index({ tenantId: 1, employeeNo: 1 }, { unique: true, partialFilterExpression: { employeeNo: { $type: 'string' } } });
 export const User = tenantModel('User', userSchema);

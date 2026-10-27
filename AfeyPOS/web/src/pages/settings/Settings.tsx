@@ -181,7 +181,7 @@ export function UsersPage() {
   const save = async () => {
     setError(null);
     try {
-      const body: any = { name: edit.name, email: edit.email, phone: edit.phone || undefined, roles: edit.roles, extraPermissions: edit.extraPermissions ?? [], deniedPermissions: edit.deniedPermissions ?? [], branchIds: edit.branchIds ?? [], commissionRateBp: Number(edit.commissionRateBp ?? 0), employeeNo: edit.employeeNo || undefined, jobTitle: edit.jobTitle || undefined };
+      const body: any = { name: edit.name, email: edit.email, username: edit.username ?? '', phone: edit.phone || undefined, roles: edit.roles, extraPermissions: edit.extraPermissions ?? [], deniedPermissions: edit.deniedPermissions ?? [], branchIds: edit.branchIds ?? [], commissionRateBp: Number(edit.commissionRateBp ?? 0), employeeNo: edit.employeeNo || undefined, jobTitle: edit.jobTitle || undefined };
       if (edit.password) body.password = edit.password;
       if (edit.pin) body.pin = edit.pin;
       // Your own access is changed by someone else (the server refuses it too).
@@ -212,6 +212,7 @@ export function UsersPage() {
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
             <Field label="Email"><Input value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></Field>
+            <Field label="Username" hint="Optional short sign-in name for logging in and confirming, e.g. amina"><Input autoCapitalize="none" spellCheck={false} value={edit.username ?? ''} onChange={(e) => setEdit({ ...edit, username: e.target.value.toLowerCase().replace(/\s/g, '') })} /></Field>
             <Field label="Phone"><Input value={edit.phone ?? ''} onChange={(e) => setEdit({ ...edit, phone: e.target.value })} /></Field>
             <Field label="Employee number" hint={edit._id ? undefined : 'Left empty, the next EMP- number is used'}><Input value={edit.employeeNo ?? ''} onChange={(e) => setEdit({ ...edit, employeeNo: e.target.value })} /></Field>
             <Field label="Job title (printed on the card)"><Input value={edit.jobTitle ?? ''} onChange={(e) => setEdit({ ...edit, jobTitle: e.target.value })} /></Field>

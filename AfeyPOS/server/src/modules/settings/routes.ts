@@ -173,6 +173,7 @@ router.put('/settings/modules', requirePermission('settings.manage'), async (req
 const userSchema = z.object({
   name: z.string().trim().min(2).max(120),
   email: z.string().trim().toLowerCase().email(),
+  username: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9._-]{2,29}$/, 'Username: 3-30 letters, digits, dots, dashes or underscores').or(z.literal('')).optional(),
   phone: z.string().max(30).optional(),
   roles: z.array(z.enum(TENANT_ROLES as [string, ...string[]]).or(z.string().regex(/^custom:[a-z0-9-]{2,40}$/))).min(1).max(10),
   extraPermissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length).default([]),
@@ -183,6 +184,11 @@ const userSchema = z.object({
   photoFileId: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/).or(z.literal('')).optional(),
   employeeNo: z.string().max(30).optional(),
 });
+
+async function assertUsernameFree(username: string | undefined, self: unknown) {
+  if (!username) return;
+  if (await User.exists({ username, _id: { $ne: self } })) throw new AppError(409, 'USERNAME_TAKEN', `The username "${username}" is already used`);
+}
 
 function present(u: any) {
   const { passwordHash: _p, pinHash, twoFactor, card, ...rest } = u;
@@ -197,7 +203,8 @@ router.get('/settings/users', requirePermission('users.manage'), async (_req, re
 router.post('/settings/users', requirePermission('users.manage'), async (req, res) => {
   const body = parse(userSchema.extend({ password: passwordSchema, pin: z.string().regex(/^\d{4,8}$/).optional() }), req.body);
   await checkUserAccessChange(req, null, { roles: body.roles, extraPermissions: body.extraPermissions, deniedPermissions: body.deniedPermissions, branchIds: body.branchIds.map(String) });
-  const u = await User.create({ ...body, employeeNo: body.employeeNo || (await nextEmployeeNo()), passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined });
+  await assertUsernameFree(body.username, null);
+  const u = await User.create({ ...body, username: body.username || undefined, employeeNo: body.employeeNo || (await nextEmployeeNo()), passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined });
   await audit(req, { action: 'user.created', entity: 'User', entityId: u._id, details: { roles: body.roles, extraPermissions: body.extraPermissions, deniedPermissions: body.deniedPermissions, branchIds: body.branchIds } });
   res.status(201).json({ data: present(u.toObject()) });
 });
@@ -213,8 +220,12 @@ router.patch('/settings/users/:id', requirePermission('users.manage'), async (re
     roles: body.roles ?? (target.roles as string[]), extraPermissions: body.extraPermissions ?? target.extraPermissions ?? [], deniedPermissions: body.deniedPermissions ?? target.deniedPermissions ?? [],
     branchIds: (body.branchIds ?? target.branchIds ?? []).map(String), status: body.status,
   });
-  const { password, pin, ...rest } = body;
+  const { password, pin, username, ...rest } = body;
   Object.assign(target, rest);
+  if (username !== undefined) {
+    await assertUsernameFree(username, target._id);
+    target.username = username || undefined;
+  }
   if (password) target.passwordHash = await hashPassword(password);
   // Managers set or clear a till PIN (needed with the staff card); '' removes it.
   if (pin !== undefined) target.pinHash = pin ? await hashPassword(pin) : undefined;

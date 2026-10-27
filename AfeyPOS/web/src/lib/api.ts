@@ -56,6 +56,8 @@ export interface RequestOptions {
   idempotencyKey?: string;
   scope?: Scope;
   raw?: boolean;
+  /** Extra request headers (e.g. X-Approval with an administrator's single-use approval). */
+  headers?: Record<string, string>;
 }
 
 export async function api<T = any>(path: string, opts: RequestOptions = {}): Promise<T> {
@@ -68,7 +70,7 @@ export async function api<T = any>(path: string, opts: RequestOptions = {}): Pro
     fetch(base + path + qs, {
       method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
       credentials: 'include',
-      headers: headers({ ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}) }, scope),
+      headers: headers({ ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}), ...opts.headers }, scope),
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   let res: Response;

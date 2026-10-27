@@ -11,7 +11,7 @@ test('asks two suppliers for quotes, orders from one and receives the goods', as
   await page.getByRole('link', { name: 'Suppliers', exact: true }).click();
   for (const [name, email] of [['Brookside Dairy', 'orders@brookside.test'], ['Githunguri Dairy', 'sales@githunguri.test']]) {
     await page.getByRole('button', { name: 'New supplier' }).click();
-    await page.getByRole('dialog').getByLabel('Name').fill(name);
+    await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill(name);
     await page.getByRole('dialog').getByLabel('Email').fill(email);
     await page.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('cell', { name: new RegExp(name) })).toBeVisible();

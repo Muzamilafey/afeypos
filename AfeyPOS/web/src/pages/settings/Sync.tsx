@@ -4,7 +4,8 @@ import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { dateTime } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
-import { Badge, Button, Card, ErrorBox, Loading, Modal, PageHeader, useToast } from '../../components/ui';
+import { Badge, Button, Card, ErrorBox, Loading, Modal, PageHeader, useConfirm, useToast } from '../../components/ui';
+import { OverrideModal } from '../POS';
 
 interface HqStatus {
   role: 'hq';
@@ -72,10 +73,17 @@ function HqSync({ data, onChange }: { data: HqStatus; onChange: () => void }) {
   const qc = useQueryClient();
   const [issued, setIssued] = useState<{ branch: string; env: Record<string, string>; keyFingerprint: string } | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const issue = async (id: string, code: string) => {
+  const confirm = useConfirm();
+  // New tokens and stopping a branch server need an administrator to confirm on the spot.
+  const [approval, setApproval] = useState<{ message: string; run: (token: string) => Promise<void> } | null>(null);
+  const issue = (id: string, code: string, renew: boolean) => setApproval({
+    message: renew ? `Issue a new token for ${code}? Its server stops syncing until the new token is in its .env.` : `Give ${code} its own server?`,
+    run: (t) => doIssue(id, code, t),
+  });
+  const doIssue = async (id: string, code: string, approvalToken: string) => {
     setError(null);
     try {
-      const r = await api<{ data: { env: Record<string, string>; keyFingerprint: string } }>(`/settings/branches/${id}/sync-token`, { body: {} });
+      const r = await api<{ data: { env: Record<string, string>; keyFingerprint: string } }>(`/settings/branches/${id}/sync-token`, { body: {}, headers: { 'X-Approval': approvalToken } });
       setIssued({ branch: code, env: r.data.env, keyFingerprint: r.data.keyFingerprint });
       onChange();
       qc.invalidateQueries({ queryKey: ['locations'] });
@@ -83,9 +91,9 @@ function HqSync({ data, onChange }: { data: HqStatus; onChange: () => void }) {
       setError(e);
     }
   };
-  const revoke = async (id: string) => {
-    if (!window.confirm('Stop this branch server from syncing? Its stock will be managed from head office again.')) return;
-    await api(`/settings/branches/${id}/sync-token`, { method: 'DELETE' }).then(onChange).catch(toast.error);
+  const revoke = async (id: string, code: string) => {
+    if (!(await confirm({ title: `Stop ${code}'s server?`, message: 'It can no longer sync, and its stock is managed from head office again.', confirmLabel: 'Continue', danger: true }))) return;
+    setApproval({ message: `Stop ${code}'s branch server from syncing.`, run: (t) => api(`/settings/branches/${id}/sync-token`, { method: 'DELETE', headers: { 'X-Approval': t } }).then(onChange) });
   };
   return (
     <>
@@ -99,8 +107,8 @@ function HqSync({ data, onChange }: { data: HqStatus; onChange: () => void }) {
           { key: 'e', header: '', render: (b) => (b.sync.lastError ? <span className="text-xs text-red-600">{b.sync.lastError}</span> : null) },
           { key: 'a', header: '', render: (b) => (
             <div className="flex gap-1">
-              <Button size="sm" variant="secondary" onClick={() => issue(b.id, b.code)}>{b.hasServer ? 'New token' : 'Give it its own server'}</Button>
-              {b.hasServer && <Button size="sm" variant="ghost" onClick={() => revoke(b.id)}>Stop</Button>}
+              <Button size="sm" variant="secondary" onClick={() => issue(b.id, b.code, b.hasServer)}>{b.hasServer ? 'New token' : 'Give it its own server'}</Button>
+              {b.hasServer && <Button size="sm" variant="ghost" onClick={() => revoke(b.id, b.code)}>Stop</Button>}
             </div>
           ) },
         ]} />
@@ -108,6 +116,10 @@ function HqSync({ data, onChange }: { data: HqStatus; onChange: () => void }) {
         <div className="mt-2"><ErrorBox error={error} /></div>
       </Card>
       <Conflicts rows={data.conflicts} onChange={onChange} />
+      {approval && (
+        <OverrideModal permission="settings.manage" title="Administrator confirmation" who="administrator" allowLogin message={`${approval.message} An owner or administrator confirms with a fingerprint, staff card, or username / email with PIN or password.`}
+          onClose={() => setApproval(null)} onApproved={(t) => { const a = approval; setApproval(null); a.run(t).catch(toast.error); }} />
+      )}
       {issued && (
         <Modal open onClose={() => setIssued(null)} title={`Branch server for ${issued.branch}`} size="lg" footer={<Button onClick={() => setIssued(null)}>Done</Button>}>
           <p className="mb-2 text-sm">Put these lines in the branch server's <code>server/.env</code>. The token is shown only once.</p>

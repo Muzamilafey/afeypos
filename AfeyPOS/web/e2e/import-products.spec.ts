@@ -34,7 +34,7 @@ test('products import: Excel template, photos, review every product, then import
   const col = (h: string) => head.findIndex((x) => x.replace(' *', '') === h) + 1;
   const put = (r: number, v: Record<string, string | number>) => Object.entries(v).forEach(([h, x]) => (ws.getRow(r).getCell(col(h)).value = x));
   put(4, { 'Product name': 'Kabras Sugar 2kg', 'SKU / item code': 'SUG2KG', Barcode: '6161101560012', Category: 'Groceries', Unit: 'pc', 'Selling price': 260, 'VAT %': 16 });
-  put(5, { 'Product name': 'Fresh milk 500ml', 'SKU / item code': 'MILK500', 'Selling price': 66 });
+  put(5, { 'Product name': 'Fresh milk 500ml', 'SKU / item code': 'MILK500', 'Selling price': 65 });
   put(6, { 'Product name': 'Royco Mchuzi Mix 75g', 'SKU / item code': 'ROYCO75', 'Selling price': 'cheap' });
   put(7, { 'Product name': 'Ketepa Pride 100g', 'SKU / item code': 'KETEPA100', Unit: 'pc', 'Selling price': 145 });
   const img = wb.addImage({ buffer: PNG as any, extension: 'png' });

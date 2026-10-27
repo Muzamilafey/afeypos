@@ -23,7 +23,7 @@ test('the owner makes a custom role; its user only reaches what it allows', asyn
   await page.getByRole('link', { name: 'Users', exact: true }).click();
   await page.getByRole('button', { name: 'Add user' }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('Name').fill('Tina Till');
+  await dialog.getByLabel('Name', { exact: true }).fill('Tina Till');
   await dialog.getByLabel('Email').fill('tina@mandera.test');
   await dialog.getByLabel('Password').fill('TinaTill2026!');
   await dialog.getByText('Cashier', { exact: true }).click(); // untick the default role
