@@ -16,4 +16,5 @@ test-results/
 playwright-report/
 .mongo-test/
 .e2e-backups/
+.e2e-mongo/
 web/test-results/

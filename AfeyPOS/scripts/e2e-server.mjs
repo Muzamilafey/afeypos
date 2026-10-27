@@ -14,7 +14,12 @@ if (!process.env.MONGOMS_SYSTEM_BINARY && fs.existsSync('/opt/mongo/mongod-wrapp
 }
 const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const port = process.argv[2] ?? process.env.E2E_PORT ?? '4100';
-const rs = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
+// One fixed database folder, emptied at each start: the test runner may stop this process before the memory
+// server deletes its temporary folder, and those folders (about 300 MB each) would otherwise pile up in /tmp.
+const dbPath = path.join(root, '.e2e-mongo');
+fs.rmSync(dbPath, { recursive: true, force: true });
+fs.mkdirSync(dbPath, { recursive: true });
+const rs = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' }, instanceOpts: [{ dbPath }] });
 const uri = rs.getUri('afeypos_e2e');
 const child = spawn(process.execPath, [path.join(root, 'server', 'dist', 'server.js')], {
   stdio: 'inherit',

@@ -293,6 +293,7 @@ describe('C2B URL registration', () => {
 
 describe('M-Pesa per branch and per till', () => {
   it('a till uses its own M-Pesa, else its branch’s (all its tills), else the one for all branches', async () => {
+    expect((await t.client.put('/settings/modules', { enabled: ['multiTill', 'multiBranch'] })).status).toBe(200);
     const mainBranch = t.locations.branches[0]._id;
     const counter2 = (await t.client.post('/settings/tills', { branchId: mainBranch, warehouseId: wh, name: 'Counter 2', code: 'C2' })).body.data._id;
     const b = (await t.client.post('/settings/branches', { name: 'Garissa Road', code: 'GRS' })).body.data;

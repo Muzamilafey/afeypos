@@ -840,6 +840,8 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [override, setOverride] = useState<{ permission: string; message: string } | null>(null);
+  // The terminal's last answer stays on screen (e.g. "remove your card") after it paid the rest of the sale.
+  const [terminalDone, setTerminalDone] = useState<TerminalTxn | null>(null);
 
   useEffect(() => setAmount(remaining), [remaining]);
 
@@ -1003,7 +1005,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}
               {method === 'card' && (
                 <TerminalPanel tillId={till._id} amount={Math.min(amount ?? 0, remaining)} remaining={remaining} usedIds={payments.map((p) => p.terminalTransactionId!).filter(Boolean)}
-                  onApproved={(x) => setPayments((ps) => (ps.some((p) => p.terminalTransactionId === x.id) ? ps : [...ps, { method: 'card', amountCents: x.amountCents, terminalTransactionId: x.id, label: `Card ${x.cardScheme ?? ''}${x.last4 ? ` ****${x.last4}` : ''}${x.sandbox ? ' (simulated)' : ''}`.trim() }]))} />
+                  onApproved={(x) => { setTerminalDone(x); setPayments((ps) => (ps.some((p) => p.terminalTransactionId === x.id) ? ps : [...ps, { method: 'card', amountCents: x.amountCents, terminalTransactionId: x.id, label: `Card ${x.cardScheme ?? ''}${x.last4 ? ` ****${x.last4}` : ''}${x.sandbox ? ' (simulated)' : ''}`.trim() }])); }} />
               )}
               {method === 'card' && (
                 <div className="space-y-3 rounded-lg border border-sky-100 bg-sky-50/50 p-3 dark:border-sky-900 dark:bg-sky-950/20">
@@ -1033,6 +1035,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
               {method !== 'mpesa' && method !== 'gateway' && <Button variant="secondary" onClick={addPayment}>Add {paymentLabel(method).toLowerCase()} payment</Button>}
             </div>
           )}
+          {terminalDone && remaining <= 0 && <div className="mt-3"><TxnStatus txn={terminalDone} /></div>}
           <div className="mt-3"><ErrorBox error={error} /></div>
         </div>
         <div className="rounded-lg bg-ink-50 p-3 text-sm dark:bg-ink-800/50">

@@ -54,15 +54,12 @@ test('bank card terminal: self-service setup, then a verified card payment at th
   await carol.getByLabel('Email').fill('carol@mandera.test');
   await carol.getByLabel('Password', { exact: true }).fill('CarolTill2026!');
   await carol.getByRole('button', { name: 'Sign in' }).click();
+  await expect(carol.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
   await carol.goto('/pos');
+  await carol.getByRole('button', { name: 'Enter the total instead' }).click();
+  await carol.getByLabel('Opening float').fill('500');
+  await carol.getByRole('button', { name: /^Start shift/ }).click();
   const scan = carol.getByLabel('Scan or search products');
-  const startTotal = carol.getByRole('button', { name: 'Enter the total instead' });
-  await expect(scan.or(startTotal).or(carol.getByRole('button', { name: /^Start shift/ }))).toBeVisible();
-  if (!(await scan.isVisible())) {
-    if (await startTotal.isVisible()) await startTotal.click();
-    await carol.getByLabel('Opening float').fill('500');
-    await carol.getByRole('button', { name: /^Start shift/ }).click();
-  }
   await scan.fill('MILK500');
   await scan.press('Enter');
   await expect(carol.getByTestId('cart-total')).toHaveText(/65\.00/);
@@ -70,8 +67,10 @@ test('bank card terminal: self-service setup, then a verified card payment at th
   const panel = carol.getByTestId('terminal-panel');
   await panel.getByRole('button', { name: /Charge .*65\.00 on the terminal/ }).click();
   await expect(panel.getByTestId('terminal-status')).toContainText(/Connecting to terminal|Ready for card|Enter PIN|Processing/);
-  await expect(panel.getByTestId('terminal-status')).toContainText('Payment approved — please remove your card', { timeout: 30_000 });
-  await expect(panel.getByTestId('terminal-status')).toContainText('SIMULATED');
+  // Once it paid the whole sale the panel closes; the terminal's last answer stays on screen.
+  await expect(carol.getByTestId('terminal-status')).toContainText('Payment approved — please remove your card', { timeout: 30_000 });
+  await expect(carol.getByTestId('terminal-status')).toContainText('SIMULATED');
+  await expect(carol.getByText(/Card Visa \*\*\*\*1111 \(simulated\)/)).toBeVisible();
   if (process.env.SHOTS) await carol.screenshot({ path: `${process.env.SHOTS}/card-terminal-checkout.png` });
   await carol.getByRole('button', { name: 'Complete sale' }).click();
   await expect(carol.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
