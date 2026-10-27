@@ -40,7 +40,21 @@ export interface CheckoutRules {
   };
   /** Pages a user whose only role is Cashier can open (navigation keys). Checkout is always allowed. */
   cashierPages: string[];
+  /** Ways to pay offered at checkout (and accepted by the server). */
+  paymentMethods: string[];
 }
+
+/** Payment methods the owner can offer or hide at checkout. */
+export const PAYMENT_METHOD_OPTIONS: { key: string; label: string; hint?: string }[] = [
+  { key: 'cash', label: 'Cash' },
+  { key: 'mpesa', label: 'M-Pesa', hint: 'Prompt on the phone, Paybill/Till, or a receipt code' },
+  { key: 'card', label: 'Card', hint: 'Bank card terminal or card machine' },
+  { key: 'gateway', label: 'Mobile money & online cards', hint: 'Payment gateways (Pesapal, Paystack...)' },
+  { key: 'bank', label: 'Bank transfer' },
+  { key: 'credit', label: 'On account (customer credit)' },
+  { key: 'loyalty', label: 'Loyalty points' },
+  { key: 'voucher', label: 'Gift voucher' },
+];
 
 /** Pages an owner can allow or hide for cashiers (their permissions already exclude everything else). */
 export const CASHIER_PAGE_OPTIONS: { key: string; label: string }[] = [
@@ -60,6 +74,7 @@ export const CHECKOUT_RULE_DEFAULTS: CheckoutRules = {
   discounts: { allowed: true, lineLimitBp: 1000, saleLimitBp: 1000, maxAmountCents: 0 },
   shifts: { required: true, minOpeningFloatCents: 0, blindClose: false, closeNeedsApproval: false, maxCashInDrawerCents: 0, oneOpenShiftPerCashier: true },
   cashierPages: CASHIER_PAGE_OPTIONS.map((p) => p.key),
+  paymentMethods: PAYMENT_METHOD_OPTIONS.map((p) => p.key),
 };
 
 const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
@@ -92,10 +107,22 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
       oneOpenShiftPerCashier: bool(s.shifts?.oneOpenShiftPerCashier, d.shifts.oneOpenShiftPerCashier),
     },
     cashierPages: Array.isArray(s.cashierPages) ? s.cashierPages.filter((k: unknown) => CASHIER_PAGE_OPTIONS.some((p) => p.key === k)) : d.cashierPages,
+    paymentMethods: paymentMethodsOf(s.paymentMethods),
   };
 }
 
 /** True for a user whose only built-in role is Cashier (the page list applies to them). */
 export function isPlainCashier(roles: readonly string[]): boolean {
   return roles.length > 0 && roles.every((r) => r === 'cashier');
+}
+
+/** Saved payment methods; nothing valid saved means all of them (a till always needs a way to be paid). */
+function paymentMethodsOf(v: unknown): string[] {
+  const list = Array.isArray(v) ? PAYMENT_METHOD_OPTIONS.map((o) => o.key).filter((k) => v.includes(k)) : [];
+  return list.length ? list : CHECKOUT_RULE_DEFAULTS.paymentMethods;
+}
+
+/** True when the method may be used at checkout. Methods not in the list of options (e.g. "other") are not limited. */
+export function paymentMethodAllowed(rules: Pick<CheckoutRules, 'paymentMethods'>, method: string): boolean {
+  return !PAYMENT_METHOD_OPTIONS.some((o) => o.key === method) || rules.paymentMethods.includes(method);
 }

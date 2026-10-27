@@ -1,7 +1,7 @@
 import type { Request } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { allocateProportionally, calculateTax, lineAmount, mergeCheckoutRules, pointsEarned, percentOf, PRICE_LISTS, roundQty, type Permission, type PriceListKey } from '@afeypos/shared';
+import { allocateProportionally, calculateTax, lineAmount, mergeCheckoutRules, paymentMethodAllowed, PAYMENT_METHOD_OPTIONS, pointsEarned, percentOf, PRICE_LISTS, roundQty, type Permission, type PriceListKey } from '@afeypos/shared';
 import {
   OnlineOrder, CashMovement, Customer, LedgerEntry, PaymentIntent, Product, Promotion, Sale, SalesDocument, SerialItem, Shift, Till, User, Branch,
 } from '../../models/index.js';
@@ -222,6 +222,10 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
   let loyaltyRedeemed = 0;
   for (const p of input.payments) {
     if (p.amountCents === 0) continue;
+    if (!input.onlineOrderId && !paymentMethodAllowed(rules, p.method)) {
+      const label = PAYMENT_METHOD_OPTIONS.find((o) => o.key === p.method)?.label ?? p.method;
+      throw unprocessable(`${label} is not accepted at checkout (Settings → Checkout rules)`, 'PAYMENT_METHOD_OFF');
+    }
     const row: Record<string, unknown> = { method: p.method, amountCents: p.amountCents, reference: p.reference };
     switch (p.method) {
       case 'cash': {

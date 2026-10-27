@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { CASHIER_PAGE_OPTIONS, MODULES, PAYMENT_PROVIDER_INFO, RECEIPT_TEMPLATES, mergeCheckoutRules, mergeReceipt, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
+import { CASHIER_PAGE_OPTIONS, PAYMENT_METHOD_OPTIONS, MODULES, PAYMENT_PROVIDER_INFO, RECEIPT_TEMPLATES, mergeCheckoutRules, mergeReceipt, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import {
   AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
 } from '../../models/index.js';
@@ -135,6 +135,7 @@ const rulesSchema = z.object({
   discounts: z.object({ allowed: z.boolean(), lineLimitBp: bp, saleLimitBp: bp, maxAmountCents: positiveCents }).partial(),
   shifts: z.object({ required: z.boolean(), minOpeningFloatCents: positiveCents, blindClose: z.boolean(), closeNeedsApproval: z.boolean(), maxCashInDrawerCents: positiveCents, oneOpenShiftPerCashier: z.boolean() }).partial(),
   cashierPages: z.array(z.enum(CASHIER_PAGE_OPTIONS.map((p) => p.key) as [string, ...string[]])).max(CASHIER_PAGE_OPTIONS.length),
+  paymentMethods: z.array(z.enum(PAYMENT_METHOD_OPTIONS.map((p) => p.key) as [string, ...string[]])).min(1, 'Keep at least one way to pay').max(PAYMENT_METHOD_OPTIONS.length),
 }).partial();
 const terminalsSchema = z.array(z.object({ name: z.string().trim().min(1).max(40), bank: z.string().trim().max(40), terminalId: z.string().trim().max(40) })).max(30);
 const presentRules = (t: any) => ({ rules: mergeCheckoutRules(t.settings?.checkoutRules, t.settings ?? {}), cardTerminals: t.settings?.cardTerminals ?? [] });

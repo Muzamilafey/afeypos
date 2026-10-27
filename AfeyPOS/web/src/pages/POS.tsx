@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { allocateProportionally, calculateTax, CARD_NETWORKS, KENYA_BANKS, lineAmount, mergeCheckoutRules, roundQty, type PriceListKey } from '@afeypos/shared';
+import { allocateProportionally, calculateTax, CARD_NETWORKS, KENYA_BANKS, lineAmount, mergeCheckoutRules, paymentMethodAllowed, roundQty, type PriceListKey } from '@afeypos/shared';
 import { PosTile, type PosTileKind } from '../components/PosTiles';
 import { api, ApiError, newRequestId } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -371,10 +371,10 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       const idx = cart.lines.findIndex((l) => l.key === selected?.key);
       const key = e.key;
       if (key === 'F2') { e.preventDefault(); searchRef.current?.focus(); return; }
-      if (key === 'F3') { e.preventDefault(); if (has('mpesa')) pay('mpesa'); return; }
+      if (key === 'F3') { e.preventDefault(); if (has('mpesa') && allowed('mpesa')) pay('mpesa'); return; }
       if (key === 'F4') { e.preventDefault(); setCustomerOpen(true); return; }
-      if (key === 'F6') { e.preventDefault(); pay('card'); return; }
-      if (key === 'F7') { e.preventDefault(); if (!cantPay) setVoucherOpen(true); return; }
+      if (key === 'F6') { e.preventDefault(); if (allowed('card')) pay('card'); return; }
+      if (key === 'F7') { e.preventDefault(); if (!cantPay && allowed('voucher')) setVoucherOpen(true); return; }
       if (key === 'F8') { e.preventDefault(); suspend(); return; }
       if (key === 'F9' || key === 'F12') { e.preventDefault(); pay('cash'); return; }
       if (key === 'F10') { e.preventDefault(); setPanel({ kind: 'more' }); return; }
@@ -411,10 +411,12 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     if (line) guardRemoval('remove', [line], () => update((c) => ({ ...c, lines: c.lines.filter((x) => x.key !== key) })));
   };
   const taxLabel = settings.pricesIncludeTax === false ? 'Tax' : `Tax${settings.defaultTaxRateBp ? ` (${settings.defaultTaxRateBp / 100}%)` : ''}`;
-  const pay = (method: string) => cart.lines.length && !(needsAge && !cart.ageVerified) && setPaying(method);
+  // Only the ways to pay the owner allows (Checkout rules); a method that is off opens the first allowed one.
+  const allowed = (m: string) => paymentMethodAllowed(rules, m);
+  const pay = (method: string) => cart.lines.length && !(needsAge && !cart.ageVerified) && setPaying(allowed(method) ? method : rules.paymentMethods[0]);
   const cantPay = !cart.lines.length || (needsAge && !cart.ageVerified);
   // Main tiles: ways to pay and the sale's customer. Editing the sale is under More.
-  const tiles: { kind: PosTileKind; label: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string; badge?: string }[] = [
+  const allTiles: { kind: PosTileKind; label: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string; badge?: string }[] = [
     { kind: 'mpesa', label: 'M-Pesa payment', hint: 'F3', onClick: () => pay('mpesa'), disabled: cantPay || !has('mpesa'), title: has('mpesa') ? undefined : 'Turn on M-Pesa in Settings > Integrations' },
     { kind: 'cash', label: 'Cash payment', onClick: () => pay('cash'), disabled: cantPay, hint: 'Enter' },
     { kind: 'card', label: 'Card payment', hint: 'F6', onClick: () => pay('card'), disabled: cantPay },
@@ -423,6 +425,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     { kind: 'customer', label: cart.customer ? `Customer: ${cart.customer.name}` : 'Customer', onClick: () => setCustomerOpen(true), hint: 'F4', badge: cart.customer ? '✓' : undefined },
     { kind: 'hold', label: 'Hold sale', onClick: suspend, disabled: !cart.lines.length || !rules.items.holdAllowed, hint: 'F8', title: rules.items.holdAllowed ? undefined : 'Holding sales is turned off in Checkout rules' },
   ];
+  const tiles = allTiles.filter((t) => !['mpesa', 'cash', 'card', 'voucher'].includes(t.kind) || allowed(t.kind));
   const more: { key: string; label: string; icon: string; tone: string; onClick: () => void; disabled?: boolean; count?: number; lock?: boolean }[] = [
     { key: 'qty', label: 'Quantity', icon: 'plus', tone: 'text-emerald-600 bg-emerald-50', onClick: () => setPanel({ kind: 'line', focus: 'qty' }), disabled: !selected },
     { key: 'ldisc', label: 'Line discount', icon: 'percent', tone: 'text-sky-600 bg-sky-50', onClick: () => setPanel({ kind: 'line', focus: 'discount' }), disabled: !selected || !can('sales.discount') },
@@ -826,7 +829,8 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   // Stable id for this payment attempt: retries after a network error replay instead of double-selling.
   const [requestId] = useState(newRequestId);
   const [payments, setPayments] = useState<Payment[]>([]);
-  const [method, setMethod] = useState(initialMethod || 'cash');
+  const checkoutRules = me?.tenant.checkoutRules ?? mergeCheckoutRules(undefined, me?.tenant.settings ?? {});
+  const [method, setMethod] = useState(initialMethod && paymentMethodAllowed(checkoutRules, initialMethod) ? initialMethod : paymentMethodAllowed(checkoutRules, 'cash') ? 'cash' : checkoutRules.paymentMethods[0]);
   const paid = payments.reduce((a, p) => a + p.amountCents, 0);
   const remaining = total - paid;
   const [amount, setAmount] = useState<number | null>(remaining);
@@ -869,7 +873,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
     ...(has('customerCredit') && cart.customer && cart.customer.kind !== 'walk_in' ? [{ key: 'credit', label: 'On account' }] : []),
     ...(has('loyalty') && cart.customer?.loyaltyPoints ? [{ key: 'loyalty', label: `Points (${cart.customer.loyaltyPoints})` }] : []),
     { key: 'voucher', label: 'Gift voucher' },
-  ];
+  ].filter((m) => paymentMethodAllowed(checkoutRules, m.key));
   // Gift voucher: look up the balance; Points: offer what the program allows on this sale.
   const checkVoucher = async (code = voucher.code) => {
     setError(null);

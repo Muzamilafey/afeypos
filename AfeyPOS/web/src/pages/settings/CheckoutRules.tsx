@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { CASHIER_PAGE_OPTIONS, KENYA_BANKS, type CheckoutRules } from '@afeypos/shared';
+import { CASHIER_PAGE_OPTIONS, PAYMENT_METHOD_OPTIONS, KENYA_BANKS, type CheckoutRules } from '@afeypos/shared';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Button, Card, cx, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, useToast } from '../../components/ui';
@@ -87,6 +87,22 @@ export function CheckoutRulesPage() {
           <div className="mt-2 grid gap-3 sm:grid-cols-2">
             <Field label="Minimum opening float"><MoneyInput value={rules.shifts.minOpeningFloatCents} onChange={(v) => set('shifts', { minOpeningFloatCents: v ?? 0 })} /></Field>
             <Field label="Cash pickup above" hint="The till warns to hand over cash. 0 = never"><MoneyInput value={rules.shifts.maxCashInDrawerCents} onChange={(v) => set('shifts', { maxCashInDrawerCents: v ?? 0 })} /></Field>
+          </div>
+        </Card>
+
+        <Card title={<span className="flex items-center gap-2"><Icon name="wallet" className="h-4 w-4 text-emerald-500" />Payment methods at checkout</span>}>
+          <p className="mb-2 text-xs text-ink-500">Only the ticked ways to pay appear on the checkout page, and the server refuses the others. Keep at least one.</p>
+          <div className="grid gap-1.5 sm:grid-cols-2" data-testid="payment-methods">
+            {PAYMENT_METHOD_OPTIONS.map((p) => {
+              const on = rules.paymentMethods.includes(p.key);
+              const last = on && rules.paymentMethods.length === 1;
+              return (
+                <label key={p.key} title={last ? 'At least one way to pay stays on' : undefined} className={cx('flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm transition', on ? 'border-brand-300 bg-brand-50/60 dark:border-brand-500/40 dark:bg-brand-500/10' : 'border-ink-200 dark:border-ink-700')}>
+                  <input type="checkbox" aria-label={p.label} className="mt-0.5 h-4 w-4 rounded border-ink-300 text-brand-600" checked={on} disabled={last} onChange={(e) => { setRules({ ...rules, paymentMethods: e.target.checked ? [...rules.paymentMethods, p.key] : rules.paymentMethods.filter((k) => k !== p.key) }); setDirty(true); }} />
+                  <span>{p.label}{p.hint && <span className="block text-xs text-ink-500">{p.hint}</span>}</span>
+                </label>
+              );
+            })}
           </div>
         </Card>
 
