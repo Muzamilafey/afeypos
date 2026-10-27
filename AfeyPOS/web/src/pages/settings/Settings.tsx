@@ -13,6 +13,7 @@ import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, Mod
 import { Icon } from '../../components/icons';
 import { StaffAccessPanel } from './StaffAccess';
 import { BridgePairingCard, FingerprintReadersCard, ReceiptPrinterCard } from './ThisComputer';
+import { makeAppIcons } from '../../lib/appIcon';
 
 export function BusinessSettingsPage() {
   const { me, reload } = useAuth();
@@ -27,7 +28,10 @@ export function BusinessSettingsPage() {
   const setS = (k: string, v: any) => setF({ ...f, settings: { ...s, [k]: v } });
   const save = async () => {
     try {
-      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, logoFileId: s.logoFileId ?? '', tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders, returns: { windowDays: s.returns?.windowDays ?? 14, approvalAboveCents: s.returns?.approvalAboveCents ?? 0, restockByDefault: s.returns?.restockByDefault ?? true }, staffLogin: { cardRequiresPin: s.staffLogin?.cardRequiresPin ?? true }, ...(s.crm?.birthdayGreeting ? { crm: { birthdayGreeting: { enabled: Boolean(s.crm.birthdayGreeting.enabled), channel: s.crm.birthdayGreeting.channel ?? 'sms', offer: s.crm.birthdayGreeting.offer ?? '' } } } : {}) } } });
+      // The installed app's icon is made from the logo (once per logo).
+      const appIcon = !s.logoFileId ? null : s.appIcon?.source === s.logoFileId ? s.appIcon : await makeAppIcons(s.logoFileId).catch(() => s.appIcon ?? null);
+      if (appIcon !== (s.appIcon ?? null)) setS('appIcon', appIcon);
+      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, logoFileId: s.logoFileId ?? '', appIcon, tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders, returns: { windowDays: s.returns?.windowDays ?? 14, approvalAboveCents: s.returns?.approvalAboveCents ?? 0, restockByDefault: s.returns?.restockByDefault ?? true }, staffLogin: { cardRequiresPin: s.staffLogin?.cardRequiresPin ?? true }, ...(s.crm?.birthdayGreeting ? { crm: { birthdayGreeting: { enabled: Boolean(s.crm.birthdayGreeting.enabled), channel: s.crm.birthdayGreeting.channel ?? 'sms', offer: s.crm.birthdayGreeting.offer ?? '' } } } : {}) } } });
       await reload();
       toast.success('Settings saved');
     } catch (e) { toast.error(e); }
@@ -756,7 +760,7 @@ function BusinessLogoField({ fileId, onChange }: { fileId?: string; onChange: (i
         </label>
         {fileId && <Button variant="ghost" size="sm" onClick={() => onChange('')}>Remove</Button>}
       </div>
-      <p className="mt-1 text-xs text-ink-500">Shown on the sign-in and sign-up pages. A square image of at least 256 × 256 pixels looks best.</p>
+      <p className="mt-1 text-xs text-ink-500">Shown on the sign-in page, documents and receipts, and used as the icon of the installed app (desktop, taskbar, phone). A square image of at least 512 × 512 pixels looks best.</p>
     </div>
   );
 }

@@ -12,7 +12,8 @@ import { errorHandler } from './http/errorHandler.js';
 import { requireTenant } from './http/tenant.js';
 import { authenticate, requireAnyModule, requireModule } from './http/auth.js';
 import { dbStatus, pingDatabase } from './db/connection.js';
-import { publicRoutes } from './modules/public/routes.js';
+import { appIconOf, publicRoutes } from './modules/public/routes.js';
+import { findTenantForRequest } from './http/tenant.js';
 import { authRoutes, recoveryRoutes } from './modules/auth/routes.js';
 import { salesRoutes } from './modules/sales/routes.js';
 import { documentRoutes } from './modules/sales/documents.js';
@@ -189,6 +190,26 @@ export function createApp() {
   // Local installations serve the built web app from the same server.
   if (e.WEB_DIST_DIR && fs.existsSync(e.WEB_DIST_DIR)) {
     const dist = path.resolve(e.WEB_DIST_DIR);
+    // The installed app (desktop, taskbar, phone) uses the business logo as its icon once one is set.
+    app.get('/manifest.webmanifest', async (_req, res, next) => {
+      try {
+        const manifest = JSON.parse(await fs.promises.readFile(path.join(dist, 'manifest.webmanifest'), 'utf8'));
+        const icons = appIconOf(await findTenantForRequest());
+        if (icons) {
+          const v = icons.i192.slice(0, 8);
+          manifest.icons = [
+            { src: `/api/v1/public/app-icon/192?v=${v}`, sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: `/api/v1/public/app-icon/512?v=${v}`, sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: `/api/v1/public/app-icon/maskable?v=${v}`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          ];
+          for (const sc of manifest.shortcuts ?? []) sc.icons = [{ src: `/api/v1/public/app-icon/192?v=${v}`, sizes: '192x192' }];
+        }
+        res.setHeader('Cache-Control', 'no-cache');
+        res.type('application/manifest+json').send(JSON.stringify(manifest));
+      } catch {
+        next();
+      }
+    });
     app.use(express.static(dist, {
       index: false,
       maxAge: '1h',

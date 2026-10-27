@@ -66,6 +66,7 @@ const settingsSchema = z.object({
       restrictedSaleHours: z.object({ start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).or(z.literal('')), end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).or(z.literal('')) }).partial(),
       dailyReportEmails: z.array(z.string().email()).max(5),
       logoFileId: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/).or(z.literal('')),
+      appIcon: z.object({ source: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/), i192: z.string().regex(/^[a-f0-9]{32}\.png$/), i512: z.string().regex(/^[a-f0-9]{32}\.png$/), m512: z.string().regex(/^[a-f0-9]{32}\.png$/) }).nullable(),
       tagline: z.string().max(120),
       creditReminders: z.object({ enabled: z.boolean(), overdueDays: z.number().int().min(1).max(180) }).partial(),
       staffLogin: z.object({ cardRequiresPin: z.boolean() }).partial(),
