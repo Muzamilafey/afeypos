@@ -1,3 +1,4 @@
+import type { Request, Response } from 'express';
 import { Router } from 'express';
 import { z } from 'zod';
 import { Types } from 'mongoose';
@@ -21,6 +22,8 @@ const router = Router();
 router.use(supplierQuotationRoutes);
 
 const lineSchema = z.object({ productId: objectId, unitCode: z.string().optional(), qty: z.number().positive(), unitCostCents: positiveCents });
+/** Receiving: the cost may be left out (staff who do not see costs); the product's current cost is used. */
+const grnLineSchema = lineSchema.extend({ unitCostCents: positiveCents.optional() });
 
 router.get('/purchase-orders', requirePermission('purchasing.read'), async (req, res) => {
   const q = parse(pagination.extend({ status: z.string().optional(), supplierId: objectId.optional() }), req.query);
@@ -86,7 +89,7 @@ router.post('/purchase-orders/:id/cancel', requirePermission('purchasing.manage'
 
 const grnSchema = z.object({
   clientRequestId: z.string().min(8).max(100).optional(),
-  supplierId: objectId,
+  supplierId: objectId.optional(),
   warehouseId: objectId,
   purchaseOrderId: objectId.optional(),
   supplierInvoiceNo: z.string().trim().max(60).optional(),
@@ -94,7 +97,7 @@ const grnSchema = z.object({
   dueDate: z.coerce.date().optional(),
   taxCents: positiveCents.default(0),
   notes: z.string().max(1000).optional(),
-  lines: z.array(lineSchema.extend({ poLineId: objectId.optional(), batchNo: z.string().max(60).optional(), expiryDate: z.coerce.date().optional(), serials: z.array(z.string()).optional() })).min(1).max(500),
+  lines: z.array(grnLineSchema.extend({ poLineId: objectId.optional(), batchNo: z.string().max(60).optional(), expiryDate: z.coerce.date().optional(), serials: z.array(z.string()).optional() })).min(1).max(500),
   updateProductCost: z.boolean().default(true),
 });
 
@@ -112,7 +115,7 @@ router.get('/goods-receipts/:id', requirePermission('purchasing.read'), async (r
   res.json({ data: g });
 });
 
-router.post('/goods-receipts', requirePermission('inventory.receive'), idempotent('grn'), async (req, res) => {
+const postGoodsReceipt = async (req: Request, res: Response) => {
   const body = parse(grnSchema, req.body);
   if (body.clientRequestId) {
     const ex = await GoodsReceipt.findOne({ clientRequestId: body.clientRequestId }).lean();
@@ -122,10 +125,12 @@ router.post('/goods-receipts', requirePermission('inventory.receive'), idempoten
     }
   }
   const grn = await withTransaction(async () => {
-    const supplier = await Supplier.findById(body.supplierId);
-    if (!supplier) throw notFound('Supplier');
+    // Without a supplier this only adds stock (Inventory → Receive stock); with one it is also owed to them.
+    const supplier = body.supplierId ? await Supplier.findById(body.supplierId) : null;
+    if (body.supplierId && !supplier) throw notFound('Supplier');
+    if (!supplier && body.purchaseOrderId) throw badRequest('Choose the supplier of the purchase order');
     if (!(await Warehouse.exists({ _id: body.warehouseId }))) throw notFound('Warehouse');
-    const po = body.purchaseOrderId ? await PurchaseOrder.findOne({ _id: body.purchaseOrderId, supplierId: supplier._id, status: { $in: ['draft', 'sent', 'partially_received'] } }) : null;
+    const po = supplier && body.purchaseOrderId ? await PurchaseOrder.findOne({ _id: body.purchaseOrderId, supplierId: supplier._id, status: { $in: ['draft', 'sent', 'partially_received'] } }) : null;
     if (body.purchaseOrderId && !po) throw unprocessable('Purchase order is not open for receiving');
     const id = new Types.ObjectId();
     const number = await nextNumber('grn', 'GRN');
@@ -135,7 +140,8 @@ router.post('/goods-receipts', requirePermission('inventory.receive'), idempoten
       if (!product) throw notFound('Product');
       const unit = resolveUnit(product, l.unitCode ?? product.units.find((u) => u.isDefaultPurchase)?.code ?? product.baseUnit);
       const baseQty = roundQty(l.qty * unit.factor);
-      const baseCost = Math.round(l.unitCostCents / unit.factor);
+      const unitCostCents = l.unitCostCents ?? Math.round((product.costCents ?? 0) * unit.factor);
+      const baseCost = Math.round(unitCostCents / unit.factor);
       if (po) {
         const pl = l.poLineId ? po.lines.id(l.poLineId) : po.lines.find((x) => String(x.productId) === String(product._id));
         if (!pl) throw badRequest(`${product.name} is not on the purchase order`);
@@ -143,8 +149,8 @@ router.post('/goods-receipts', requirePermission('inventory.receive'), idempoten
       }
       if (product.trackBatches && !l.batchNo) throw badRequest(`${product.name} requires a batch number`);
       await applyMovement({ product, productId: product._id, warehouseId: body.warehouseId, qty: baseQty, type: 'purchase_receipt', unitCostCents: baseCost, ref: { type: 'GoodsReceipt', id, number }, userId: req.auth!.userId, batchNo: l.batchNo, expiryDate: l.expiryDate, serials: l.serials, reason: body.supplierInvoiceNo ? `Invoice ${body.supplierInvoiceNo}` : undefined });
-      if (body.updateProductCost) await Product.updateOne({ _id: product._id }, { $set: { costCents: baseCost } });
-      lines.push({ productId: product._id, poLineId: l.poLineId, name: product.name, unitCode: unit.code, factor: unit.factor, qty: roundQty(l.qty), unitCostCents: l.unitCostCents, batchNo: l.batchNo, expiryDate: l.expiryDate, serials: l.serials });
+      if (body.updateProductCost && l.unitCostCents !== undefined) await Product.updateOne({ _id: product._id }, { $set: { costCents: baseCost } });
+      lines.push({ productId: product._id, poLineId: l.poLineId, name: product.name, unitCode: unit.code, factor: unit.factor, qty: roundQty(l.qty), unitCostCents, batchNo: l.batchNo, expiryDate: l.expiryDate, serials: l.serials });
     }
     const subtotal = lines.reduce((a, l) => a + lineAmount(l.qty, l.unitCostCents), 0);
     const total = subtotal + body.taxCents;
@@ -152,15 +158,21 @@ router.post('/goods-receipts', requirePermission('inventory.receive'), idempoten
       po.status = po.lines.every((l) => (l.receivedQty ?? 0) >= l.qty) ? 'received' : 'partially_received';
       await po.save();
     }
-    const dueDate = body.dueDate ?? new Date((body.invoiceDate ?? new Date()).getTime() + (supplier.paymentTermsDays ?? 30) * 86400_000);
-    const updated = await Supplier.findOneAndUpdate({ _id: supplier._id }, { $inc: { balanceCents: total } }, { new: true });
-    await LedgerEntry.create([{ partyType: 'supplier', partyId: supplier._id, kind: 'purchase', amountCents: total, openCents: total, balanceAfterCents: updated!.balanceCents, dueDate, ref: { type: 'GoodsReceipt', id, number }, reference: body.supplierInvoiceNo, userId: req.auth!.userId }]);
-    const [g] = await GoodsReceipt.create([{ _id: id, number, clientRequestId: body.clientRequestId, supplierId: supplier._id, purchaseOrderId: po?._id, warehouseId: body.warehouseId, supplierInvoiceNo: body.supplierInvoiceNo, invoiceDate: body.invoiceDate, dueDate, lines, subtotalCents: subtotal, taxCents: body.taxCents, totalCents: total, receivedBy: req.auth!.userId, notes: body.notes }]);
-    await audit(req, { action: 'goods_receipt.posted', entity: 'GoodsReceipt', entityId: id, details: { number, totalCents: total, supplier: supplier.name } });
+    let dueDate: Date | undefined;
+    if (supplier) {
+      dueDate = body.dueDate ?? new Date((body.invoiceDate ?? new Date()).getTime() + (supplier.paymentTermsDays ?? 30) * 86400_000);
+      const updated = await Supplier.findOneAndUpdate({ _id: supplier._id }, { $inc: { balanceCents: total } }, { new: true });
+      await LedgerEntry.create([{ partyType: 'supplier', partyId: supplier._id, kind: 'purchase', amountCents: total, openCents: total, balanceAfterCents: updated!.balanceCents, dueDate, ref: { type: 'GoodsReceipt', id, number }, reference: body.supplierInvoiceNo, userId: req.auth!.userId }]);
+    }
+    const [g] = await GoodsReceipt.create([{ _id: id, number, clientRequestId: body.clientRequestId, supplierId: supplier?._id, purchaseOrderId: po?._id, warehouseId: body.warehouseId, supplierInvoiceNo: body.supplierInvoiceNo, invoiceDate: body.invoiceDate, dueDate, lines, subtotalCents: subtotal, taxCents: body.taxCents, totalCents: total, receivedBy: req.auth!.userId, notes: body.notes }]);
+    await audit(req, { action: 'goods_receipt.posted', entity: 'GoodsReceipt', entityId: id, details: { number, totalCents: total, supplier: supplier?.name ?? 'none (stock received)', lines: lines.length } });
     return g;
   });
   res.status(201).json({ data: grn });
-});
+};
+router.post('/goods-receipts', requirePermission('inventory.receive'), idempotent('grn'), postGoodsReceipt);
+/** Inventory → Receive stock (scanned items, supplier optional); needs only the inventory module. */
+router.post('/inventory/receive', requirePermission('inventory.receive'), idempotent('grn'), postGoodsReceipt);
 
 /** Return goods to a supplier: reduces stock at current cost and the payable (or creates a supplier credit). */
 router.post('/supplier-returns', requirePermission('purchasing.manage'), async (req, res) => {

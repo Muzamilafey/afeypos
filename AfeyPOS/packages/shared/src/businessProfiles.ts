@@ -328,6 +328,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'repairs', label: 'Repairs', path: '/repairs', icon: 'wrench', module: 'repairs', permission: 'sales.create', group: 'sell' },
   { key: 'products', label: 'Products', path: '/products', icon: 'box', module: 'inventory', permission: 'products.read', group: 'stock' },
   { key: 'units', label: 'Units', path: '/inventory/units', icon: 'layers', module: 'inventory', permission: 'products.read', group: 'stock' },
+  { key: 'receiveStock', label: 'Receive stock', path: '/inventory/receive', icon: 'package', module: 'inventory', permission: 'inventory.receive', group: 'stock' },
   { key: 'stock', label: 'Stock levels', path: '/inventory', icon: 'layers', module: 'inventory', permission: 'inventory.read', group: 'stock' },
   { key: 'transfers', label: 'Stock transfers', path: '/inventory/transfers', icon: 'shuffle', module: 'stockTransfers', permission: 'inventory.transfer', group: 'stock' },
   { key: 'categories', label: 'Categories', path: '/inventory/categories', icon: 'grid', module: 'inventory', permission: 'products.read', group: 'stock' },

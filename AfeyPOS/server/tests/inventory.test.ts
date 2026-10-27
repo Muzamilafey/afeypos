@@ -199,3 +199,32 @@ describe('batches, expiry and serial numbers', () => {
     expect(lookup.body.data[0].sale.number).toBe(sale.body.data.number);
   });
 });
+
+describe('Inventory → Receive stock', () => {
+  it('scanned stock without a supplier: stock goes up, nothing is owed, the product cost is used', async () => {
+    const p = await createProduct(t.client, { name: 'Maize flour 2kg', sku: 'RCV-MAIZE2', costCents: 15000, prices: { retail: 19000 }, openingStock: [{ warehouseId: wh, qty: 4 }] });
+    const before = (await t.client.get(`/suppliers/${supplierId}`)).body.data.balanceCents;
+    const r = await t.client.post('/inventory/receive', { clientRequestId: rid(), warehouseId: wh, supplierInvoiceNo: 'DN-77', lines: [{ productId: p._id, qty: 12 }] });
+    expect(r.status).toBe(201);
+    expect(r.body.data.number).toMatch(/^GRN-/);
+    expect(r.body.data.supplierId).toBeUndefined();
+    expect(r.body.data.lines[0]).toMatchObject({ qty: 12, unitCostCents: 15000 });
+    expect((await level(p._id)).qty).toBe(16);
+    expect((await t.client.get(`/suppliers/${supplierId}`)).body.data.balanceCents).toBe(before);
+    // Replaying the same save does not receive twice.
+    const id = rid();
+    await t.client.post('/inventory/receive', { clientRequestId: id, warehouseId: wh, lines: [{ productId: p._id, qty: 1 }] });
+    await t.client.post('/inventory/receive', { clientRequestId: id, warehouseId: wh, lines: [{ productId: p._id, qty: 1 }] });
+    expect((await level(p._id)).qty).toBe(17);
+  });
+
+  it('with a supplier it is also owed to them', async () => {
+    const p = await createProduct(t.client, { name: 'Cooking oil 1L', sku: 'RCV-OIL1L', costCents: 22000, prices: { retail: 28000 } });
+    const before = (await t.client.get(`/suppliers/${supplierId}`)).body.data.balanceCents;
+    const r = await t.client.post('/inventory/receive', { clientRequestId: rid(), warehouseId: wh, supplierId, lines: [{ productId: p._id, qty: 10, unitCostCents: 21000 }] });
+    expect(r.status).toBe(201);
+    expect((await t.client.get(`/suppliers/${supplierId}`)).body.data.balanceCents).toBe(before + 210000);
+    expect((await level(p._id)).qty).toBe(10);
+  });
+});
+

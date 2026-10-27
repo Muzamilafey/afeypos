@@ -30,6 +30,7 @@ import { CheckoutRulesPage } from './pages/settings/CheckoutRules';
 import { CardTerminalsPage } from './pages/settings/CardTerminals';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
 import { BarcodeVerifyPage, BrandsPage, CategoriesPage, StockAlertsPage, UnitsPage } from './pages/inventory/Catalog';
+import { ReceiveStockPage } from './pages/inventory/ReceiveStock';
 import { EtimsPage } from './pages/Etims';
 
 function Protected({ children }: { children: ReactNode }) {
@@ -68,6 +69,7 @@ export function App() {
         <Route path="products" element={<Gate perm="products.read"><ProductsPage /></Gate>} />
         <Route path="products/:id" element={<Gate perm="products.read"><ProductEditPage /></Gate>} />
         <Route path="inventory" element={<Gate perm="inventory.read"><StockLevelsPage /></Gate>} />
+        <Route path="inventory/receive" element={<Gate perm="inventory.receive" module="inventory"><ReceiveStockPage /></Gate>} />
         <Route path="inventory/units" element={<Gate perm="products.read"><UnitsPage /></Gate>} />
         <Route path="inventory/categories" element={<Gate perm="products.read"><CategoriesPage /></Gate>} />
         <Route path="inventory/brands" element={<Gate perm="products.read"><BrandsPage /></Gate>} />

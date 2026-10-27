@@ -48,3 +48,32 @@ test('inventory menu: units, categories, brands, stock alerts and barcode verify
   await menu.getByRole('button', { name: 'Customers & marketing' }).click();
   await expect(menu.getByRole('link', { name: 'Customers', exact: true })).toBeVisible();
 });
+
+test('inventory → receive stock: scan adds one, set the new total, save', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Receive stock', exact: true }).click();
+  const scan = page.getByLabel('Scan barcode');
+  await expect(scan).toBeEnabled();
+  await scan.fill('MILK500');
+  await scan.press('Enter');
+  await expect(page.getByLabel('Received Fresh milk 500ml')).toHaveValue('1');
+  await scan.fill('MILK500');
+  await scan.press('Enter');
+  await expect(page.getByLabel('Received Fresh milk 500ml')).toHaveValue('2');
+
+  // Typing the counted total works out how many arrived.
+  const total = page.getByLabel('New total Fresh milk 500ml');
+  const before = Number(await total.inputValue()) - 2;
+  await total.fill(String(before + 10));
+  await expect(page.getByLabel('Received Fresh milk 500ml')).toHaveValue('10');
+  await expect(page.getByTestId('receive-total')).toContainText('10 received');
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/receive-stock.png` });
+
+  await page.getByRole('button', { name: 'Save received stock' }).click();
+  await expect(page.getByText(/Saved GRN-/)).toBeVisible();
+  await expect(page.getByTestId('receive-lines')).toHaveCount(0);
+});

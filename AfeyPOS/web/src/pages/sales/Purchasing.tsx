@@ -317,7 +317,7 @@ function GrnModal({ id, onClose }: { id: string; onClose: () => void }) {
   return (
     <Modal open onClose={onClose} size="xl" title={`Goods received note ${g.number}`} footer={<div className="flex gap-2"><PdfButton kind="goods_receipt" id={id} size="md" /><EmailDocButton kind="goods_receipt" id={id} defaultTo={email} what="Goods received note" size="md" /></div>}>
       <div className="mb-3 grid gap-3 text-sm sm:grid-cols-4">
-        <div><div className="label">Supplier</div>{g.supplierId?.name}</div>
+        <div><div className="label">Supplier</div>{g.supplierId?.name ?? 'None (stock received)'}</div>
         <div><div className="label">Supplier invoice</div>{g.supplierInvoiceNo ?? '—'}</div>
         <div><div className="label">Received</div>{dateTime(g.createdAt)}</div>
         <div><div className="label">Payment due</div>{date(g.dueDate)}</div>
@@ -419,7 +419,7 @@ export function PurchasingPage({ tab }: { tab: Tab }) {
         <div className="card">
           <DataTable rows={grns.data?.data} loading={grns.isLoading} error={grns.error} onRowClick={(r: any) => setGrnId(r._id)} columns={[
             { key: 'n', header: 'GRN', render: (r: any) => r.number },
-            { key: 's', header: 'Supplier', render: (r: any) => r.supplierId?.name },
+            { key: 's', header: 'Supplier', render: (r: any) => r.supplierId?.name ?? 'None (stock received)' },
             { key: 'i', header: 'Invoice', render: (r: any) => r.supplierInvoiceNo ?? '—' },
             { key: 'd', header: 'Received', render: (r: any) => dateTime(r.createdAt) },
             { key: 'du', header: 'Due', render: (r: any) => date(r.dueDate) },
