@@ -42,7 +42,7 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await page.getByRole('button', { name: /^Pay / }).click();
   await page.getByRole('button', { name: 'M-Pesa', exact: true }).click();
   await page.getByPlaceholder(/Customer phone/).fill('0712345678');
-  await page.getByRole('button', { name: 'Send STK' }).click();
+  await page.getByRole('button', { name: 'Send prompt' }).click();
   await expect(page.getByText(/Waiting for the customer/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Complete sale' })).toBeDisabled();
 
@@ -79,6 +79,30 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
   await page.getByRole('button', { name: 'New sale' }).click();
 
+  // Money paid to the till without a sale is not listed: the cashier finds it only by its M-Pesa code.
+  await page.evaluate(async () => {
+    const { accessToken } = await (await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })).json();
+    const h = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+    await fetch('/api/v1/payments/mpesa/simulate-c2b', { method: 'POST', headers: h, body: JSON.stringify({ amountCents: 10000, account: 'WALKIN', receipt: 'UJR9NBEDFC' }) });
+  });
+  await scan.fill('MILK500');
+  await scan.press('Enter');
+  await page.getByRole('button', { name: /^Pay / }).click();
+  await page.getByRole('button', { name: 'M-Pesa', exact: true }).click();
+  await expect(page.getByText('UJR9NBEDFC')).toHaveCount(0);
+  await page.getByRole('radio', { name: 'Enter M-Pesa code' }).click();
+  await page.getByLabel('M-Pesa code').fill('ujr9nbedfc');
+  await page.getByRole('button', { name: 'Find payment' }).click();
+  const found = page.getByTestId('mpesa-found');
+  await expect(found).toContainText('UJR9NBEDFC');
+  await expect(found).toContainText('SIMULATED CUSTOMER');
+  await expect(found).toContainText('100.00');
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/pos-mpesa-code.png` });
+  await found.getByRole('button', { name: 'Use this payment' }).click();
+  await page.getByRole('button', { name: 'Complete sale' }).click();
+  await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
+  await page.getByRole('button', { name: 'New sale' }).click();
+
   await page.goto('/payments/mpesa');
-  await expect(page.getByRole('cell', { name: /^RCP-/ })).toHaveCount(2);
+  await expect(page.getByRole('cell', { name: /^RCP-/ })).toHaveCount(3);
 });
