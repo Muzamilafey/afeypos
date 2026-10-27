@@ -9,7 +9,8 @@ import { useLocations } from '../lib/hooks';
 import { getWorkstation, setWorkstation } from '../lib/workstation';
 import { bridgeConfigured, fingerprint } from '../lib/bridge';
 import { money, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
-import { useRealtime } from '../lib/realtime';
+import { connectRealtime, useRealtime } from '../lib/realtime';
+import { TxnStatus, type TerminalTxn } from './settings/CardTerminals';
 import { printHtml, printReceipt } from '../lib/printing';
 import { CashCount, cashCountTotal, type CashCounts } from '../components/CashCount';
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
@@ -23,7 +24,7 @@ interface Product {
 }
 interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean }
 interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string }
-interface Payment { method: string; amountCents: number; tenderedCents?: number; reference?: string; paymentIntentId?: string; label?: string }
+interface Payment { method: string; amountCents: number; tenderedCents?: number; reference?: string; paymentIntentId?: string; terminalTransactionId?: string; label?: string }
 
 const newCart = (n: number, priceList: PriceListKey): Cart => ({ id: newRequestId(), label: `Sale ${n}`, lines: [], customer: null, priceList, cartDiscountCents: 0, couponCode: '', ageVerified: false });
 
@@ -997,7 +998,12 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
               )}
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}
               {method === 'card' && (
+                <TerminalPanel tillId={till._id} amount={Math.min(amount ?? 0, remaining)} remaining={remaining} usedIds={payments.map((p) => p.terminalTransactionId!).filter(Boolean)}
+                  onApproved={(x) => setPayments((ps) => (ps.some((p) => p.terminalTransactionId === x.id) ? ps : [...ps, { method: 'card', amountCents: x.amountCents, terminalTransactionId: x.id, label: `Card ${x.cardScheme ?? ''}${x.last4 ? ` ****${x.last4}` : ''}${x.sandbox ? ' (simulated)' : ''}`.trim() }]))} />
+              )}
+              {method === 'card' && (
                 <div className="space-y-3 rounded-lg border border-sky-100 bg-sky-50/50 p-3 dark:border-sky-900 dark:bg-sky-950/20">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-ink-500">Card machine not connected to Afey POS</div>
                   <p className="text-xs text-ink-600 dark:text-ink-300">Cards from every bank in Kenya and abroad (Visa, Mastercard, UnionPay, Amex…) work on any bank's card machine. <b>1.</b> Key <b>{money(Math.min(amount ?? 0, remaining))}</b> into the card machine. <b>2.</b> The customer taps or inserts the card. <b>3.</b> Enter the approval code from the slip.</p>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {terminals.length > 0 && <Field label="Card machine"><Select value={card.terminal} onChange={(e) => setCard({ ...card, terminal: e.target.value })} options={terminals.map((t) => ({ value: t.name, label: `${t.name}${t.bank ? ` (${t.bank})` : ''}` }))} /></Field>}
@@ -1028,7 +1034,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
         <div className="rounded-lg bg-ink-50 p-3 text-sm dark:bg-ink-800/50">
           <div className="label">Payments</div>
           <ul className="space-y-1">{payments.map((p, i) => (
-            <li key={i} className="flex items-center justify-between"><span>{p.label}</span><span className="flex items-center gap-1 tabular-nums">{money(p.amountCents)}{!p.paymentIntentId && <button aria-label="Remove payment" onClick={() => setPayments((ps) => ps.filter((_, j) => j !== i))}><Icon name="x" className="h-3.5 w-3.5" /></button>}</span></li>
+            <li key={i} className="flex items-center justify-between"><span>{p.label}</span><span className="flex items-center gap-1 tabular-nums">{money(p.amountCents)}{!p.paymentIntentId && !p.terminalTransactionId && <button aria-label="Remove payment" onClick={() => setPayments((ps) => ps.filter((_, j) => j !== i))}><Icon name="x" className="h-3.5 w-3.5" /></button>}</span></li>
           ))}</ul>
           <div className="mt-3 border-t border-ink-200 pt-2 dark:border-ink-700">
             <div className="flex justify-between"><span>Remaining</span><span className="font-semibold tabular-nums">{money(Math.max(0, remaining))}</span></div>
@@ -1206,3 +1212,91 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
 }
 
 export { toCentsInput };
+
+/**
+ * Bank card terminal at the till: Afey POS sends the amount and a unique reference; the terminal reads the card
+ * and the PIN. The payment is added to the sale only once the terminal's status check verified the approval.
+ * An unfinished or unknown payment (e.g. after the till restarted) is picked up again here, and no new charge
+ * can start on that terminal until it is resolved.
+ */
+function TerminalPanel({ tillId, amount, remaining, usedIds, onApproved }: { tillId: string; amount: number; remaining: number; usedIds: string[]; onApproved: (x: TerminalTxn) => void }) {
+  const toast = useToast();
+  const terminals = useQuery({ queryKey: ['till-terminals', tillId], queryFn: () => api<{ data: { id: string; name: string; provider: string; mode: string; health: any; device: { model?: string } }[] }>(`/payment-terminals/for-till/${tillId}`).then((r) => r.data), staleTime: 30_000 });
+  const pending = useQuery({ queryKey: ['till-terminal-open', tillId], queryFn: () => api<{ data: TerminalTxn[] }>(`/payment-terminals/transactions/open-for-till/${tillId}`).then((r) => r.data), refetchInterval: 8000 });
+  const [terminalId, setTerminalId] = useState('');
+  const [txn, setTxn] = useState<TerminalTxn | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const added = useRef(new Set<string>());
+  useEffect(() => { if (!terminalId && terminals.data?.[0]) setTerminalId(terminals.data[0].id); }, [terminals.data, terminalId]);
+  // Live updates for this till (the server sends terminal progress to the till's room); polling is the fallback.
+  useEffect(() => { connectRealtime()?.emit('till:join', tillId); }, [tillId]);
+  useRealtime('terminal.updated', (x: TerminalTxn) => { if (txn && x.id === txn.id) setTxn(x); }, [txn?.id]);
+  // Resume what is unfinished on this till's terminals (the till may have been restarted mid-payment).
+  useEffect(() => {
+    if (txn || !pending.data) return;
+    const open = pending.data.find((x) => x.open);
+    if (open) setTxn(open);
+  }, [pending.data, txn]);
+  useEffect(() => {
+    if (!txn?.open) return;
+    const t = setInterval(() => api<{ data: TerminalTxn }>(`/payment-terminals/transactions/${txn.id}`, { query: { refresh: '1' } }).then((r) => setTxn(r.data)).catch(() => undefined), 1500);
+    return () => clearInterval(t);
+  }, [txn?.id, txn?.open]);
+  // Only a verified approval becomes a payment, and only once.
+  useEffect(() => {
+    if (!txn || txn.status !== 'approved' || !txn.verified || txn.saleId || usedIds.includes(txn.id) || added.current.has(txn.id)) return;
+    added.current.add(txn.id);
+    onApproved(txn);
+    pending.refetch();
+  }, [txn, usedIds, onApproved, pending]);
+
+  if (!terminals.data?.length) return null;
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setTxn((await api<{ data: TerminalTxn }>('/payment-terminals/transactions', { body: { terminalId, tillId, amountCents: amount, clientRequestId: newRequestId() } })).data);
+    } catch (e: any) {
+      // The terminal still has an unfinished payment: show it instead of starting another.
+      if (e instanceof ApiError && e.code === 'TERMINAL_HAS_OPEN_PAYMENT' && e.details?.transactionId) {
+        setTxn((await api<{ data: TerminalTxn }>(`/payment-terminals/transactions/${e.details.transactionId}`, { query: { refresh: '1' } })).data);
+      } else setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const act = (path: string, body: object = {}) => api<{ data: TerminalTxn }>(`/payment-terminals/transactions/${txn!.id}/${path}`, { body }).then((r) => setTxn(r.data)).catch(toast.error);
+  const recovered = (pending.data ?? []).filter((x) => x.status === 'approved' && x.verified && !x.saleId && !usedIds.includes(x.id) && x.amountCents <= remaining && x.id !== txn?.id);
+  const t = terminals.data.find((x) => x.id === terminalId);
+  const final = txn && !txn.open;
+  return (
+    <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 dark:border-emerald-900 dark:bg-emerald-950/20" data-testid="terminal-panel">
+      <div className="flex flex-wrap items-end gap-2">
+        {terminals.data.length > 1 && <Field label="Card terminal" className="flex-1"><Select value={terminalId} onChange={(e) => setTerminalId(e.target.value)} options={terminals.data.map((x) => ({ value: x.id, label: x.name }))} /></Field>}
+        <div className="flex-1 text-sm"><b>{t?.name}</b>{t?.mode === 'sandbox' && <Badge tone="blue">test only</Badge>}<div className="text-xs text-ink-500">The customer uses the card on the terminal; Afey POS never sees the PIN or the card number.</div></div>
+        {(!txn || final) && <Button loading={busy} disabled={!amount || amount > remaining} onClick={start}>{txn ? 'Charge again' : `Charge ${money(amount)} on the terminal`}</Button>}
+      </div>
+      {txn && <TxnStatus txn={txn} />}
+      {txn?.open && (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="secondary" onClick={() => api<{ data: TerminalTxn }>(`/payment-terminals/transactions/${txn.id}`, { query: { refresh: '1' } }).then((r) => setTxn(r.data)).catch(toast.error)}>Check now</Button>
+          <Button size="sm" variant="ghost" onClick={() => act('cancel')}>Cancel on terminal</Button>
+          {txn.sandbox && <>
+            <span className="self-center text-xs text-ink-500">Simulator:</span>
+            <Button size="sm" variant="ghost" onClick={() => act('simulate', { outcome: 'approved' })}>Approve</Button>
+            <Button size="sm" variant="ghost" onClick={() => act('simulate', { outcome: 'declined' })}>Decline</Button>
+          </>}
+        </div>
+      )}
+      {txn?.status === 'unknown' && <p className="text-xs text-amber-800">Do not charge the customer again: Afey POS keeps asking the terminal. A manager can resolve it under Card terminal payments.</p>}
+      {recovered.map((x) => (
+        <div key={x.id} className="flex items-center justify-between rounded-md bg-white p-2 text-sm dark:bg-ink-900">
+          <span>Approved earlier, not on a sale: <b>{money(x.amountCents)}</b> {x.cardScheme} {x.last4 ? `****${x.last4}` : ''}</span>
+          <Button size="sm" onClick={() => { added.current.add(x.id); onApproved(x); pending.refetch(); }}>Use this payment</Button>
+        </div>
+      ))}
+      <ErrorBox error={error} />
+    </div>
+  );
+}

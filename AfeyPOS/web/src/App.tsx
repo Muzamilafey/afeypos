@@ -27,6 +27,7 @@ import { AccountPage, BusinessSettingsPage, HardwarePage, IntegrationsPage, Loca
 import { SyncPage } from './pages/settings/Sync';
 import { ReceiptSettingsPage } from './pages/settings/Receipts';
 import { CheckoutRulesPage } from './pages/settings/CheckoutRules';
+import { CardTerminalsPage } from './pages/settings/CardTerminals';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
 import { BarcodeVerifyPage, BrandsPage, CategoriesPage, StockAlertsPage, UnitsPage } from './pages/inventory/Catalog';
 import { EtimsPage } from './pages/Etims';
@@ -109,6 +110,8 @@ export function App() {
         <Route path="loyalty" element={<Gate perm="customers.read" module="loyalty"><LoyaltyPage /></Gate>} />
         <Route path="vouchers" element={<Gate perm="vouchers.manage"><VouchersPage /></Gate>} />
         <Route path="settings/checkout-rules" element={<Gate perm="settings.manage" module="pos"><CheckoutRulesPage /></Gate>} />
+        <Route path="settings/payments/terminals" element={<Gate perm="terminals.manage" module="pos"><CardTerminalsPage /></Gate>} />
+        <Route path="payments/card-terminals" element={<Gate perm="terminals.reconcile" module="pos"><CardTerminalsPage /></Gate>} />
         <Route path="settings/users" element={<Gate perm="users.manage"><UsersPage /></Gate>} />
         <Route path="settings/roles" element={<Gate perm="users.manage"><RolesPage /></Gate>} />
         <Route path="settings/locations" element={<Gate perm="branches.manage"><LocationsPage /></Gate>} />
