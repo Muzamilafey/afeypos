@@ -27,7 +27,7 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await page.getByRole('button', { name: 'New product' }).click();
   await page.getByLabel('Name', { exact: true }).fill('Fresh milk 500ml');
   await page.getByLabel('SKU / code').fill('MILK500');
-  await page.getByLabel('retail price').fill('65');
+  await page.getByLabel('Selling price').fill('65');
   await page.getByLabel('Cost (per base unit)').fill('48');
   await page.getByLabel(/Quantity \(pc\)/).fill('24');
   await page.getByRole('button', { name: 'Save' }).click();

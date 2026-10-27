@@ -295,7 +295,10 @@ router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (
     try {
       r = await claimMpesaFromHq(body.receipt);
     } catch {
-      if (found) throw new AppError(503, 'HQ_UNREACHABLE', `M-Pesa ${body.receipt} was received at head office, which cannot be reached right now. Try again when the internet is back, or take another payment.`);
+      // Payments reach head office (Safaricom calls the live server), so without it this server cannot know.
+      throw new AppError(503, 'HQ_UNREACHABLE', found
+        ? `M-Pesa ${body.receipt} was received at head office, which cannot be reached right now. Try again when the internet is back, or take another payment.`
+        : `M-Pesa ${body.receipt} is not on this server yet, and head office (where M-Pesa payments arrive) cannot be reached to check it. Try again when the internet is back.`);
     }
     if (r?.claimed) found = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: body.receipt }).lean();
     else if (r?.reason && r.reason !== 'not_found') throw unprocessable(r.reason, 'MPESA_NOT_AVAILABLE');

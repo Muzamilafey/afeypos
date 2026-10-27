@@ -211,22 +211,21 @@ export function ProductEditPage() {
         <Card title="Prices" className="lg:col-span-2">
           <div className="grid gap-3 sm:grid-cols-4">
             {can('products.cost') && <Field label="Cost (per base unit)"><MoneyInput value={p.costCents} onChange={(v) => set('costCents', v ?? 0)} /></Field>}
-            {caps.priceLists.map((pl) => <Field key={pl} label={`${pl} price`}><MoneyInput value={p.prices?.[pl]} onChange={(v) => set('prices', { ...p.prices, [pl]: v })} /></Field>)}
+            <Field label="Selling price"><MoneyInput value={p.prices?.retail} onChange={(v) => set('prices', { ...p.prices, retail: v })} /></Field>
             <Field label="Tax rate %" hint="Blank = business default"><Input inputMode="decimal" value={p.taxRateBp === null || p.taxRateBp === undefined ? '' : p.taxRateBp / 100} onChange={(e) => set('taxRateBp', e.target.value === '' ? null : Math.round(Number(e.target.value) * 100))} /></Field>
           </div>
-          {can('products.cost') && p.prices?.retail && p.costCents ? <p className="mt-2 text-xs text-ink-500">Retail margin {Math.round(((p.prices.retail - p.costCents) / p.prices.retail) * 100)}% (before tax)</p> : null}
+          {can('products.cost') && p.prices?.retail && p.costCents ? <p className="mt-2 text-xs text-ink-500">Margin {Math.round(((p.prices.retail - p.costCents) / p.prices.retail) * 100)}% (before tax)</p> : null}
           {caps.modules.includes('bulkDiscounts') && (
             <div className="mt-4">
               <div className="label">Quantity price tiers (price per base unit)</div>
               {p.priceTiers.map((t: any, i: number) => (
                 <div key={i} className="mb-2 flex gap-2">
-                  <Select value={t.priceList} onChange={(e) => set('priceTiers', p.priceTiers.map((x: any, j: number) => (j === i ? { ...x, priceList: e.target.value } : x)))} options={caps.priceLists.map((x) => ({ value: x, label: x }))} />
                   <Input type="number" placeholder="Min qty" value={t.minQty} onChange={(e) => set('priceTiers', p.priceTiers.map((x: any, j: number) => (j === i ? { ...x, minQty: Number(e.target.value) } : x)))} />
                   <MoneyInput value={t.priceCents} onChange={(v) => set('priceTiers', p.priceTiers.map((x: any, j: number) => (j === i ? { ...x, priceCents: v ?? 0 } : x)))} />
                   <Button variant="ghost" onClick={() => set('priceTiers', p.priceTiers.filter((_: any, j: number) => j !== i))}><Icon name="x" className="h-4 w-4" /></Button>
                 </div>
               ))}
-              <Button size="sm" variant="secondary" onClick={() => set('priceTiers', [...p.priceTiers, { priceList: caps.priceLists[0], minQty: 10, priceCents: p.prices?.retail ?? 0 }])}>Add tier</Button>
+              <Button size="sm" variant="secondary" onClick={() => set('priceTiers', [...p.priceTiers, { priceList: 'retail', minQty: 10, priceCents: p.prices?.retail ?? 0 }])}>Add tier</Button>
             </div>
           )}
         </Card>
@@ -250,7 +249,7 @@ export function ProductEditPage() {
                   <Input placeholder="Code" list="afey-units" value={u.code} onChange={(e) => { const known = unitList.data?.find((x) => x.code === e.target.value); upd({ code: e.target.value, ...(known && !u.name ? { name: known.name } : {}) }); }} />
                   <Input placeholder="Name" value={u.name} onChange={(e) => upd({ name: e.target.value })} />
                   <Input placeholder={`Factor (${p.baseUnit})`} type="number" step="any" value={u.factor} onChange={(e) => upd({ factor: Number(e.target.value) })} />
-                  {caps.priceLists.slice(0, 2).map((pl) => <MoneyInput key={pl} placeholder={`${pl} price`} value={u.prices?.[pl]} onChange={(v) => upd({ prices: { ...u.prices, [pl]: v } })} />)}
+                  <MoneyInput placeholder="Selling price" value={u.prices?.retail} onChange={(v) => upd({ prices: { ...u.prices, retail: v } })} />
                   <Button variant="ghost" onClick={() => set('units', p.units.filter((x: any) => x !== u))}><Icon name="x" className="h-4 w-4" /></Button>
                 </div>
               );

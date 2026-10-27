@@ -464,11 +464,6 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
             )}
           </div>
           <Button variant="secondary" onClick={() => setPanel({ kind: 'browse' })}><Icon name="grid" className="h-4 w-4" />Browse</Button>
-          {caps.checkout.showPriceListSelector && caps.priceLists.length > 1 && (
-            <select aria-label="Price list" className="input w-auto py-2" value={cart.priceList} onChange={(e) => { const c = { ...cart, priceList: e.target.value as PriceListKey }; requoteAll(c); }}>
-              {caps.priceLists.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          )}
           <Badge tone="green">{till.name}</Badge>
           {!shift && (
             <button type="button" onClick={() => setStartingShift(true)} className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
