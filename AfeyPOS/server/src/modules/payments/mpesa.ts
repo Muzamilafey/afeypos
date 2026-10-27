@@ -287,7 +287,19 @@ registerJob('mpesa.expireExpected', async ({ intentId }: { intentId: string }) =
  */
 router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (req, res) => {
   const body = parse(z.object({ receipt: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{8,12}$/, 'M-Pesa codes are 8-12 letters and digits, e.g. SJK3AB12CD'), tillId: objectId.optional(), clientRequestId: z.string().min(8).max(100) }), req.body);
-  const found = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: body.receipt }).lean();
+  let found = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: body.receipt }).lean();
+  // At a branch server, a payment head office received without a branch (or one not downloaded yet) is claimed from HQ first.
+  if (env().DEPLOYMENT_MODE === 'branch' && !found?.branchId) {
+    const { claimMpesaFromHq } = await import('../sync/branch.js');
+    let r: { claimed: boolean; reason?: string } | null = null;
+    try {
+      r = await claimMpesaFromHq(body.receipt);
+    } catch {
+      if (found) throw new AppError(503, 'HQ_UNREACHABLE', `M-Pesa ${body.receipt} was received at head office, which cannot be reached right now. Try again when the internet is back, or take another payment.`);
+    }
+    if (r?.claimed) found = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: body.receipt }).lean();
+    else if (r?.reason && r.reason !== 'not_found') throw unprocessable(r.reason, 'MPESA_NOT_AVAILABLE');
+  }
   if (found) {
     const free = (found.paidAmountCents ?? 0) - (found.allocatedCents ?? 0);
     if (found.status !== 'succeeded') throw unprocessable(`M-Pesa ${body.receipt} is ${found.status}`, 'MPESA_NOT_AVAILABLE');

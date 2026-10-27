@@ -59,6 +59,17 @@ async function hq<T>(path: string, init: { method?: string; body?: unknown } = {
   return fromWire<T>(text);
 }
 
+/**
+ * Takes a Paybill/Till payment that head office received without a branch (one M-Pesa for all branches) for
+ * this branch, and stores HQ's copy here. HQ hands each payment to one branch only, so it cannot be used twice.
+ */
+export async function claimMpesaFromHq(receipt: string): Promise<{ claimed: boolean; reason?: string }> {
+  const r = await hq<{ doc: any; reason?: string }>('/mpesa-claim', { method: 'POST', body: { receipt } });
+  if (!r.doc) return { claimed: false, reason: r.reason };
+  await applyRecord(specFor('paymentintents')!, r.doc, 'branch', env().BRANCH_CODE);
+  return { claimed: true };
+}
+
 async function cursor(key: string) {
   return (await SyncCursor.findOne({ key }).lean()) ?? { key, t: new Date(0), id: null as Types.ObjectId | null };
 }
@@ -91,7 +102,7 @@ async function push(spec: SyncSpec, tenantId: Types.ObjectId, report: SyncRunRep
 
 async function pull(spec: SyncSpec, report: SyncRunReport, opts: { key?: string; seed?: boolean } = {}) {
   const name = spec.model.collection.collectionName;
-  const key = opts.key ?? `down:${name}`;
+  const key = opts.key ?? `down:${name}${spec.cursorVersion ? `:v${spec.cursorVersion}` : ''}`;
   for (;;) {
     const c = await cursor(key);
     const q = new URLSearchParams({ collection: name, t: c.t.toISOString(), limit: String(PAGE * 2), ...(c.id ? { id: String(c.id) } : {}), ...(opts.seed ? { seed: 'own' } : {}) });

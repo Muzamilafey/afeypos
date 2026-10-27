@@ -134,6 +134,31 @@ hqSyncRoutes.get('/pull', async (req, res) => {
 });
 
 /**
+ * A branch cashier uses a Paybill/Till payment head office received with no branch (found by its code): it becomes
+ * that branch's, atomically, unless another branch took it first or it was already used.
+ */
+hqSyncRoutes.post('/mpesa-claim', express.json(), async (req: Request, res) => {
+  const branchId = new Types.ObjectId(req.syncBranch!.branchId);
+  const receipt = String(req.body?.receipt ?? '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{8,12}$/.test(receipt)) throw badRequest('M-Pesa codes are 8-12 letters and digits');
+  const claimed = await PaymentIntent.findOneAndUpdate(
+    { provider: 'mpesa', receiptNumber: receipt, status: 'succeeded', $or: [{ branchId: null }, { branchId }], $expr: { $lt: [{ $ifNull: ['$allocatedCents', 0] }, '$paidAmountCents'] } },
+    { $set: { branchId } },
+    { new: true },
+  );
+  if (claimed) {
+    send(res, { doc: await PaymentIntent.collection.findOne({ _id: claimed._id }) });
+    return;
+  }
+  const i = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: receipt }).lean();
+  const reason = !i ? 'not_found'
+    : i.status !== 'succeeded' ? `M-Pesa ${receipt} is ${i.status}`
+      : (i.allocatedCents ?? 0) >= (i.paidAmountCents ?? 0) ? `M-Pesa ${receipt} was already used${i.allocatedTo?.number ? ` for ${i.allocatedTo.number}` : ''}`
+        : `M-Pesa ${receipt} was already used at another branch`;
+  send(res, { doc: null, reason });
+});
+
+/**
  * M-Pesa results Safaricom sent to HQ for requests a branch made (STK prompts, receipt checks, payouts):
  * HQ did not recognise them, so the branch processes them itself. Events a branch logged while processing
  * relayed results (ip "hq-relay") come back up by sync and are never relayed again.

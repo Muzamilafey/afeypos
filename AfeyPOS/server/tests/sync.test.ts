@@ -288,4 +288,33 @@ describe('M-Pesa Buy Goods at a branch server', () => {
     const sale = await branch.post('/sales', { clientRequestId: rid(), tillId: b1.tillId, lines: [{ productId: milk._id, qty: 1 }], payments: [{ method: 'mpesa', amountCents: 100, paymentIntentId: ex.body.data.id }, { method: 'cash', amountCents: price - 100 }] });
     expect(sale.status).toBe(201);
   });
+
+  it('with one M-Pesa for all branches, a Till payment no till waited for reaches every branch and is used by one only', async () => {
+    const { handleC2B } = await import('../src/modules/payments/mpesa.js');
+    const { Types } = await import('mongoose');
+    await handleC2B(new Types.ObjectId(hq.tenant.id), { TransID: 'TST2NOSALE', TransAmount: '1.00', BusinessShortCode: '3163960', BillRefNumber: '', MSISDN: '254722000111', FirstName: 'Ibrahim', TransTime: '20261027153000' }, '127.0.0.1');
+    await runSync(branch);
+    await runSync(branch2);
+    // Downloaded: both branch servers list it.
+    for (const c of [branch, branch2]) {
+      const list = await c.get('/payments/intents?status=succeeded&unallocated=true&provider=mpesa');
+      expect(list.body.data.map((i: any) => i.receiptNumber)).toContain('TST2NOSALE');
+    }
+    const copy = (await branch.get('/payments/intents?q=TST2NOSALE')).body.data[0];
+    const price = (await branch.get(`/products/${milk._id}`)).body.data.prices.retail as number;
+    const sell = (c: Client, tillId: string, intentId: string) => c.post('/sales', { clientRequestId: rid(), tillId, lines: [{ productId: milk._id, qty: 1 }], payments: [{ method: 'mpesa', amountCents: 100, paymentIntentId: intentId }, { method: 'cash', amountCents: price - 100 }] });
+    // Not claimed yet: the branch cannot spend its copy.
+    expect((await sell(branch, b1.tillId, copy.id)).status).toBe(422);
+    // The cashier enters the code: the branch claims it at head office and can use it.
+    const found = await branch.post('/payments/mpesa/lookup', { receipt: 'tst2nosale', clientRequestId: rid(), tillId: b1.tillId });
+    expect(found.body).toMatchObject({ found: true, data: { receiptNumber: 'TST2NOSALE', payerName: 'Ibrahim' } });
+    expect((await sell(branch, b1.tillId, found.body.data.id)).status).toBe(201);
+    // The other branch cannot take it.
+    const other = await branch2.post('/payments/mpesa/lookup', { receipt: 'TST2NOSALE', clientRequestId: rid(), tillId: b2.tillId });
+    expect(other.status).toBe(422);
+    expect(other.body.error.message).toMatch(/another branch|already used/);
+    await runSync(branch);
+    const atHq = (await hq.client.get('/payments/intents?q=TST2NOSALE')).body.data[0];
+    expect(atHq).toMatchObject({ allocatedCents: 100, allocatedTo: { number: expect.stringMatching(/^RCP-MSA01-/) } });
+  });
 });

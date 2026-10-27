@@ -12,6 +12,7 @@ import { audit } from '../../lib/audit.js';
 import { objectId, positiveCents, qty } from '../../http/validate.js';
 import { assertBranchAccess, can } from '../../http/auth.js';
 import { adjustReserved, applyMovement } from '../inventory/stock.js';
+import { env } from '../../config/env.js';
 import { quotePrice } from '../catalog/pricing.js';
 import { resolveUnit } from '../catalog/units.js';
 import { consumeOverride } from '../auth/routes.js';
@@ -244,7 +245,8 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
         if (!caps.modules.includes(isMpesa ? 'mpesa' : 'payments')) throw badRequest(isMpesa ? 'M-Pesa is not enabled' : 'Payment gateways are not enabled');
         if (!p.paymentIntentId) throw badRequest('Electronic payments must reference a confirmed payment');
         const intent = await PaymentIntent.findOneAndUpdate(
-          { _id: p.paymentIntentId, provider: isMpesa ? 'mpesa' : { $ne: 'mpesa' }, status: 'succeeded', $expr: { $gte: [{ $subtract: ['$paidAmountCents', '$allocatedCents'] }, p.amountCents] } },
+          // A branch server uses only payments that are its own (HQ hands out unassigned Paybill/Till payments by code).
+          { _id: p.paymentIntentId, provider: isMpesa ? 'mpesa' : { $ne: 'mpesa' }, status: 'succeeded', ...(env().DEPLOYMENT_MODE === 'branch' ? { branchId: { $ne: null } } : {}), $expr: { $gte: [{ $subtract: ['$paidAmountCents', '$allocatedCents'] }, p.amountCents] } },
           { $inc: { allocatedCents: p.amountCents }, $set: { allocatedTo: { kind: 'sale', id: saleId, number }, allocatedAt: new Date() } },
           { new: true },
         );

@@ -33,6 +33,8 @@ export interface SyncSpec {
   owner?: (doc: any, b: BranchScope) => boolean;
   /** HQ sends a branch only records matching this filter. */
   downFilter?: (b: BranchScope) => Record<string, unknown>;
+  /** Raised when downFilter starts sending older records too: branches then download this collection again from the start. */
+  cursorVersion?: number;
 }
 
 const inBranch = (doc: any, b: BranchScope) => String(doc.branchId) === b.branchId;
@@ -92,7 +94,12 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: SupplierReturn, dir: 'up', field: 'updatedAt', owner: inWarehouses },
   { model: Expense, dir: 'up', field: 'updatedAt', owner: inBranch },
   // Paybill/Till payments reach HQ (public callbacks) and belong to the branch that owns the M-Pesa config.
-  { model: PaymentIntent, dir: 'both', field: 'updatedAt', owner: inBranch, downFilter: (b) => ({ branchId: new Types.ObjectId(b.branchId) }) },
+  // With one M-Pesa for all branches, a payment no till was waiting for has no branch yet: every branch gets a
+  // copy to see it, and the branch whose cashier uses it claims it at HQ first (/sync/mpesa-claim), so it is used once.
+  {
+    model: PaymentIntent, dir: 'both', field: 'updatedAt', owner: inBranch, cursorVersion: 2,
+    downFilter: (b) => ({ $or: [{ branchId: new Types.ObjectId(b.branchId) }, { branchId: null, provider: 'mpesa', source: 'c2b', status: 'succeeded' }] }),
+  },
   { model: MpesaEvent, dir: 'up', field: 'at' },
   // Card terminals connect to the server their tills use, so a branch server owns its terminals and their payments.
   { model: PaymentTerminal, dir: 'up', field: 'updatedAt', owner: inBranch },
