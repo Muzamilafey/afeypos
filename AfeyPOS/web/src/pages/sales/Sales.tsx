@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, newRequestId, openPrintable } from '../../lib/api';
+import { api, newRequestId } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useList, useLocations } from '../../lib/hooks';
 import { dateTime, money, paymentLabel, qty } from '../../lib/format';
@@ -66,7 +66,6 @@ export function SaleDetailPage() {
     <div>
       <PageHeader title={`Sale ${s.number}`} subtitle={dateTime(s.completedAt)} actions={<>
         <Button variant="secondary" onClick={() => printReceipt(s._id, { reprint: true }).then((how) => how === 'printer' && toast.success('Receipt printed')).catch(toast.error)}>Reprint</Button>
-        <Button variant="secondary" onClick={() => openPrintable(`/sales/${s._id}/invoice`).catch(toast.error)}>A4 invoice</Button>
         <PdfButton kind="invoice" id={s._id} label="Invoice PDF" size="md" />
         <EmailDocButton kind="invoice" id={s._id} defaultTo={s.customer?.email} what="Invoice" label="Email invoice" size="md" />
         {(can('sales.return') || can('sales.create')) && s.status !== 'voided' && s.status !== 'returned' && <Button variant="secondary" onClick={() => setReturning(true)}>Return items</Button>}

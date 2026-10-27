@@ -1,7 +1,9 @@
 /**
  * PDF downloads and "email with PDF" for business documents:
  *   GET  /pdf/:kind/:id    supplier_quotation | purchase_order | goods_receipt | quotation | invoice
+ *   GET  /print/:kind/:id  the same document as a print page (HTML)
  *   POST /email/:kind/:id  { to?, cc?, message? }  (defaults to the supplier's or customer's email)
+ *   POST /render/report?format=pdf|html  a report the page shows, on the business letterhead
  */
 import { Router } from 'express';
 import type { Request } from 'express';
@@ -9,11 +11,12 @@ import { z } from 'zod';
 import type { Permission } from '@afeypos/shared';
 import { Sale, User } from '../../models/index.js';
 import { idParam, parse } from '../../http/validate.js';
-import { can, markGuard } from '../../http/auth.js';
+import { can, markGuard, requireAnyPermission } from '../../http/auth.js';
 import { forbidden, notFound, unprocessable } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { notify } from '../notifications/service.js';
-import { buildDocument, DOCUMENT_KINDS, type DocumentKind } from './builders.js';
+import { buildDocument, buildDocumentSpec, businessOf, DOCUMENT_KINDS, type DocumentKind } from './builders.js';
+import { renderDocumentHtml, renderReportHtml, renderReportPdf, reportSpecSchema } from './report.js';
 
 const READ: Record<DocumentKind, { perm: Permission; module: string }> = {
   supplier_quotation: { perm: 'purchasing.read', module: 'purchasing' },
@@ -76,6 +79,36 @@ router.get('/pdf/:kind/:id', readGuard, async (req, res) => {
   res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${doc.filename}"`);
   res.setHeader('Cache-Control', 'private, no-store');
   res.send(doc.buffer);
+});
+
+router.get('/print/:kind/:id', readGuard, async (req, res) => {
+  const { spec } = await buildDocumentSpec(req.tenant!._id, kindOf(req), idParam(req.params.id));
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.send(renderDocumentHtml(spec));
+});
+
+/**
+ * Reports are built from what the page already loaded (and was allowed to load), so this only lays them out:
+ * anyone who can read some report may use it.
+ */
+router.post('/render/report', requireAnyPermission('reports.read', 'accounting.read', 'inventory.read', 'audit.read', 'hr.manage', 'payments.reconcile', 'purchasing.read', 'sales.read.all'), async (req, res) => {
+  const format = req.query.format === 'html' ? 'html' : 'pdf';
+  const spec = parse(reportSpecSchema, req.body ?? {});
+  const { business, tenant } = await businessOf(req.tenant!._id);
+  const me = await User.findById(req.auth!.userId, { name: 1 }).lean();
+  const generatedAt = new Date().toLocaleString('en-KE', { timeZone: tenant.settings?.timezone ?? 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const ctx = { business, generatedBy: me?.name ?? 'staff', generatedAt };
+  res.setHeader('Cache-Control', 'private, no-store');
+  if (format === 'html') {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderReportHtml(spec, ctx));
+    return;
+  }
+  const name = `${spec.title.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'report'}.pdf`;
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  res.send(await renderReportPdf(spec, ctx));
 });
 
 router.post('/email/:kind/:id', sendGuard, async (req, res) => {

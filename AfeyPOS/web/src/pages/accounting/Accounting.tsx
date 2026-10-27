@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api, download } from '../../lib/api';
@@ -7,25 +7,27 @@ import { date, money, todayLocal } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { ReportActions } from '../../components/ReportActions';
 
 const monthStart = () => `${todayLocal().slice(0, 7)}-01`;
 const TYPE_LABEL: Record<string, string> = { asset: 'Asset', liability: 'Liability', equity: 'Equity', income: 'Income', expense: 'Expense' };
 
-function Range({ from, to, setFrom, setTo }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void }) {
+function Range({ from, to, setFrom, setTo, children }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void; children?: ReactNode }) {
   return (
     <div className="mb-4 flex flex-wrap items-end gap-2">
       <Field label="From"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
       <Field label="To"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
+      {children && <div className="ml-auto flex gap-2">{children}</div>}
     </div>
   );
 }
 
 function Section({ title, rows, total, sign = 1 }: { title: string; rows: { code: string; name: string; amountCents: number }[]; total: number; sign?: number }) {
   return (
-    <div className="mb-3">
+    <div className="mb-3" data-lines="Account|Amount" data-title={title}>
       <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-500">{title}</div>
-      {rows.map((r) => <div key={r.code} className="flex justify-between py-0.5 text-sm"><Link className="hover:underline" to={`/accounting/ledger/${r.code}`}>{r.code} {r.name}</Link><span className="tabular-nums">{money(sign * r.amountCents)}</span></div>)}
-      <div className="flex justify-between border-t border-ink-200 pt-1 text-sm font-semibold dark:border-ink-700"><span>Total {title.toLowerCase()}</span><span className="tabular-nums">{money(sign * total)}</span></div>
+      {rows.map((r) => <div data-line key={r.code} className="flex justify-between py-0.5 text-sm"><Link className="hover:underline" to={`/accounting/ledger/${r.code}`}>{r.code} {r.name}</Link><span className="tabular-nums">{money(sign * r.amountCents)}</span></div>)}
+      <div data-line-total className="flex justify-between border-t border-ink-200 pt-1 text-sm font-semibold dark:border-ink-700"><span>Total {title.toLowerCase()}</span><span className="tabular-nums">{money(sign * total)}</span></div>
     </div>
   );
 }
@@ -55,10 +57,11 @@ function ProfitLoss() {
   const [to, setTo] = useState(todayLocal());
   const q = useQuery({ queryKey: ['acct-pl', from, to], queryFn: () => api<{ data: any }>('/accounting/profit-loss', { query: { from, to } }).then((r) => r.data) });
   const sum = (x: any[]) => x.reduce((s, a) => s + a.amountCents, 0);
+  const ref = useRef<HTMLDivElement>(null);
   return (
     <div className="max-w-3xl">
-      <Range from={from} to={to} setFrom={setFrom} setTo={setTo} />
-      {!q.data ? <Loading /> : <>
+      <Range from={from} to={to} setFrom={setFrom} setTo={setTo}>{q.data && <ReportActions target={ref} title="Profit and loss statement" meta={[['Period', `${date(from)} to ${date(to)}`]]} />}</Range>
+      {!q.data ? <Loading /> : <div ref={ref}>
         <div className="mb-4 grid grid-cols-3 gap-3">
           <Stat label="Net sales" value={money(q.data.netSalesCents)} />
           <Stat label="Gross profit" value={money(q.data.grossProfitCents)} hint={`Margin ${(q.data.grossMarginBp / 100).toFixed(1)}%`} />
@@ -67,12 +70,12 @@ function ProfitLoss() {
         <Card actions={<Button size="sm" variant="secondary" onClick={() => download('/accounting/profit-loss', `profit-loss-${from}-${to}.csv`, { from, to, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>}>
           <Section title="Revenue" rows={q.data.revenue} total={q.data.netSalesCents} />
           <Section title="Cost of sales" rows={q.data.cogs} total={sum(q.data.cogs)} />
-          <div className="mb-3 flex justify-between text-sm font-semibold"><span>Gross profit</span><span>{money(q.data.grossProfitCents)}</span></div>
+          <div data-lines="|"><div data-line-total className="mb-3 flex justify-between text-sm font-semibold"><span>Gross profit</span><span>{money(q.data.grossProfitCents)}</span></div></div>
           {q.data.otherIncome.length > 0 && <Section title="Other income" rows={q.data.otherIncome} total={sum(q.data.otherIncome)} />}
           <Section title="Expenses" rows={q.data.expenses} total={sum(q.data.expenses)} />
-          <div className="flex justify-between border-t-2 border-ink-900 pt-2 text-base font-bold dark:border-ink-100"><span>Net profit</span><span>{money(q.data.netProfitCents)}</span></div>
+          <div data-lines="|"><div data-line-total className="flex justify-between border-t-2 border-ink-900 pt-2 text-base font-bold dark:border-ink-100"><span>Net profit</span><span>{money(q.data.netProfitCents)}</span></div></div>
         </Card>
-      </>}
+      </div>}
     </div>
   );
 }
@@ -80,16 +83,17 @@ function ProfitLoss() {
 function BalanceSheet() {
   const [asOf, setAsOf] = useState(todayLocal());
   const q = useQuery({ queryKey: ['acct-bs', asOf], queryFn: () => api<{ data: any }>('/accounting/balance-sheet', { query: { asOf } }).then((r) => r.data) });
+  const ref = useRef<HTMLDivElement>(null);
   return (
     <div className="max-w-3xl">
-      <Field label="As at" className="mb-4 max-w-xs"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
+      <div className="mb-4 flex flex-wrap items-end gap-2"><Field label="As at" className="max-w-xs"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>{q.data && <div className="ml-auto flex gap-2"><ReportActions target={ref} title="Balance sheet" meta={[['As at', date(asOf)], ['Status', q.data.balanced ? 'Balanced' : 'OUT OF BALANCE']]} /></div>}</div>
       {!q.data ? <Loading /> : (
-        <Card actions={<>{q.data.balanced ? <Badge tone="green">Balanced</Badge> : <Badge tone="red">Out of balance</Badge>}<Button size="sm" variant="secondary" onClick={() => download('/accounting/balance-sheet', `balance-sheet-${asOf}.csv`, { asOf, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button></>}>
+        <div ref={ref}><Card actions={<>{q.data.balanced ? <Badge tone="green">Balanced</Badge> : <Badge tone="red">Out of balance</Badge>}<Button size="sm" variant="secondary" onClick={() => download('/accounting/balance-sheet', `balance-sheet-${asOf}.csv`, { asOf, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button></>}>
           <Section title="Assets" rows={q.data.assets} total={q.data.totals.assetsCents} />
           <Section title="Liabilities" rows={q.data.liabilities} total={q.data.totals.liabilitiesCents} />
           <Section title="Equity" rows={[...q.data.equity, { code: '—', name: 'Profit to date (not yet closed)', amountCents: q.data.earningsCents }]} total={q.data.totals.equityCents} />
-          <div className="flex justify-between border-t-2 border-ink-900 pt-2 font-bold dark:border-ink-100"><span>Liabilities + equity</span><span>{money(q.data.totals.liabilitiesCents + q.data.totals.equityCents)}</span></div>
-        </Card>
+          <div data-lines="|"><div data-line-total className="flex justify-between border-t-2 border-ink-900 pt-2 font-bold dark:border-ink-100"><span>Liabilities + equity</span><span>{money(q.data.totals.liabilitiesCents + q.data.totals.equityCents)}</span></div></div>
+        </Card></div>
       )}
     </div>
   );
@@ -98,16 +102,17 @@ function BalanceSheet() {
 function TrialBalance() {
   const [asOf, setAsOf] = useState(todayLocal());
   const q = useQuery({ queryKey: ['acct-tb', asOf], queryFn: () => api<any>('/accounting/trial-balance', { query: { asOf } }) });
+  const ref = useRef<HTMLDivElement>(null);
   return (
     <div className="max-w-4xl">
-      <div className="mb-4 flex items-end gap-2"><Field label="As at"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field><Button variant="secondary" onClick={() => download('/accounting/trial-balance', `trial-balance-${asOf}.csv`, { asOf, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button></div>
-      {!q.data ? <Loading /> : <div className="card"><DataTable rows={q.data.data.map((r: any) => ({ ...r, id: r.code }))} columns={[
+      <div className="mb-4 flex items-end gap-2"><Field label="As at"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field><Button variant="secondary" onClick={() => download('/accounting/trial-balance', `trial-balance-${asOf}.csv`, { asOf, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>{q.data && <ReportActions target={ref} title="Trial balance" meta={[['As at', date(asOf)], ['Status', q.data.balanced ? 'Balanced' : 'OUT OF BALANCE']]} />}</div>
+      {!q.data ? <Loading /> : <div className="card" ref={ref}><DataTable rows={q.data.data.map((r: any) => ({ ...r, id: r.code }))} columns={[
         { key: 'c', header: 'Account', render: (r: any) => <Link className="hover:underline" to={`/accounting/ledger/${r.code}`}>{r.code} {r.name}</Link> },
         { key: 't', header: 'Type', render: (r: any) => TYPE_LABEL[r.type] },
         { key: 'd', header: 'Debit', className: 'num', render: (r: any) => (r.debitCents ? money(r.debitCents) : '') },
         { key: 'k', header: 'Credit', className: 'num', render: (r: any) => (r.creditCents ? money(r.creditCents) : '') },
       ]} />
-        <div className="flex justify-between border-t border-ink-200 p-3 text-sm font-semibold dark:border-ink-700"><span>{q.data.balanced ? 'Totals (balanced)' : 'Totals (OUT OF BALANCE)'}</span><span>{money(q.data.totals.debitCents)} · {money(q.data.totals.creditCents)}</span></div></div>}
+        <div data-lines="|"><div data-line-total className="flex justify-between border-t border-ink-200 p-3 text-sm font-semibold dark:border-ink-700"><span>{q.data.balanced ? 'Totals (balanced)' : 'Totals (OUT OF BALANCE)'}</span><span>Debit {money(q.data.totals.debitCents)} · Credit {money(q.data.totals.creditCents)}</span></div></div></div>}
     </div>
   );
 }
@@ -116,17 +121,18 @@ function Vat() {
   const [from, setFrom] = useState(monthStart());
   const [to, setTo] = useState(todayLocal());
   const q = useQuery({ queryKey: ['acct-vat', from, to], queryFn: () => api<any>('/accounting/vat', { query: { from, to } }) });
+  const ref = useRef<HTMLDivElement>(null);
   return (
     <div className="max-w-3xl">
-      <Range from={from} to={to} setFrom={setFrom} setTo={setTo} />
-      {!q.data ? <Loading /> : <>
+      <Range from={from} to={to} setFrom={setFrom} setTo={setTo}>{q.data && <ReportActions target={ref} title="VAT summary" meta={[['Period', `${date(from)} to ${date(to)}`]]} />}</Range>
+      {!q.data ? <Loading /> : <div ref={ref}>
         <div className="grid grid-cols-3 gap-3">
           <Stat label="Output VAT" value={money(q.data.data.outputVatCents)} hint={`${money(q.data.data.outputOnSalesCents)} on sales, less ${money(q.data.data.outputReversedOnReturnsCents)} on returns`} />
           <Stat label="Input VAT" value={money(q.data.data.inputVatCents)} hint="Purchases and expenses" />
           <Stat label={q.data.data.netPayableCents >= 0 ? 'VAT payable' : 'VAT to carry forward'} value={money(Math.abs(q.data.data.netPayableCents))} tone={q.data.data.netPayableCents > 0 ? 'red' : 'green'} />
         </div>
-        <p className="mt-3 text-sm text-ink-500">{q.data.note}</p>
-      </>}
+        <p data-report-text className="mt-3 text-sm text-ink-500">{q.data.note}</p>
+      </div>}
     </div>
   );
 }
@@ -256,11 +262,12 @@ export function LedgerPage() {
   const [from, setFrom] = useState(monthStart());
   const [to, setTo] = useState(todayLocal());
   const q = useQuery({ queryKey: ['acct-ledger', code, from, to], queryFn: () => api<any>(`/accounting/ledger/${code}`, { query: { from, to } }) });
+  const ref = useRef<HTMLDivElement>(null);
   return (
     <div className="max-w-5xl">
       <PageHeader title={q.data ? `${q.data.account.code} ${q.data.account.name}` : 'Ledger'} subtitle="General ledger with running balance" actions={<Button variant="secondary" onClick={() => download(`/accounting/ledger/${code}`, `ledger-${code}.csv`, { from, to, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>} />
-      <Range from={from} to={to} setFrom={setFrom} setTo={setTo} />
-      {!q.data ? <Loading /> : <>
+      <Range from={from} to={to} setFrom={setFrom} setTo={setTo}>{q.data && <ReportActions target={ref} title={`Ledger ${q.data.account.code} ${q.data.account.name}`} meta={[['Period', `${date(from)} to ${date(to)}`]]} />}</Range>
+      {!q.data ? <Loading /> : <div ref={ref}>
         <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Opening balance" value={money(q.data.openingCents)} /><Stat label="Closing balance" value={money(q.data.closingCents)} /></div>
         <div className="card"><DataTable rows={q.data.data.map((r: any, i: number) => ({ ...r, id: `${r.journalId}-${i}` }))} empty="No entries in this period" columns={[
           { key: 'd', header: 'Date', render: (r: any) => date(r.date) }, { key: 'n', header: 'Journal', render: (r: any) => r.number },
@@ -269,7 +276,7 @@ export function LedgerPage() {
           { key: 'cr', header: 'Credit', className: 'num', render: (r: any) => (r.creditCents ? money(r.creditCents) : '') },
           { key: 'b', header: 'Balance', className: 'num', render: (r: any) => money(r.balanceCents) },
         ]} /></div>
-      </>}
+      </div>}
     </div>
   );
 }

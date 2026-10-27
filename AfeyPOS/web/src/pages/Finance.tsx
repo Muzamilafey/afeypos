@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, download } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useList, useLocations } from '../lib/hooks';
-import { dateTime, daysAgoLocal, money, paymentLabel, qty, todayLocal } from '../lib/format';
+import { date, dateTime, daysAgoLocal, money, paymentLabel, qty, todayLocal } from '../lib/format';
 import { DataTable } from '../components/DataTable';
 import { BarChart } from '../components/Chart';
 import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, StatusBadge, Tabs, useToast } from '../components/ui';
 import { ProductPicker } from '../components/ProductPicker';
 import { Icon } from '../components/icons';
+import { ReportActions } from '../components/ReportActions';
 
 function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void }) {
   return (
@@ -50,17 +51,29 @@ export function ReportsPage() {
     { key: 'exceptions', label: 'Voids & discounts' }, { key: 'losses', label: 'Losses' }, { key: 'shifts', label: 'Cashier shifts' }, ...(has('multiBranch') ? [{ key: 'branches', label: 'Branches' }] : []), ...(can('audit.read') ? [{ key: 'activity', label: 'User activity' }] : []),
   ];
   const d = q.data;
+  const reportRef = useRef<HTMLDivElement>(null);
+  const tabLabel = tabs.find((x) => x.key === tab)?.label ?? 'Report';
+  const periodText = from === to ? date(from) : `${date(from)} to ${date(to)}`;
+  const reportMeta: [string, string][] = [
+    ...(!['inventory', 'receivables', 'payables', 'dead', 'reorder'].includes(tab) ? [['Period', periodText] as [string, string]] : [['As at', dateTime(new Date())] as [string, string]]),
+    ...(tab === 'sales' ? [['Grouped by', groupBy] as [string, string]] : []),
+    ...(tab === 'dead' ? [['No sale for', `${deadDays} days`] as [string, string]] : []),
+    ...(tab === 'reorder' ? [['Supplier lead time', `${leadDays} days`] as [string, string]] : []),
+  ];
   const csvTabs = ['sales', 'inventory', 'shifts', 'branches', 'losses', 'purchases', 'activity', 'daily', 'returns', 'performance', 'dead', 'reorder'];
   const csvPath: Record<string, string> = { sales: '/reports/sales', inventory: '/reports/inventory-valuation', daily: '/reports/daily-summary', performance: '/reports/product-performance', dead: '/reports/dead-stock', reorder: '/reports/reorder' };
   return (
     <div>
-      <PageHeader title="Reports" subtitle="Periods use the business timezone" actions={csvTabs.includes(tab) && <Button variant="secondary" onClick={() => download(csvPath[tab] ?? `/reports/${tab}`, `${tab}.csv`, { ...period, groupBy, days: deadDays, leadDays, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>} />
+      <PageHeader title="Reports" subtitle="Periods use the business timezone" actions={<>
+        {d && !q.isLoading && !q.error && <ReportActions target={reportRef} title={tabLabel} meta={reportMeta} />}
+        {csvTabs.includes(tab) && <Button variant="secondary" onClick={() => download(csvPath[tab] ?? `/reports/${tab}`, `${tab}.csv`, { ...period, groupBy, days: deadDays, leadDays, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>}
+      </>} />
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
       {!['inventory', 'receivables', 'payables', 'dead', 'reorder'].includes(tab) && <div className="mb-4"><Period from={from} to={to} setFrom={setFrom} setTo={setTo} /></div>}
       {tab === 'dead' && <div className="mb-4 max-w-xs"><Field label="No sale for (days)"><Input type="number" min={1} value={deadDays} onChange={(e) => setDeadDays(Math.max(1, Number(e.target.value) || 30))} /></Field></div>}
       {tab === 'reorder' && <div className="mb-4 max-w-xs"><Field label="Supplier lead time (days)"><Input type="number" min={0} value={leadDays} onChange={(e) => setLeadDays(Math.max(0, Number(e.target.value) || 0))} /></Field></div>}
       {q.isLoading ? <Loading /> : q.error ? <ErrorBox error={q.error} /> : (
-        <>
+        <div ref={reportRef}>
           {tab === 'sales' && (
             <div className="space-y-4">
               <Select className="max-w-xs" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} options={['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'].map((x) => ({ value: x, label: `By ${x}` }))} />
@@ -93,9 +106,9 @@ export function ReportsPage() {
             );
           })()}
           {tab === 'inventory' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Stock value at cost" value={money(d.totalValueCents)} hint="Weighted average cost" /><Stat label="Retail value" value={money(d.retailValueCents)} /></div><div className="card"><DataTable rows={d.data} columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'q', header: 'Qty', className: 'num', render: (r: any) => `${qty(r.qty)} ${r.unit}` }, { key: 'c', header: 'Avg cost', className: 'num', render: (r: any) => money(r.avgCostCents) }, { key: 'v', header: 'Value', className: 'num', render: (r: any) => money(r.valueCents) }]} /></div></>}
-          {(tab === 'receivables' || tab === 'payables') && <div className="card"><div className="p-3 font-semibold">Total {money(d.totalCents)}</div><DataTable rows={d.data} columns={[{ key: 'n', header: tab === 'receivables' ? 'Customer' : 'Supplier', render: (r: any) => (r.customer ?? r.supplier)?.name }, ...[['current', 'Current'], ['d1_30', '1-30'], ['d31_60', '31-60'], ['d61_90', '61-90'], ['d90plus', '90+'], ['total', 'Total']].map(([k, l]) => ({ key: k, header: l, className: 'num', render: (r: any) => money(r[k]) }))]} /></div>}
-          {tab === 'tax' && <div className="grid gap-3 sm:grid-cols-4"><Stat label="Output tax" value={money(d.data.outputTaxCents)} /><Stat label="Input tax" value={money(d.data.inputTaxCents)} /><Stat label="Net payable" value={money(d.data.netTaxPayableCents)} /><Card className="sm:col-span-4"><p className="text-sm text-ink-500">{d.data.note}</p>{d.data.outputByRate.map((r: any) => <div key={r.rateBp} className="flex justify-between text-sm"><span>{r.rateBp / 100}%</span><span>net {money(r.netCents)} · tax {money(r.taxCents)}</span></div>)}</Card></div>}
-          {tab === 'exceptions' && <div className="grid gap-4 lg:grid-cols-3"><Stat label="Voided" value={money(d.data.totals.voidsCents)} hint={`${d.data.voids.length} sales`} /><Stat label="Returned" value={money(d.data.totals.returnsCents)} hint={`${d.data.returns.length} returns`} /><Stat label="Discounts given" value={money(d.data.totals.discountsCents)} hint={`${d.data.discounts.length} sales`} /><Card title="Supervisor overrides" className="lg:col-span-3"><ul className="text-sm">{d.data.overrides.map((s: any) => <li key={s._id}>{s.number}: {s.overrides.map((o: any) => o.action).join('; ')}</li>)}</ul></Card></div>}
+          {(tab === 'receivables' || tab === 'payables') && <div className="card"><div data-report-text className="p-3 font-semibold">Total {money(d.totalCents)}</div><DataTable rows={d.data} columns={[{ key: 'n', header: tab === 'receivables' ? 'Customer' : 'Supplier', render: (r: any) => (r.customer ?? r.supplier)?.name }, ...[['current', 'Current'], ['d1_30', '1-30'], ['d31_60', '31-60'], ['d61_90', '61-90'], ['d90plus', '90+'], ['total', 'Total']].map(([k, l]) => ({ key: k, header: l, className: 'num', render: (r: any) => money(r[k]) }))]} /></div>}
+          {tab === 'tax' && <div className="grid gap-3 sm:grid-cols-4"><Stat label="Output tax" value={money(d.data.outputTaxCents)} /><Stat label="Input tax" value={money(d.data.inputTaxCents)} /><Stat label="Net payable" value={money(d.data.netTaxPayableCents)} /><Card className="sm:col-span-4" title="Output tax by rate"><p data-report-text className="text-sm text-ink-500">{d.data.note}</p><div data-lines="VAT rate|Net · tax">{d.data.outputByRate.map((r: any) => <div data-line key={r.rateBp} className="flex justify-between text-sm"><span>{r.rateBp / 100}%</span><span>net {money(r.netCents)} · tax {money(r.taxCents)}</span></div>)}</div></Card></div>}
+          {tab === 'exceptions' && <div className="grid gap-4 lg:grid-cols-3"><Stat label="Voided" value={money(d.data.totals.voidsCents)} hint={`${d.data.voids.length} sales`} /><Stat label="Returned" value={money(d.data.totals.returnsCents)} hint={`${d.data.returns.length} returns`} /><Stat label="Discounts given" value={money(d.data.totals.discountsCents)} hint={`${d.data.discounts.length} sales`} /><Card title="Supervisor overrides" className="lg:col-span-3"><ul className="text-sm">{d.data.overrides.map((s: any) => <li data-report-text key={s._id}>{s.number}: {s.overrides.map((o: any) => o.action).join('; ')}</li>)}</ul></Card></div>}
           {['branches', 'shifts', 'losses', 'purchases', 'activity'].includes(tab) && <div className="card"><DataTable rows={d.data.map((r: any, i: number) => ({ ...r, id: String(i) }))} columns={Object.keys(d.data[0] ?? {}).filter((k) => !['_id', 'productId', 'warehouseId'].includes(k)).map((k) => ({ key: k, header: k.replace(/Cents$/, '').replace(/([A-Z])/g, ' $1'), className: /Cents$|count|qty/i.test(k) ? 'num' : undefined, render: (r: any) => (/Cents$/.test(k) ? money(r[k]) : /At$/.test(k) ? dateTime(r[k]) : typeof r[k] === 'object' ? JSON.stringify(r[k]) : String(r[k] ?? '')) }))} /></div>}
           {tab === 'daily' && <RetailDaily d={d} />}
           {tab === 'basket' && <RetailBasket d={d.data} />}
@@ -104,8 +117,8 @@ export function ReportsPage() {
           {tab === 'performance' && <RetailPerformance d={d} />}
           {tab === 'dead' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Value tied up" value={money(d.totalValueCents)} hint={`${d.data.length} products without a sale in ${d.days} days`} tone={d.totalValueCents ? 'red' : undefined} /></div><div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.productId }))} empty="Every stocked product sold recently" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'q', header: 'On hand', className: 'num', render: (r: any) => `${qty(r.qty)} ${r.unit}` }, { key: 'v', header: 'Cost value', className: 'num', render: (r: any) => money(r.valueCents) }, { key: 'rv', header: 'Retail value', className: 'num', render: (r: any) => money(r.retailValueCents) }, { key: 'l', header: 'Last sold', render: (r: any) => (r.lastSoldAt ? `${dateTime(r.lastSoldAt)} (${r.daysSinceSale} d)` : 'Never') }]} /></div></>}
           {tab === 'reorder' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Products to reorder" value={String(d.data.length)} /><Stat label="Estimated cost" value={money(d.totalCostCents)} hint={`Sales rate of the last ${d.params.days} days, cover ${d.params.leadDays + d.params.coverDays} days`} /></div><div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.productId }))} empty="Nothing needs reordering" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 's', header: 'Last supplier', render: (r: any) => r.supplier || '—' }, { key: 'h', header: 'On hand', className: 'num', render: (r: any) => qty(r.onHand) }, { key: 'o', header: 'On order', className: 'num', render: (r: any) => qty(r.onOrder) }, { key: 'a', header: 'Sells / day', className: 'num', render: (r: any) => r.avgDailySales }, { key: 'd', header: 'Days left', className: 'num', render: (r: any) => (r.daysLeft ?? '—') }, { key: 'q', header: 'Order', className: 'num font-semibold', render: (r: any) => `${qty(r.suggestQty)} ${r.unit}` }, { key: 'c', header: 'Est. cost', className: 'num', render: (r: any) => money(r.estCostCents) }]} /></div></>}
-          {tab === 'expenses' && <div className="grid gap-4 lg:grid-cols-2"><Card title="By category">{d.data.map((r: any) => <div key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</Card><Card title="Cash movements">{d.cashMovements.map((r: any) => <div key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</Card></div>}
-        </>
+          {tab === 'expenses' && <div className="grid gap-4 lg:grid-cols-2"><Card title="By category"><div data-lines="Category|Amount">{d.data.map((r: any) => <div data-line key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</div></Card><Card title="Cash movements"><div data-lines="Movement|Amount">{d.cashMovements.map((r: any) => <div data-line key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</div></Card></div>}
+        </div>
       )}
     </div>
   );
@@ -169,7 +182,7 @@ function RetailBasket({ d }: { d: any }) {
 }
 
 function RetailReturns({ d }: { d: any }) {
-  const rows = (x: any[], label: (r: any) => string) => x.map((r: any, i: number) => <div key={i} className="flex justify-between text-sm"><span>{label(r)}</span><span className="tabular-nums">{r.count ?? qty(r.qty)} · {money(r.refundCents)}</span></div>);
+  const rows = (x: any[], label: (r: any) => string) => <div data-lines="|Count · refunded">{x.map((r: any, i: number) => <div data-line key={i} className="flex justify-between text-sm"><span>{label(r)}</span><span className="tabular-nums">{r.count ?? qty(r.qty)} · {money(r.refundCents)}</span></div>)}</div>;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">

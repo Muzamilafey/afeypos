@@ -117,7 +117,7 @@ export function Card({ title, actions, children, className, bodyClassName }: { t
   const [max, setMax] = useState(false);
   const qc = useContext(QueryRefreshCtx);
   return (
-    <section className={cx('card', max && 'fixed inset-4 z-50 overflow-auto shadow-2xl', className)}>
+    <section data-report-title={typeof title === 'string' ? title : undefined} className={cx('card', max && 'fixed inset-4 z-50 overflow-auto shadow-2xl', className)}>
       {(title || actions) && (
         <header className="panel-head">
           <h2 className="truncate text-[13px] font-bold text-ink-800 dark:text-white">{title}</h2>
@@ -147,10 +147,10 @@ const tileColor = (key: string) => TILE_COLORS[[...key].reduce((a, c) => (a * 31
 export function Stat({ label, value, hint, tone, color, icon }: { label: string; value: ReactNode; hint?: ReactNode; tone?: 'red' | 'green'; color?: 'purple' | 'blue' | 'red' | 'yellow' | 'teal' | 'green'; icon?: string }) {
   const bg = color ? TILE_BG[color] : tone === 'red' ? TILE_BG.red : tone === 'green' ? TILE_BG.green : tileColor(label);
   return (
-    <div className={cx('relative overflow-hidden rounded-sm p-3 text-white shadow-[0_1px_1px_rgba(0,0,0,0.06)]', bg)}>
-      <div className="relative z-10 text-2xl font-bold tabular-nums leading-tight">{value}</div>
-      <div className="relative z-10 text-[12px] font-semibold opacity-90">{label}</div>
-      {hint && <div className="relative z-10 mt-1 text-[11px] opacity-80 [&_a]:underline">{hint}</div>}
+    <div data-stat data-tone={tone} className={cx('relative overflow-hidden rounded-sm p-3 text-white shadow-[0_1px_1px_rgba(0,0,0,0.06)]', bg)}>
+      <div data-stat-value className="relative z-10 text-2xl font-bold tabular-nums leading-tight">{value}</div>
+      <div data-stat-label className="relative z-10 text-[12px] font-semibold opacity-90">{label}</div>
+      {hint && <div data-stat-hint className="relative z-10 mt-1 text-[11px] opacity-80 [&_a]:underline">{hint}</div>}
       <svg viewBox="0 0 60 40" className="pointer-events-none absolute -bottom-1 right-2 h-12 w-20 opacity-25" aria-hidden="true">
         {icon ? null : <g fill="currentColor">{[12, 22, 16, 30, 24, 36].map((h, i) => <rect key={i} x={4 + i * 9} y={40 - h} width="6" height={h} rx="1" />)}</g>}
       </svg>
@@ -163,7 +163,7 @@ export function EmptyState({ title, children, icon = 'box' }: { title: string; c
   return (
     <div className="flex flex-col items-center justify-center px-6 py-12 text-center text-ink-500">
       <Icon name={icon} className="mb-3 h-10 w-10 text-ink-300" />
-      <p className="font-medium text-ink-700 dark:text-ink-200">{title}</p>
+      <p data-report-empty className="font-medium text-ink-700 dark:text-ink-200">{title}</p>
       {children && <div className="mt-1 text-sm">{children}</div>}
     </div>
   );

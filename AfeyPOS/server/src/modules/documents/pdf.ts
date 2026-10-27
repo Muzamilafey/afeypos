@@ -37,7 +37,7 @@ export function pdfText(s: unknown): string {
 }
 
 export function renderPdf(spec: PdfDocSpec): Promise<Buffer> {
-  const accent = spec.accent ?? '#2a2e35';
+  const accent = spec.accent ?? '#1f3b57';
   const doc = new PDFDocument({ size: 'A4', margin: PAGE.margin, bufferPages: true, info: { Title: pdfText(`${spec.title} ${spec.number}`), Author: pdfText(spec.business.name), Creator: 'Afey POS' } });
   const chunks: Buffer[] = [];
   doc.on('data', (c: Buffer) => chunks.push(c));

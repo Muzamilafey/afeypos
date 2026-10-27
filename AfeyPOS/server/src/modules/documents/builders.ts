@@ -24,7 +24,7 @@ export interface BuiltDocument {
 const day = (d?: Date | string | null) => (d ? new Date(d).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' }) : '');
 const qtyText = (q: number) => String(Math.round((q ?? 0) * 1000) / 1000);
 
-async function businessOf(tenantId: unknown) {
+export async function businessOf(tenantId: unknown) {
   const t = await runAsPlatform(() => Tenant.findById(tenantId).lean());
   if (!t) throw notFound('Business');
   const logoPath = t.settings?.logoFileId ? tenantFilePath(String(t._id), t.settings.logoFileId) : null;
@@ -43,7 +43,8 @@ async function deliverTo(warehouseId: unknown) {
 
 const supplierLines = (s: any) => [s?.contactPerson ? `Attn: ${s.contactPerson}` : '', s?.address ?? '', [s?.phone, s?.email].filter(Boolean).join('  |  '), s?.taxPin ? `KRA PIN ${s.taxPin}` : ''];
 
-export async function buildDocument(tenantId: unknown, kind: DocumentKind, id: unknown): Promise<BuiltDocument> {
+/** What the document shows; rendered as PDF (download, email) or HTML (print). */
+export async function buildDocumentSpec(tenantId: unknown, kind: DocumentKind, id: unknown): Promise<{ spec: PdfDocSpec; recipient: BuiltDocument['recipient'] }> {
   const { business, currency, tenant } = await businessOf(tenantId);
   const m = (c: number | null | undefined) => formatMoney(c ?? 0, currency);
   let spec: PdfDocSpec;
@@ -150,6 +151,11 @@ export async function buildDocument(tenantId: unknown, kind: DocumentKind, id: u
       ],
     };
   }
+  return { spec, recipient };
+}
+
+export async function buildDocument(tenantId: unknown, kind: DocumentKind, id: unknown): Promise<BuiltDocument> {
+  const { spec, recipient } = await buildDocumentSpec(tenantId, kind, id);
   const safe = spec.number.replace(/[^A-Za-z0-9-]/g, '');
   return { buffer: await renderPdf(spec), filename: `${spec.title.replace(/\s+/g, '-')}-${safe}.pdf`, title: spec.title, number: spec.number, recipient };
 }
