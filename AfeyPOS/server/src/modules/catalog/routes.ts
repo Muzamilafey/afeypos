@@ -13,6 +13,7 @@ import { quotePrice } from './pricing.js';
 import { parseCsv, toCsv } from '../../lib/csv.js';
 import { recordTombstone } from '../sync/hq.js';
 import { queueItemRegistration } from '../etims/service.js';
+import { env } from '../../config/env.js';
 
 const router = Router();
 
@@ -167,7 +168,8 @@ const DEFAULT_UNITS = [
 
 /** Units of measure, with how many products use each as their base or extra unit. Common units are added once. */
 router.get('/units', requirePermission('products.read'), async (_req, res) => {
-  if (!(await UnitOfMeasure.exists({}))) await UnitOfMeasure.insertMany(DEFAULT_UNITS, { ordered: false }).catch(() => undefined);
+  // Branch servers get the units from head office (seeding them here too would clash with HQ's copies).
+  if (env().DEPLOYMENT_MODE !== 'branch' && !(await UnitOfMeasure.exists({}))) await UnitOfMeasure.insertMany(DEFAULT_UNITS, { ordered: false }).catch(() => undefined);
   const [units, base, extra] = await Promise.all([
     UnitOfMeasure.find({}).sort({ code: 1 }).lean(),
     Product.aggregate([{ $group: { _id: '$baseUnit', n: { $sum: 1 } } }]),

@@ -22,7 +22,13 @@ export async function applyRecord(spec: SyncSpec, doc: any, side: 'hq' | 'branch
   const previous = await coll.findOne({ _id: doc._id });
   if (previous && previous[spec.field] && previous[spec.field] > t) return { outcome: 'stale', previous };
   try {
-    const r = await coll.replaceOne({ _id: doc._id }, doc, { upsert: true });
+    const r = await coll.replaceOne({ _id: doc._id }, doc, { upsert: true }).catch(async (err: any) => {
+      // Head-office data (e.g. units "pc", "kg") also created locally before the first download: same code, other id.
+      // HQ's record is the real one, so the local copy gives way. Nothing refers to these by id.
+      if (side !== 'branch' || spec.dir !== 'down' || err?.code !== 11000 || !err.keyValue) throw err;
+      await coll.deleteMany({ ...err.keyValue, _id: { $ne: doc._id } });
+      return coll.replaceOne({ _id: doc._id }, doc, { upsert: true });
+    });
     return { outcome: r.upsertedCount || r.modifiedCount ? 'applied' : 'unchanged', previous };
   } catch (err: any) {
     await SyncConflict.create({ side, branchCode, collectionName: coll.collectionName, docId: doc._id, reason: String(err?.message ?? err).slice(0, 500) });

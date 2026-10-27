@@ -53,7 +53,7 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: CustomRole, dir: 'down', field: 'updatedAt' },
   { model: Category, dir: 'down', field: 'updatedAt' },
   { model: Brand, dir: 'down', field: 'updatedAt' },
-  { model: UnitOfMeasure, dir: 'down', field: 'updatedAt' },
+  { model: UnitOfMeasure, dir: 'down', field: 'updatedAt', cursorVersion: 2 },
   { model: Product, dir: 'down', field: 'updatedAt' },
   { model: CustomerPrice, dir: 'down', field: 'updatedAt' },
   { model: Promotion, dir: 'down', field: 'updatedAt' },
