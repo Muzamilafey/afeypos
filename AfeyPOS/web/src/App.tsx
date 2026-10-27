@@ -30,6 +30,7 @@ import { CheckoutRulesPage } from './pages/settings/CheckoutRules';
 import { CardTerminalsPage } from './pages/settings/CardTerminals';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
 import { BarcodeVerifyPage, BrandsPage, CategoriesPage, StockAlertsPage, UnitsPage } from './pages/inventory/Catalog';
+import { ImportProductsPage } from './pages/inventory/ImportProducts';
 import { ReceiveStockPage } from './pages/inventory/ReceiveStock';
 import { EtimsPage } from './pages/Etims';
 
@@ -67,6 +68,7 @@ export function App() {
         <Route path="documents/:type" element={<Gate perm="sales.read"><DocumentsPage /></Gate>} />
         <Route path="repairs" element={<Gate module="repairs"><RepairsPage /></Gate>} />
         <Route path="products" element={<Gate perm="products.read"><ProductsPage /></Gate>} />
+        <Route path="products/import" element={<Gate perm="products.manage"><ImportProductsPage /></Gate>} />
         <Route path="products/:id" element={<Gate perm="products.read"><ProductEditPage /></Gate>} />
         <Route path="inventory" element={<Gate perm="inventory.read"><StockLevelsPage /></Gate>} />
         <Route path="inventory/receive" element={<Gate perm="inventory.receive" module="inventory"><ReceiveStockPage /></Gate>} />

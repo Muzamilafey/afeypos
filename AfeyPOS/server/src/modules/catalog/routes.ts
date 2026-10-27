@@ -420,45 +420,92 @@ router.get('/products-export.csv', requirePermission('products.read'), async (re
   res.send(toCsv(rows));
 });
 
-/** Imports products from CSV (create or update by SKU). Dry-run by default; returns per-row results. */
+/**
+ * Imports products (create or update by SKU) from CSV text or from rows the browser read from the Excel
+ * template (with an optional uploaded photo per row). Dry-run by default: every row comes back with what will
+ * happen or what is wrong, so the review page can show it; nothing is saved unless every row is valid.
+ */
+const importCell = z.union([z.string(), z.number(), z.boolean(), z.null()]).transform((v) => (v === null ? '' : String(v).trim()));
 router.post('/products-import', requirePermission('products.manage'), async (req, res) => {
-  const body = parse(z.object({ csv: z.string().min(1).max(5_000_000), commit: z.boolean().default(false) }), req.body);
-  const rows = parseCsv(body.csv);
+  const body = parse(z.object({
+    csv: z.string().min(1).max(5_000_000).optional(),
+    rows: z.array(z.record(z.string(), importCell)).max(10_000).optional(),
+    commit: z.boolean().default(false),
+  }).refine((b) => b.csv || b.rows, 'Send a file'), req.body);
+  const rows = body.rows ?? parseCsv(body.csv!);
   if (rows.length > 10000) throw badRequest('Import at most 10,000 rows at a time');
+  if (!rows.length) throw badRequest('The file has no products');
   const cats = new Map((await Category.find({}).lean()).map((c) => [c.name.toLowerCase(), c._id]));
-  const results: { row: number; sku: string; action: 'create' | 'update' | 'error'; error?: string }[] = [];
-  const toMoney = (v: string | undefined) => (v === undefined || v === '' ? undefined : Math.round(Number(v) * 100));
+  const brands = new Map((await Brand.find({}).lean()).map((b) => [b.name.toLowerCase(), b._id]));
+  const results: { row: number; sku: string; action: 'create' | 'update' | 'error'; error?: string; warnings?: string[] }[] = [];
+  const toMoney = (v: string | undefined) => (v === undefined || v === '' ? undefined : Math.round(Number(String(v).replace(/[, ]/g, '')) * 100));
   const prepared: { sku: string; data: Record<string, unknown>; exists: boolean }[] = [];
+  const skus = new Map<string, number>();
+  const codes = new Map<string, number>();
   for (const [i, r] of rows.entries()) {
+    const rowNo = Number(r._row) || i + 2;
     const sku = (r.sku ?? '').trim();
     try {
-      if (!sku || !r.name) throw new Error('sku and name are required');
-      const nums = ['cost', 'retail', 'wholesale', 'contractor', 'taxRatePercent', 'reorderLevel'].filter((k) => r[k] && Number.isNaN(Number(r[k])));
-      if (nums.length) throw new Error(`invalid number in ${nums.join(', ')}`);
+      if (!r.name) throw new Error('Name is missing');
+      if (!sku) throw new Error('SKU is missing');
+      if (skus.has(sku.toLowerCase())) throw new Error(`SKU ${sku} is also on row ${skus.get(sku.toLowerCase())}`);
+      skus.set(sku.toLowerCase(), rowNo);
+      const nums = ['cost', 'retail', 'taxRatePercent', 'reorderLevel', 'openingStock'].filter((k) => r[k] && Number.isNaN(Number(String(r[k]).replace(/[, ]/g, ''))));
+      if (nums.length) throw new Error(`Not a number: ${nums.join(', ')}`);
+      if (!r.retail || Number(toMoney(r.retail)) <= 0) throw new Error('Selling price is missing');
+      const warnings: string[] = [];
+      const existing = await Product.findOne({ sku }, { _id: 1 }).lean();
+      const barcode = (r.barcode ?? '').replace(/\s/g, '');
+      if (barcode) {
+        if (codes.has(barcode)) throw new Error(`Barcode ${barcode} is also on row ${codes.get(barcode)}`);
+        codes.set(barcode, rowNo);
+        const owner = await Product.findOne({ 'barcodes.code': barcode }, { sku: 1, name: 1 }).lean();
+        if (owner && String(owner._id) !== String(existing?._id)) throw new Error(`Barcode ${barcode} already belongs to ${owner.name} (${owner.sku})`);
+      }
       let categoryId: Types.ObjectId | undefined;
       if (r.category) {
         categoryId = cats.get(r.category.toLowerCase());
-        if (!categoryId && body.commit) {
-          const c = await Category.create({ name: r.category });
-          categoryId = c._id;
-          cats.set(r.category.toLowerCase(), c._id);
+        if (!categoryId) {
+          warnings.push(`New category "${r.category}"`);
+          if (body.commit) {
+            const c = await Category.create({ name: r.category });
+            categoryId = c._id;
+            cats.set(r.category.toLowerCase(), c._id);
+          }
         }
       }
-      const baseUnit = r.baseUnit || 'pc';
+      let brandId: Types.ObjectId | undefined;
+      if (r.brand) {
+        brandId = brands.get(r.brand.toLowerCase());
+        if (!brandId) {
+          warnings.push(`New brand "${r.brand}"`);
+          if (body.commit) {
+            const b = await Brand.create({ name: r.brand });
+            brandId = b._id;
+            brands.set(r.brand.toLowerCase(), b._id);
+          }
+        }
+      }
+      const image = r.image && /^\/api\/v1\/files\/[a-f0-9]{32}\.(png|jpg|webp)$/.test(r.image) ? r.image : undefined;
+      const baseUnit = (r.baseUnit || 'pc').toLowerCase();
+      const type = (r.type || 'stock').toLowerCase().replace(/[\s-]+/g, '_');
+      const active = (r.active ?? '').toLowerCase();
       const data: Record<string, unknown> = {
-        name: r.name, type: ['stock', 'service', 'non_stock'].includes(r.type) ? r.type : 'stock', baseUnit, categoryId,
-        ...(req.auth!.permissions.has('products.cost') ? { costCents: toMoney(r.cost) ?? 0 } : {}),
-        prices: { retail: toMoney(r.retail) ?? 0, wholesale: toMoney(r.wholesale), contractor: toMoney(r.contractor) },
+        name: r.name, type: ['stock', 'service', 'non_stock'].includes(type) ? type : 'stock', baseUnit,
+        ...(categoryId ? { categoryId } : {}), ...(brandId ? { brandId } : {}), ...(r.description ? { description: r.description } : {}),
+        ...(req.auth!.permissions.has('products.cost') && r.cost !== undefined && r.cost !== '' ? { costCents: toMoney(r.cost) } : {}),
+        'prices.retail': toMoney(r.retail),
+        ...(r.wholesale ? { 'prices.wholesale': toMoney(r.wholesale) } : {}), ...(r.contractor ? { 'prices.contractor': toMoney(r.contractor) } : {}),
         taxRateBp: r.taxRatePercent === undefined || r.taxRatePercent === '' ? null : Math.round(Number(r.taxRatePercent) * 100),
         reorderLevel: Number(r.reorderLevel || 0),
-        active: r.active === undefined || r.active === '' ? true : r.active.toLowerCase() !== 'false',
+        active: !['false', 'no', 'n', '0', 'inactive'].includes(active),
+        ...(image ? { images: [image] } : {}),
       };
-      if (r.barcode) data.barcodes = [{ code: r.barcode, unitCode: baseUnit }];
-      const exists = Boolean(await Product.exists({ sku }));
-      prepared.push({ sku, data, exists });
-      results.push({ row: i + 2, sku, action: exists ? 'update' : 'create' });
+      if (barcode) data.barcodes = [{ code: barcode, unitCode: baseUnit }];
+      prepared.push({ sku, data, exists: Boolean(existing) });
+      results.push({ row: rowNo, sku, action: existing ? 'update' : 'create', ...(warnings.length ? { warnings } : {}) });
     } catch (e: any) {
-      results.push({ row: i + 2, sku, action: 'error', error: e.message });
+      results.push({ row: rowNo, sku, action: 'error', error: e.message });
     }
   }
   const errors = results.filter((r) => r.action === 'error').length;
@@ -466,10 +513,13 @@ router.post('/products-import', requirePermission('products.manage'), async (req
     await withTransaction(async () => {
       for (const p of prepared) {
         if (p.exists) await Product.updateOne({ sku: p.sku }, { $set: p.data });
-        else await Product.create([{ sku: p.sku, units: [{ code: p.data.baseUnit, name: p.data.baseUnit, factor: 1 }], ...p.data }]);
+        else {
+          const { 'prices.retail': retail, 'prices.wholesale': wholesale, 'prices.contractor': contractor, ...rest } = p.data as any;
+          await Product.create([{ sku: p.sku, units: [{ code: p.data.baseUnit, name: p.data.baseUnit, factor: 1 }], prices: { retail, wholesale, contractor }, ...rest }]);
+        }
       }
     });
-    await audit(req, { action: 'product.imported', details: { rows: prepared.length } });
+    await audit(req, { action: 'product.imported', details: { rows: prepared.length, created: results.filter((r) => r.action === 'create').length, updated: results.filter((r) => r.action === 'update').length } });
   }
   res.json({ data: { committed: body.commit && errors === 0, errors, results } });
 });

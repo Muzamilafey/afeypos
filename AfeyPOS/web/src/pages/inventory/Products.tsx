@@ -7,7 +7,7 @@ import { useAuth } from '../../lib/auth';
 import { useList, useLocations } from '../../lib/hooks';
 import { money, qty } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
-import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, useToast } from '../../components/ui';
+import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, Select, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
 
 const FIELD_LABELS: Partial<Record<ProductField, string>> = {
@@ -27,13 +27,12 @@ export function ProductsPage() {
   const [params] = useSearchParams();
   const [q, setQ] = useState(params.get('q') ?? '');
   useEffect(() => setQ(params.get('q') ?? ''), [params]);
-  const [importing, setImporting] = useState(false);
   const list = useList(['products'], '/products', { page, q: q || undefined, limit: 25 });
   return (
     <div>
       <PageHeader title="Products" actions={<>
         <Button variant="secondary" onClick={() => download('/products-export.csv', 'products.csv')}><Icon name="download" className="h-4 w-4" />Export</Button>
-        {can('products.manage') && <Button variant="secondary" onClick={() => setImporting(true)}><Icon name="upload" className="h-4 w-4" />Import CSV</Button>}
+        {can('products.manage') && <Button variant="secondary" onClick={() => nav('/products/import')}><Icon name="upload" className="h-4 w-4" />Import products</Button>}
         {can('products.manage') && <Button onClick={() => nav('/products/new')}><Icon name="plus" className="h-4 w-4" />New product</Button>}
       </>} />
       <div className="card">
@@ -48,36 +47,7 @@ export function ProductsPage() {
             { key: 'status', header: '', render: (r: any) => (!r.active ? <Badge>archived</Badge> : null) },
           ]} />
       </div>
-      {importing && <ImportModal onClose={() => setImporting(false)} />}
     </div>
-  );
-}
-
-function ImportModal({ onClose }: { onClose: () => void }) {
-  const qc = useQueryClient();
-  const [csv, setCsv] = useState('');
-  const [result, setResult] = useState<any>(null);
-  const [error, setError] = useState<unknown>(null);
-  const run = async (commit: boolean) => {
-    setError(null);
-    try {
-      const r = await api<{ data: any }>('/products-import', { body: { csv, commit } });
-      setResult(r.data);
-      if (r.data.committed) qc.invalidateQueries({ queryKey: ['products'] });
-    } catch (e) { setError(e); }
-  };
-  return (
-    <Modal open onClose={onClose} title="Import products from CSV" size="lg" footer={<><Button variant="secondary" onClick={() => run(false)} disabled={!csv}>Check file</Button><Button onClick={() => run(true)} disabled={!result || result.errors > 0 || result.committed}>Import</Button></>}>
-      <p className="mb-2 text-sm text-ink-500">Columns: sku, name, type, category, baseUnit, barcode, cost, retail, wholesale, contractor, taxRatePercent, reorderLevel, active. Existing SKUs are updated. Export first to get a template.</p>
-      <input type="file" accept=".csv,text/csv" onChange={async (e) => { const f = e.target.files?.[0]; if (f) { setCsv(await f.text()); setResult(null); } }} />
-      <ErrorBox error={error} />
-      {result && (
-        <div className="mt-3 text-sm">
-          <p>{result.committed ? 'Imported.' : `${result.results.length} rows checked, ${result.errors} errors.`}</p>
-          <ul className="mt-2 max-h-60 overflow-y-auto">{result.results.filter((r: any) => r.action === 'error').map((r: any) => <li key={r.row} className="text-red-600">Row {r.row} ({r.sku || 'no SKU'}): {r.error}</li>)}</ul>
-        </div>
-      )}
-    </Modal>
   );
 }
 
