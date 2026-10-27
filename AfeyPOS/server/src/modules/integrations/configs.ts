@@ -13,14 +13,25 @@ export function openSecrets(cfg: Pick<IntegrationConfigDoc, '_id' | 'secretsEnc'
   return JSON.parse(decrypt(cfg.secretsEnc, String(cfg._id)));
 }
 
-/** Picks the enabled config for a branch, falling back to the tenant default. */
-export async function findActiveConfig(kind: IntegrationKind, branchId?: Types.ObjectId | null) {
+/**
+ * Picks the enabled config for a till or branch: one set up for that till, else its branch's (shared by all the
+ * branch's tills), else the one for every branch. A till or branch never borrows another branch's own config.
+ * Without a branch (e.g. salary payouts) the default config is used.
+ */
+export async function findActiveConfig(kind: IntegrationKind, branchId?: Types.ObjectId | null, tillId?: Types.ObjectId | string | null) {
   const configs = await IntegrationConfig.find({ kind, enabled: true }).sort({ isDefault: -1, createdAt: 1 });
-  if (branchId) {
-    const forBranch = configs.find((c) => c.branchIds.some((b) => String(b) === String(branchId)));
-    if (forBranch) return forBranch;
+  const same = (a: unknown, b: unknown) => String(a) === String(b);
+  if (tillId) {
+    const forTill = configs.find((c) => (c.tillIds ?? []).some((t) => same(t, tillId)));
+    if (forTill) return forTill;
   }
-  return configs.find((c) => c.branchIds.length === 0) ?? configs[0] ?? null;
+  const general = configs.filter((c) => !(c.tillIds ?? []).length);
+  if (branchId) {
+    const forBranch = general.find((c) => c.branchIds.some((b) => same(b, branchId)));
+    if (forBranch) return forBranch;
+    return general.find((c) => c.branchIds.length === 0) ?? null;
+  }
+  return general.find((c) => c.branchIds.length === 0) ?? general[0] ?? null;
 }
 
 /** API representation: never exposes secrets, only which secret fields are set. */
@@ -35,6 +46,7 @@ export function presentConfig(c: IntegrationConfigDoc) {
     isDefault: c.isDefault,
     environment: c.environment,
     branchIds: c.branchIds,
+    tillIds: c.tillIds ?? [],
     settings: c.settings,
     secretsSet: secretKeys,
     lastTest: c.lastTest,

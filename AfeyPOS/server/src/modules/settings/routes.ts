@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { Types } from 'mongoose';
 import { CASHIER_PAGE_OPTIONS, PAYMENT_METHOD_OPTIONS, MODULES, PAYMENT_PROVIDER_INFO, RECEIPT_TEMPLATES, mergeCheckoutRules, mergeReceipt, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import {
   AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
@@ -281,6 +282,7 @@ const integrationSchema = z.object({
   isDefault: z.boolean().default(false),
   environment: z.enum(['sandbox', 'production']).default('sandbox'),
   branchIds: z.array(objectId).default([]),
+  tillIds: z.array(objectId).max(200).default([]),
   settings: z.record(z.string(), z.union([z.string().max(300), z.number(), z.boolean()])).default({}),
   secrets: z.record(z.string(), z.string().max(4000)).optional(),
 });
@@ -300,6 +302,14 @@ function assertGatewayFields(provider: string, settings: Record<string, unknown>
   const info = PAYMENT_PROVIDER_INFO[provider as PaymentProviderKey];
   const missing = info.fields.filter((f) => f.required && !(f.secret ? secrets[f.key] : settings[f.key])).map((f) => f.label);
   if (missing.length) throw badRequest(`${info.label}: missing ${missing.join(', ')}`);
+}
+
+/** A config limited to some tills also lists their branches, so each branch server receives it by sync. */
+async function scopeToTills(body: { tillIds?: unknown[]; branchIds?: unknown[] }) {
+  if (!body.tillIds?.length) return;
+  const tills = await Till.find({ _id: { $in: body.tillIds } }, { branchId: 1 }).lean();
+  if (tills.length !== new Set(body.tillIds.map(String)).size) throw badRequest('Choose existing tills');
+  body.branchIds = [...new Set(tills.map((t) => String(t.branchId)))].map((id) => new Types.ObjectId(id));
 }
 
 router.get('/settings/integrations', requirePermission('integrations.manage'), async (req, res) => {
@@ -323,6 +333,7 @@ router.post('/settings/integrations', requirePermission('integrations.manage'), 
     if (body.provider === 'vscu' && !body.settings.baseUrl) throw badRequest('eTIMS: enter the VSCU address on your network');
     body.settings.tin = String(body.settings.tin).toUpperCase();
   }
+  await scopeToTills(body);
   const { secrets, ...rest } = body;
   const cfg = new IntegrationConfig(rest);
   if (secrets) cfg.secretsEnc = sealSecrets(cfg._id, secrets);
@@ -335,6 +346,7 @@ router.patch('/settings/integrations/:id', requirePermission('integrations.manag
   const body = parse(integrationSchema.partial().omit({ kind: true }), req.body);
   const cfg = await IntegrationConfig.findById(idParam(req.params.id));
   if (!cfg) throw notFound('Integration');
+  await scopeToTills(body);
   const { secrets, ...rest } = body;
   Object.assign(cfg, rest);
   if (isSimulator(cfg) && cfg.environment === 'production') throw badRequest('The simulator cannot be used in production mode');

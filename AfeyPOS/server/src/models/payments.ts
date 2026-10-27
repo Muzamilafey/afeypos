@@ -121,7 +121,10 @@ const integrationConfigSchema = new Schema(
     enabled: { type: Boolean, default: true },
     isDefault: { type: Boolean, default: false },
     environment: { type: String, enum: ['sandbox', 'production'], default: 'sandbox' },
+    /** Branches that use this config; empty = every branch (unless tillIds limits it). */
     branchIds: { type: [ObjectId], default: [] },
+    /** Only these tills use it (e.g. a separate M-Pesa Till per counter); empty = every till of its branches. */
+    tillIds: { type: [ObjectId], default: [] },
     /** Non-secret settings (shortcode, sender id, smtp host...). */
     settings: { type: Schema.Types.Mixed, default: {} },
     /** AES-256-GCM encrypted JSON of secrets. Never returned by the API. */

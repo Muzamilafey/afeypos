@@ -109,7 +109,7 @@ export async function startStk(opts: { tenant: any; clientRequestId: string; amo
   const till = opts.tillId ? await Till.findById(opts.tillId).lean() : null;
   const branchId = till?.branchId ?? (opts.branchId as any);
   // The online shop may use its own Paybill / Till instead of the branch's.
-  const cfg = opts.configId ? await IntegrationConfig.findOne({ _id: opts.configId, kind: 'mpesa', enabled: true }) : await findActiveConfig('mpesa', branchId);
+  const cfg = opts.configId ? await IntegrationConfig.findOne({ _id: opts.configId, kind: 'mpesa', enabled: true }) : await findActiveConfig('mpesa', branchId, till?._id);
   if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
   const tenant = opts.tenant;
   const accountReference = (opts.accountReference || tenant.slug).replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'AFEYPOS';
@@ -257,7 +257,7 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   }
   const till = await Till.findById(body.tillId).lean();
   if (!till) throw notFound('Till');
-  const cfg = await findActiveConfig('mpesa', till.branchId);
+  const cfg = await findActiveConfig('mpesa', till.branchId, till._id);
   if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
   const to = payTo(cfg);
   // Short and easy to type on a phone: till code + 4 digits, unique among waiting payments.
@@ -301,7 +301,7 @@ router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (
     return;
   }
   const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
-  const cfg = await findActiveConfig('mpesa', till?.branchId);
+  const cfg = await findActiveConfig('mpesa', till?.branchId, till?._id);
   if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
   if (cfg.provider !== 'mock' && (!cfg.settings?.initiatorName || !openSecrets(cfg).securityCredential)) {
     throw new AppError(404, 'MPESA_RECEIPT_NOT_FOUND', `${body.receipt} has not reached the system yet. Check the code, wait a minute, or set up the M-Pesa initiator to verify codes with Safaricom.`);
@@ -331,7 +331,7 @@ router.post('/payments/mpesa/simulate-c2b', requirePermission('sales.create'), a
   if (env().NODE_ENV === 'production') throw forbidden('Simulation is disabled in production');
   const body = parse(z.object({ amountCents: positiveCents, account: z.string().max(20).optional(), phone: z.string().default('254712345678'), receipt: z.string().optional(), tillId: objectId.optional() }), req.body);
   const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
-  const cfg = await findActiveConfig('mpesa', till?.branchId);
+  const cfg = await findActiveConfig('mpesa', till?.branchId, till?._id);
   if (cfg?.provider !== 'mock') throw forbidden('Only the M-Pesa simulator can simulate payments');
   const to = payTo(cfg);
   const receipt = body.receipt ?? `SIM${Date.now().toString(36).toUpperCase()}`.slice(0, 10);

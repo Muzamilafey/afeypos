@@ -290,3 +290,33 @@ describe('C2B URL registration', () => {
     }
   });
 });
+
+describe('M-Pesa per branch and per till', () => {
+  it('a till uses its own M-Pesa, else its branch’s (all its tills), else the one for all branches', async () => {
+    const mainBranch = t.locations.branches[0]._id;
+    const counter2 = (await t.client.post('/settings/tills', { branchId: mainBranch, warehouseId: wh, name: 'Counter 2', code: 'C2' })).body.data._id;
+    const b = (await t.client.post('/settings/branches', { name: 'Garissa Road', code: 'GRS' })).body.data;
+    const grsTill = (await t.client.post('/settings/tills', { branchId: b.branch._id, warehouseId: b.warehouse._id, name: 'GRS till', code: 'GRS1' })).body.data._id;
+    const secrets = { consumerKey: 'k', consumerSecret: 's', passkey: 'p' };
+    const forBranch = await t.client.post('/settings/integrations', { kind: 'mpesa', provider: 'mock', name: 'Garissa Road M-Pesa', branchIds: [b.branch._id], settings: { shortCode: '174379', type: 'till', tillNumber: '7770001' }, secrets });
+    expect(forBranch.status).toBe(201);
+    const forTill = await t.client.post('/settings/integrations', { kind: 'mpesa', provider: 'mock', name: 'Counter 2 M-Pesa', tillIds: [counter2], settings: { shortCode: '174379', type: 'till', tillNumber: '7770002' }, secrets });
+    expect(forTill.status).toBe(201);
+    // A till-only config also lists the till's branch (so a branch server receives it by sync).
+    expect(forTill.body.data.branchIds).toEqual([mainBranch]);
+    const payTo = async (tillId: string) => (await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 1000, tillId })).body.data.payTo;
+    expect(await payTo(counter2)).toEqual({ type: 'till', number: '7770002' });
+    expect(await payTo(grsTill)).toEqual({ type: 'till', number: '7770001' });
+    expect((await payTo(till)).number).not.toMatch(/^777000/); // the business-wide M-Pesa
+    // Without its own and without a business-wide M-Pesa, a branch never borrows another branch's.
+    const all = (await t.client.get('/settings/integrations')).body.data.filter((c: any) => c.kind === 'mpesa' && !c.branchIds.length && !c.tillIds.length);
+    for (const c of all) await t.client.patch(`/settings/integrations/${c.id}`, { branchIds: [mainBranch] });
+    const b2 = (await t.client.post('/settings/branches', { name: 'Eastleigh', code: 'EST' })).body.data;
+    const estTill = (await t.client.post('/settings/tills', { branchId: b2.branch._id, warehouseId: b2.warehouse._id, name: 'EST till', code: 'EST1' })).body.data._id;
+    const none = await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 1000, tillId: estTill });
+    expect(none.status).toBe(409);
+    expect(none.body.error.code).toBe('MPESA_NOT_CONFIGURED');
+    for (const c of all) await t.client.patch(`/settings/integrations/${c.id}`, { branchIds: [] });
+  });
+});
+

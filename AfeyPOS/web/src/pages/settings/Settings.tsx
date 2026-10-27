@@ -5,7 +5,7 @@ import { roleName, useRoleCatalog, UserPermissionsEditor } from './Roles';
 import { MODULE_INFO, MODULES, PAYMENT_PROVIDER_INFO, PAYMENT_PROVIDERS, ROLE_LABELS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import { api, download } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { useLocations } from '../../lib/hooks';
+import { useLocations, type Locations } from '../../lib/hooks';
 import { dateTime, money } from '../../lib/format';
 import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { DataTable } from '../../components/DataTable';
@@ -417,6 +417,7 @@ export function IntegrationsPage() {
   const toast = useToast();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['integrations'], queryFn: () => api<{ data: any[]; providers: Record<string, string[]>; callbackUrls: Record<string, string> }>('/settings/integrations') });
+  const locs = useLocations();
   const [edit, setEdit] = useState<any>(null);
   const [testing, setTesting] = useState<any>(null);
   const [c2b, setC2b] = useState<any>(null);
@@ -436,7 +437,12 @@ export function IntegrationsPage() {
     setError(null);
     setBusy(true);
     try {
-      const body = { provider: edit.provider, name: edit.name, enabled: edit.enabled, isDefault: edit.isDefault, environment: edit.environment, settings: edit.settings, secrets: edit.secrets };
+      // Who uses it (M-Pesa): every branch, chosen branches (all their tills), or chosen tills only.
+      const scope = scopeOf(edit);
+      const usedBy = edit.kind === 'mpesa' ? { branchIds: scope === 'branches' ? edit.branchIds ?? [] : [], tillIds: scope === 'tills' ? edit.tillIds ?? [] : [] } : {};
+      if (edit.kind === 'mpesa' && scope === 'branches' && !usedBy.branchIds?.length) throw new Error('Choose at least one branch, or "All branches and tills"');
+      if (edit.kind === 'mpesa' && scope === 'tills' && !usedBy.tillIds?.length) throw new Error('Choose at least one till, or "All branches and tills"');
+      const body = { provider: edit.provider, name: edit.name, enabled: edit.enabled, isDefault: edit.isDefault, environment: edit.environment, settings: edit.settings, secrets: edit.secrets, ...usedBy };
       if (edit.id) await api(`/settings/integrations/${edit.id}`, { method: 'PATCH', body });
       else await api('/settings/integrations', { body: { kind: edit.kind, ...body } });
       setEdit(null); qc.invalidateQueries({ queryKey: ['integrations'] }); toast.success('Saved. Secrets are stored encrypted and never shown again.');
@@ -506,6 +512,7 @@ export function IntegrationsPage() {
                   <div><dt className="text-ink-500">Credentials</dt><dd className="mt-0.5 font-medium">{r.secretsSet.length ? `${r.secretsSet.length} saved` : 'none needed'}</dd></div>
                   <div><dt className="text-ink-500">Last test</dt><dd className="mt-0.5">{r.lastTest?.at ? <StatusPill tone={r.lastTest.ok ? 'green' : 'red'}>{r.lastTest.ok ? 'Passed' : 'Failed'}{r.lastTest.at ? ` · ${dateTime(r.lastTest.at)}` : ''}</StatusPill> : <span className="text-ink-400">Not tested yet</span>}</dd></div>
                 </dl>
+                {r.kind === 'mpesa' && <p className="mt-2 text-xs text-ink-500" data-testid="mpesa-used-by">Used by: <b>{usedByText(r, locs.data)}</b></p>}
                 {r.kind === 'mpesa' && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-ink-500">C2B URLs: {r.c2bRegistration ? <StatusPill tone={r.c2bRegistration.ok ? 'green' : 'red'}>{r.c2bRegistration.ok ? `Registered (${r.c2bRegistration.shortCode})` : 'Registration failed'}</StatusPill> : <StatusPill tone="amber">Not registered</StatusPill>}</p>
                 )}
@@ -596,6 +603,7 @@ export function IntegrationsPage() {
               </div>
               <div className="flex flex-wrap gap-5"><Checkbox label="Enabled" checked={edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} /><Checkbox label="Default" checked={edit.isDefault} onChange={(v) => setEdit({ ...edit, isDefault: v })} /></div>
             </fieldset>
+            {edit.kind === 'mpesa' && locs.data && (locs.data.branches.length > 1 || locs.data.tills.length > 1) && <MpesaUsedBy edit={edit} setEdit={setEdit} locs={locs.data} />}
             <fieldset className="space-y-3">
               <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Account details</legend>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -750,5 +758,64 @@ function BusinessLogoField({ fileId, onChange }: { fileId?: string; onChange: (i
       </div>
       <p className="mt-1 text-xs text-ink-500">Shown on the sign-in and sign-up pages. A square image of at least 256 × 256 pixels looks best.</p>
     </div>
+  );
+}
+
+type Scope = 'all' | 'branches' | 'tills';
+const scopeOf = (c: any): Scope => c.scope ?? (c.tillIds?.length ? 'tills' : c.branchIds?.length ? 'branches' : 'all');
+
+/** "Used by" line on an M-Pesa card. */
+function usedByText(c: any, locs?: Locations) {
+  const scope = scopeOf(c);
+  if (scope === 'all') return 'all branches and tills';
+  if (scope === 'branches') return `${c.branchIds.map((id: string) => locs?.branches.find((b) => b._id === id)?.name ?? '?').join(', ')} (all tills)`;
+  return c.tillIds.map((id: string) => {
+    const t = locs?.tills.find((x) => x._id === id);
+    return t ? `${t.name} (${locs?.branches.find((b) => b._id === t.branchId)?.name ?? ''})` : '?';
+  }).join(', ');
+}
+
+/**
+ * Which branches and tills use this M-Pesa account. A till uses an M-Pesa set up for that till, else its branch's
+ * (shared by all the branch's tills), else the one for all branches.
+ */
+function MpesaUsedBy({ edit, setEdit, locs }: { edit: any; setEdit: (e: any) => void; locs: Locations }) {
+  const scope = scopeOf(edit);
+  const toggle = (key: 'branchIds' | 'tillIds', id: string, on: boolean) => setEdit({ ...edit, scope, [key]: on ? [...(edit[key] ?? []), id] : (edit[key] ?? []).filter((x: string) => x !== id) });
+  const options: { v: Scope; t: string; d: string }[] = [
+    { v: 'all', t: 'All branches and tills', d: 'One M-Pesa account for the whole business' },
+    { v: 'branches', t: 'Chosen branches', d: 'Every till in these branches uses this account' },
+    { v: 'tills', t: 'Chosen tills only', d: 'For a separate Till number per counter' },
+  ];
+  return (
+    <fieldset className="space-y-3">
+      <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Used by</legend>
+      <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Used by">
+        {options.map((o) => (
+          <button key={o.v} type="button" role="radio" aria-checked={scope === o.v} onClick={() => setEdit({ ...edit, scope: o.v })}
+            className={cx('rounded-lg border p-3 text-left transition', scope === o.v ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500 dark:bg-brand-500/10' : 'border-ink-200 hover:border-ink-300 dark:border-ink-700')}>
+            <span className="block text-sm font-semibold">{o.t}</span><span className="block text-xs text-ink-500">{o.d}</span>
+          </button>
+        ))}
+      </div>
+      {scope === 'branches' && (
+        <div className="flex flex-wrap gap-4">{locs.branches.filter((b) => b.active).map((b) => <Checkbox key={b._id} label={b.name} checked={(edit.branchIds ?? []).includes(b._id)} onChange={(v) => toggle('branchIds', b._id, v)} />)}</div>
+      )}
+      {scope === 'tills' && (
+        <div className="space-y-2">
+          {locs.branches.filter((b) => b.active).map((b) => {
+            const tills = locs.tills.filter((t) => t.active && t.branchId === b._id);
+            if (!tills.length) return null;
+            return (
+              <div key={b._id}>
+                <div className="text-xs font-semibold text-ink-500">{b.name}</div>
+                <div className="mt-1 flex flex-wrap gap-4">{tills.map((t) => <Checkbox key={t._id} label={`${t.name} (${t.code})`} checked={(edit.tillIds ?? []).includes(t._id)} onChange={(v) => toggle('tillIds', t._id, v)} />)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <p className="text-xs text-ink-500">Each till uses the M-Pesa set up for that till, otherwise its branch’s, otherwise the one for all branches. Register the C2B URLs for each account (button on its card).</p>
+    </fieldset>
   );
 }
