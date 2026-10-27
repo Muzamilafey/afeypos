@@ -83,14 +83,11 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   await page.locator('[aria-haspopup="menu"]').click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
-  // Card + PIN.
+  // The card alone: scanning it (code + Enter) signs in, no PIN.
   await page.getByRole('radio', { name: 'Staff card' }).click();
+  await expect(page.getByLabel('PIN')).toHaveCount(0);
   await page.getByLabel('Staff card').fill(code.toLowerCase());
   await page.getByLabel('Staff card').press('Enter');
-  await page.getByLabel('PIN').fill('2468');
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: 'test-results/card-login.png' });
-  await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('heading', { name: 'Quick start' })).toBeVisible();
   await page.locator('[aria-haspopup="menu"]').click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
@@ -104,9 +101,9 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
 
   // Clock in with the card from the sign-in screen.
   await page.getByRole('button', { name: 'Clock in / out' }).click();
+  await expect(page.getByRole('dialog').getByLabel('PIN')).toHaveCount(0);
   await page.getByRole('dialog').getByLabel('Staff card').fill(code);
-  await page.getByRole('dialog').getByLabel('PIN').fill('2468');
-  await page.getByRole('button', { name: 'Clock with card' }).click();
+  await page.getByRole('dialog').getByLabel('Staff card').press('Enter');
   await expect(page.getByRole('status')).toContainText('Juma Cashier: clocked in');
   await page.getByRole('button', { name: 'Use fingerprint' }).click();
   await expect(page.getByRole('status')).toContainText('Juma Cashier: clocked out');

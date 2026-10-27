@@ -82,7 +82,7 @@ export function BusinessSettingsPage() {
           <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
             <Checkbox label="Send customers a birthday greeting (opted-in customers, 09:00)" checked={Boolean(s.crm?.birthdayGreeting?.enabled)} onChange={(v) => setS('crm', { ...s.crm, birthdayGreeting: { channel: 'sms', ...s.crm?.birthdayGreeting, enabled: v } })} />
             {s.crm?.birthdayGreeting?.enabled && <Field label="Birthday offer line"><Input className="w-80" value={s.crm?.birthdayGreeting?.offer ?? ''} placeholder="Show this SMS for 10% off today." onChange={(e) => setS('crm', { ...s.crm, birthdayGreeting: { ...s.crm?.birthdayGreeting, offer: e.target.value } })} /></Field>}
-            <Checkbox label="Staff cards also need the PIN (recommended)" checked={s.staffLogin?.cardRequiresPin ?? true} onChange={(v) => setS('staffLogin', { cardRequiresPin: v })} />
+
             <Checkbox label="Returned items go back to the shelf by default" checked={s.returns?.restockByDefault ?? true} onChange={(v) => setS('returns', { ...s.returns, restockByDefault: v })} />
           </div>
           <Field label="Daily sales summary emails" hint="Comma separated; sent at 21:00 local time" className="sm:col-span-2"><Input value={(s.dailyReportEmails ?? []).join(', ')} onChange={(e) => setS('dailyReportEmails', e.target.value.split(',').map((x: string) => x.trim()).filter(Boolean))} /></Field>

@@ -70,20 +70,20 @@ router.post('/pin-login', authLimiter, async (req, res) => {
 
 /** Staff card sign-in: scan the card barcode, then the PIN (unless the business allows card only). */
 router.post('/card-login', authLimiter, async (req, res) => {
-  const body = parse(z.object({ code: z.string().trim().min(4).max(40), pin: z.string().regex(/^\d{4,8}$/).optional() }), req.body);
-  const u = await authenticateCard(req, body.code, body.pin);
+  const body = parse(z.object({ code: z.string().trim().min(4).max(40) }).passthrough(), req.body);
+  const u = await authenticateCard(req, body.code);
   if (u.twoFactor?.enabled) throw new AppError(403, 'TWO_FACTOR_REQUIRED', 'This account uses two-step verification; sign in with email and password');
   await User.updateOne({ _id: u._id }, { $set: { failedLogins: 0, lastLoginAt: new Date() } });
   const s = await issueSession({ userType: 'tenant', userId: u._id, tenantId: req.tenant!._id, req, expiresAt: new Date(Date.now() + 16 * 3600_000) });
-  await audit(req, { action: 'auth.login', entity: 'User', entityId: u._id, details: { method: body.pin ? 'card+pin' : 'card' } });
+  await audit(req, { action: 'auth.login', entity: 'User', entityId: u._id, details: { method: 'card' } });
   setRefreshCookie(res, REFRESH_COOKIE, s.refreshToken);
   res.json({ accessToken: s.accessToken, expiresIn: s.expiresIn });
 });
 
 /** Clock in / out at the till with the staff card (the fingerprint equivalent goes through the device bridge). */
 router.post('/clock', authLimiter, async (req, res) => {
-  const body = parse(z.object({ code: z.string().trim().min(4).max(40), pin: z.string().regex(/^\d{4,8}$/).optional(), branchId: z.string().regex(/^[a-f0-9]{24}$/).optional() }), req.body);
-  const u = await authenticateCard(req, body.code, body.pin);
+  const body = parse(z.object({ code: z.string().trim().min(4).max(40), branchId: z.string().regex(/^[a-f0-9]{24}$/).optional() }).passthrough(), req.body);
+  const u = await authenticateCard(req, body.code);
   await User.updateOne({ _id: u._id }, { $set: { failedLogins: 0 } });
   const rec = await clockInOut(u._id, 'card', { branchId: body.branchId });
   res.json({ data: { name: u.name, kind: rec.kind, at: rec.at } });
@@ -117,7 +117,7 @@ router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor 
   if (body.cardCode) {
     // Scanning the supervisor's card is the approval: no PIN. The card code is long and random, and each
     // approval is single use, limited to the supervisor's permissions and branches, and audited.
-    sup = await authenticateCard(req, body.cardCode, undefined, { skipPin: true }).catch(() => null);
+    sup = await authenticateCard(req, body.cardCode).catch(() => null);
     if (!sup) throw unauthorized('Supervisor card is not recognised');
   } else {
     sup = body.email ? await User.findOne({ email: body.email, status: 'active' }) : null;

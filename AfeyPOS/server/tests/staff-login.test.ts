@@ -40,23 +40,17 @@ describe('employee cards', () => {
     managerCard = (await t.client.post(`/settings/users/${managerId}/card`, {})).body.data.code;
   });
 
-  it('signs in with card and PIN; the card alone or a wrong PIN is refused', async () => {
-    expect((await anon().post('/auth/card-login', { code: cashierCard })).body.error.code).toBe('PIN_REQUIRED');
-    expect((await anon().post('/auth/card-login', { code: cashierCard, pin: '0000' })).status).toBe(401);
-    expect((await anon().post('/auth/card-login', { code: 'AFEAAAAAAAAAAAAA', pin: '1234' })).status).toBe(401);
+  it('signs in with the card alone (no PIN); an unknown card is refused', async () => {
+    expect((await anon().post('/auth/card-login', { code: 'AFEAAAAAAAAAAAAA' })).status).toBe(401);
     // Scanners often send lower case; codes are case-insensitive.
-    const ok = await anon().post('/auth/card-login', { code: cashierCard.toLowerCase(), pin: '1234' });
+    const ok = await anon().post('/auth/card-login', { code: cashierCard.toLowerCase() });
     expect(ok.status).toBe(200);
     const me = await anon().as(ok.body.accessToken).get('/auth/me');
     expect(me.body.user.name).toBe('Cathy Cashier');
+    // An older till that still sends a PIN is not refused.
+    expect((await anon().post('/auth/card-login', { code: cashierCard, pin: '0000' })).status).toBe(200);
     const audit = await t.client.get('/audit?action=auth.login');
-    expect(audit.body.data.some((a: any) => a.details?.method === 'card+pin')).toBe(true);
-  });
-
-  it('can allow card-only sign-in when the business chooses', async () => {
-    await t.client.patch('/settings/business', { settings: { staffLogin: { cardRequiresPin: false } } });
-    expect((await anon().post('/auth/card-login', { code: cashierCard })).status).toBe(200);
-    await t.client.patch('/settings/business', { settings: { staffLogin: { cardRequiresPin: true } } });
+    expect(audit.body.data.some((a: any) => a.details?.method === 'card')).toBe(true);
   });
 
   it('a supervisor approves by scanning their card, no PIN', async () => {
@@ -76,9 +70,9 @@ describe('employee cards', () => {
   });
 
   it('clocks staff in and out with the card', async () => {
-    const a = await anon().post('/auth/clock', { code: cashierCard, pin: '1234' });
+    const a = await anon().post('/auth/clock', { code: cashierCard });
     expect(a.body.data).toMatchObject({ name: 'Cathy Cashier', kind: 'clock_in' });
-    const b = await anon().post('/auth/clock', { code: cashierCard, pin: '1234' });
+    const b = await anon().post('/auth/clock', { code: cashierCard });
     expect(b.body.data.kind).toBe('clock_out');
     const att = (await t.client.get(`/attendance?userId=${cashierId}`)).body.data;
     expect(att.map((x: any) => x.method)).toEqual(['card', 'card']);
@@ -86,18 +80,19 @@ describe('employee cards', () => {
 
   it('reissuing voids the old card; revoking stops it working', async () => {
     const fresh = (await t.client.post(`/settings/users/${cashierId}/card`, {})).body.data.code;
-    expect((await anon().post('/auth/card-login', { code: cashierCard, pin: '1234' })).status).toBe(401);
-    expect((await anon().post('/auth/card-login', { code: fresh, pin: '1234' })).status).toBe(200);
+    expect((await anon().post('/auth/card-login', { code: cashierCard })).status).toBe(401);
+    expect((await anon().post('/auth/card-login', { code: fresh })).status).toBe(200);
     expect((await t.client.delete(`/settings/users/${cashierId}/card`)).status).toBe(200);
-    expect((await anon().post('/auth/card-login', { code: fresh, pin: '1234' })).status).toBe(401);
+    expect((await anon().post('/auth/card-login', { code: fresh })).status).toBe(401);
     expect((await t.client.get(`/settings/users/${cashierId}/card`)).status).toBe(404);
   });
 
-  it('locks the account after repeated wrong PINs', async () => {
-    for (let i = 0; i < 5; i++) await anon().post('/auth/card-login', { code: managerCard, pin: '0000' });
-    expect((await anon().post('/auth/card-login', { code: managerCard, pin: '9876' })).body.error.code).toBe('ACCOUNT_LOCKED');
+  it('a locked account cannot sign in with its card either', async () => {
+    await runAsPlatform(() => User.updateOne({ _id: managerId }, { $set: { lockedUntil: new Date(Date.now() + 60_000) } }));
+    expect((await anon().post('/auth/card-login', { code: managerCard })).body.error.code).toBe('ACCOUNT_LOCKED');
     await runAsPlatform(() => User.updateOne({ _id: managerId }, { $unset: { lockedUntil: 1 }, $set: { failedLogins: 0 } }));
   });
+
 });
 
 describe('fingerprint identification (touch only, no email)', () => {

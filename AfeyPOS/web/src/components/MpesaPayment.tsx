@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api, newRequestId } from '../lib/api';
-import { money } from '../lib/format';
+import { money, mpesaPayer } from '../lib/format';
 import { Button, cx, ErrorBox, Input, Spinner } from './ui';
 
 type Mode = 'stk' | 'paybill' | 'code';
@@ -109,6 +109,7 @@ export function MpesaPanel({ amount, tillId, intent, setIntent, unallocated, use
         </div>
       )}
 
+      {mine && mine.status === 'succeeded' && <MpesaPaid intent={mine} />}
       {mine && ['failed', 'cancelled', 'expired'].includes(mine.status) && <ErrorBox error={`M-Pesa ${mine.status}: ${mine.resultDesc ?? ''}. Nothing was taken; try again or use another method.`} />}
       {amount !== null && !whole && <p className="text-xs text-amber-600">M-Pesa accepts whole shillings only.</p>}
       <ErrorBox error={error} />
@@ -118,11 +119,22 @@ export function MpesaPanel({ amount, tillId, intent, setIntent, unallocated, use
           <div className="label">Payments received to the Paybill/Till, not yet used</div>
           <ul className="space-y-1">{unallocated.filter((i) => !usedIds.includes(i.id)).map((i) => (
             <li key={i.id}><button type="button" className="flex w-full justify-between rounded border border-ink-200 px-2 py-1.5 text-sm hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800" onClick={() => onUse(i)}>
-              <span>{i.receiptNumber} · {i.payerName || i.phone}{i.accountReference ? ` · ${i.accountReference}` : ''}</span><span className="font-medium">{money(i.paidAmountCents - i.allocatedCents)}</span>
+              <span>{i.receiptNumber} · {mpesaPayer(i) || 'M-Pesa customer'}{i.accountReference ? ` · ${i.accountReference}` : ''}</span><span className="font-medium">{money(i.paidAmountCents - i.allocatedCents)}</span>
             </button></li>
           ))}</ul>
         </div>
       )}
+    </div>
+  );
+}
+
+/** The confirmation the cashier sees: amount, who paid (name and part of the number, as M-Pesa sent them), receipt. */
+export function MpesaPaid({ intent }: { intent: { paidAmountCents?: number; amountCents: number; receiptNumber?: string; payerName?: string; phone?: string } }) {
+  const who = mpesaPayer(intent);
+  return (
+    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100" role="status" data-testid="mpesa-paid">
+      <div className="font-semibold">M-Pesa payment received: {money(intent.paidAmountCents ?? intent.amountCents)}</div>
+      <div className="mt-0.5">{who ? <>From <b>{who}</b></> : 'From an M-Pesa customer'}{intent.receiptNumber ? <> · Receipt <span className="font-mono">{intent.receiptNumber}</span></> : null}</div>
     </div>
   );
 }

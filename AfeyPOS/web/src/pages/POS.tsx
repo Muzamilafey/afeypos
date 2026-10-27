@@ -8,7 +8,7 @@ import { usePublicConfig } from './Auth';
 import { useLocations } from '../lib/hooks';
 import { getWorkstation, setWorkstation } from '../lib/workstation';
 import { bridgeConfigured, fingerprint } from '../lib/bridge';
-import { money, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
+import { money, mpesaPayer, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
 import { connectRealtime, useRealtime } from '../lib/realtime';
 import { TxnStatus, type TerminalTxn } from './settings/CardTerminals';
 import { printHtml, printReceipt } from '../lib/printing';
@@ -16,7 +16,7 @@ import { CashCount, cashCountTotal, type CashCounts } from '../components/CashCo
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
-import { MpesaPanel } from '../components/MpesaPayment';
+import { MpesaPaid, MpesaPanel } from '../components/MpesaPayment';
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
@@ -842,6 +842,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   const [override, setOverride] = useState<{ permission: string; message: string } | null>(null);
   // The terminal's last answer stays on screen (e.g. "remove your card") after it paid the rest of the sale.
   const [terminalDone, setTerminalDone] = useState<TerminalTxn | null>(null);
+  const [mpesaDone, setMpesaDone] = useState<any>(null);
 
   useEffect(() => setAmount(remaining), [remaining]);
 
@@ -858,8 +859,10 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
       const label = isMpesa ? 'M-Pesa' : paymentLabel('gateway', stk.provider);
       // A customer may have paid more than is left (e.g. a code entered at the till); only what is due is used.
       const free = (stk.paidAmountCents ?? stk.amountCents) - (stk.allocatedCents ?? 0);
-      setPayments((ps) => [...ps, { method: isMpesa ? 'mpesa' : 'gateway', amountCents: Math.min(free, ps.reduce((a, p) => a - p.amountCents, total)), paymentIntentId: stk.id, label: `${label} ${stk.receiptNumber ?? ''}` }]);
-      toast.success(`${label} payment confirmed`);
+      const who = mpesaPayer(stk);
+      setPayments((ps) => [...ps, { method: isMpesa ? 'mpesa' : 'gateway', amountCents: Math.min(free, ps.reduce((a, p) => a - p.amountCents, total)), paymentIntentId: stk.id, label: `${label} ${stk.receiptNumber ?? ''}${who ? ` · ${who}` : ''}` }]);
+      toast.success(`${label} payment confirmed: ${money(stk.paidAmountCents ?? stk.amountCents)}${who ? ` from ${who}` : ''}`);
+      if (isMpesa) setMpesaDone(stk);
     }
   }, [stk, payments, toast, total]);
 
@@ -1000,7 +1003,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
               )}
               {method === 'mpesa' && (
                 <MpesaPanel amount={amount} tillId={till._id} intent={stk} setIntent={setStk} unallocated={c2b.data} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
-                  onUse={(i) => setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - (i.allocatedCents ?? 0), remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}` }])} />
+                  onUse={(i) => { setMpesaDone(i); setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - (i.allocatedCents ?? 0), remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}${mpesaPayer(i) ? ` · ${mpesaPayer(i)}` : ''}` }]); }} />
               )}
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}
               {method === 'card' && (
@@ -1036,6 +1039,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
             </div>
           )}
           {terminalDone && remaining <= 0 && <div className="mt-3"><TxnStatus txn={terminalDone} /></div>}
+          {mpesaDone && remaining <= 0 && <div className="mt-3"><MpesaPaid intent={mpesaDone} /></div>}
           <div className="mt-3"><ErrorBox error={error} /></div>
         </div>
         <div className="rounded-lg bg-ink-50 p-3 text-sm dark:bg-ink-800/50">
