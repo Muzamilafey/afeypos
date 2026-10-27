@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Navigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, download } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -10,6 +11,7 @@ import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Modal, MoneyInput
 import { ProductPicker } from '../components/ProductPicker';
 import { Icon } from '../components/icons';
 import { ReportActions } from '../components/ReportActions';
+import { CustomView, loadCustomView, REPORT_VIEWS } from './reports/ReportViews';
 
 function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void }) {
   return (
@@ -23,16 +25,24 @@ function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFro
 
 export function ReportsPage() {
   const { can, has } = useAuth();
-  const [tab, setTab] = useState('daily');
+  // Reports › <report> menu entries open one report (/reports/<view>); /reports shows every report as tabs.
+  const { view: viewKey } = useParams();
+  const view = viewKey ? REPORT_VIEWS[viewKey] : undefined;
+  const [tabState, setTab] = useState('daily');
+  const tab = view ? (view.custom ? `custom:${view.custom}` : view.tab!) : tabState;
   const [from, setFrom] = useState(daysAgoLocal(6));
   const [to, setTo] = useState(todayLocal());
-  const [groupBy, setGroupBy] = useState('day');
+  const [groupByState, setGroupBy] = useState('day');
+  const groupBy = view?.groupBy ?? (view && view.tab !== 'sales' ? 'day' : groupByState);
   const [deadDays, setDeadDays] = useState(30);
+  useEffect(() => setDeadDays(view?.days ?? 30), [viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [leadDays, setLeadDays] = useState(7);
   const period = { from, to };
   const q = useQuery({
-    queryKey: ['report', tab, from, to, groupBy, deadDays, leadDays],
+    queryKey: ['report', viewKey ?? '', tab, from, to, groupBy, deadDays, leadDays],
+    enabled: !viewKey || Boolean(view),
     queryFn: () => {
+      if (view?.custom) return loadCustomView(view.custom, period, (x) => can(x as any));
       const map: Record<string, [string, Record<string, unknown>]> = {
         sales: ['/reports/sales', { ...period, groupBy }], profit: ['/reports/profit', period], inventory: ['/reports/inventory-valuation', {}], receivables: ['/reports/receivables', {}],
         payables: ['/reports/payables', {}], exceptions: ['/reports/exceptions', period], tax: ['/reports/tax', period], branches: ['/reports/branches', period], shifts: ['/reports/shifts', period],
@@ -52,34 +62,38 @@ export function ReportsPage() {
   ];
   const d = q.data;
   const reportRef = useRef<HTMLDivElement>(null);
-  const tabLabel = tabs.find((x) => x.key === tab)?.label ?? 'Report';
+  const tabLabel = view?.title ?? tabs.find((x) => x.key === tab)?.label ?? 'Report';
+  const noPeriod = view?.noPeriod ?? ['inventory', 'receivables', 'payables', 'dead', 'reorder'].includes(tab);
   const periodText = from === to ? date(from) : `${date(from)} to ${date(to)}`;
   const reportMeta: [string, string][] = [
-    ...(!['inventory', 'receivables', 'payables', 'dead', 'reorder'].includes(tab) ? [['Period', periodText] as [string, string]] : [['As at', dateTime(new Date())] as [string, string]]),
-    ...(tab === 'sales' ? [['Grouped by', groupBy] as [string, string]] : []),
+    ...(view?.custom === 'balance' ? [['As at', date(to)] as [string, string]] : !noPeriod ? [['Period', periodText] as [string, string]] : [['As at', dateTime(new Date())] as [string, string]]),
+    ...(tab === 'sales' && !view?.groupBy ? [['Grouped by', groupBy] as [string, string]] : []),
     ...(tab === 'dead' ? [['No sale for', `${deadDays} days`] as [string, string]] : []),
     ...(tab === 'reorder' ? [['Supplier lead time', `${leadDays} days`] as [string, string]] : []),
   ];
   const csvTabs = ['sales', 'inventory', 'shifts', 'branches', 'losses', 'purchases', 'activity', 'daily', 'returns', 'performance', 'dead', 'reorder'];
   const csvPath: Record<string, string> = { sales: '/reports/sales', inventory: '/reports/inventory-valuation', daily: '/reports/daily-summary', performance: '/reports/product-performance', dead: '/reports/dead-stock', reorder: '/reports/reorder' };
+  if (viewKey && !view) return <Navigate to="/reports" replace />;
   return (
     <div>
-      <PageHeader title="Reports" subtitle="Periods use the business timezone" actions={<>
-        {d && !q.isLoading && !q.error && <ReportActions target={reportRef} title={tabLabel} meta={reportMeta} />}
-        {csvTabs.includes(tab) && <Button variant="secondary" onClick={() => download(csvPath[tab] ?? `/reports/${tab}`, `${tab}.csv`, { ...period, groupBy, days: deadDays, leadDays, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>}
+      <PageHeader title={view?.title ?? 'Reports'} subtitle={view ? `${view.subtitle}. Periods use the business timezone.` : 'Periods use the business timezone'} actions={<>
+        {d && !q.isLoading && !q.error && <ReportActions target={reportRef} title={tabLabel} subtitle={view?.subtitle} meta={reportMeta} />}
+        {view?.csv && <Button variant="secondary" onClick={() => download(view.csv!, `${viewKey}.csv`, { ...period, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>}
+        {!view?.custom && csvTabs.includes(tab) && <Button variant="secondary" onClick={() => download(csvPath[tab] ?? `/reports/${tab}`, `${tab}.csv`, { ...period, groupBy, days: deadDays, leadDays, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>}
       </>} />
-      <Tabs tabs={tabs} value={tab} onChange={setTab} />
-      {!['inventory', 'receivables', 'payables', 'dead', 'reorder'].includes(tab) && <div className="mb-4"><Period from={from} to={to} setFrom={setFrom} setTo={setTo} /></div>}
+      {!view && <Tabs tabs={tabs} value={tab} onChange={setTab} />}
+      {!noPeriod && <div className="mb-4"><Period from={from} to={to} setFrom={setFrom} setTo={setTo} /></div>}
       {tab === 'dead' && <div className="mb-4 max-w-xs"><Field label="No sale for (days)"><Input type="number" min={1} value={deadDays} onChange={(e) => setDeadDays(Math.max(1, Number(e.target.value) || 30))} /></Field></div>}
       {tab === 'reorder' && <div className="mb-4 max-w-xs"><Field label="Supplier lead time (days)"><Input type="number" min={0} value={leadDays} onChange={(e) => setLeadDays(Math.max(0, Number(e.target.value) || 0))} /></Field></div>}
       {q.isLoading ? <Loading /> : q.error ? <ErrorBox error={q.error} /> : (
         <div ref={reportRef}>
+          {view?.custom && d && <CustomView custom={view.custom} d={d} />}
           {tab === 'sales' && (
             <div className="space-y-4">
-              <Select className="max-w-xs" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} options={['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'].map((x) => ({ value: x, label: `By ${x}` }))} />
+              {!view?.groupBy && <Select className="max-w-xs" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} options={['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'].map((x) => ({ value: x, label: `By ${x}` }))} />}
               {['day', 'week', 'month', 'hour'].includes(groupBy) && <Card><BarChart data={d.data.map((r: any) => ({ label: r._id, value: r.grossCents }))} format={money} /></Card>}
               <div className="card"><DataTable rows={d.data.map((r: any, i: number) => ({ ...r, id: String(r._id ?? i) }))} columns={[
-                { key: 'k', header: groupBy, render: (r: any) => r.name ?? r._id ?? '—' },
+                { key: 'k', header: ({ cashier: 'User', customer: 'Customer', brand: 'Brand', paymentMethod: 'Payment method', salesRep: 'Sales rep' } as Record<string, string>)[groupBy] ?? groupBy[0]!.toUpperCase() + groupBy.slice(1), render: (r: any) => r.name ?? r._id ?? '—' },
                 ...(d.data[0]?.count !== undefined ? [{ key: 'c', header: 'Count', className: 'num', render: (r: any) => r.count }] : []),
                 ...(d.data[0]?.qty !== undefined ? [{ key: 'q', header: 'Qty', className: 'num', render: (r: any) => qty(r.qty) }] : []),
                 { key: 'g', header: 'Sales (incl. tax)', className: 'num', render: (r: any) => money(r.grossCents) },

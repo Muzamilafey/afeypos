@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { Types } from 'mongoose';
 import {
   AuditLog, Branch, Brand, CashMovement, Category, Customer, Expense, GoodsReceipt, LedgerEntry, PaymentIntent, Product, Sale, SaleReturn,
-  Shift, StockBatch, StockLevel, StockMovement, Supplier, User, Warehouse, Till,
+  Shift, StockBatch, StockLevel, StockMovement, StockTransfer, Supplier, User, Warehouse, Till,
 } from '../../models/index.js';
 import { objectId, parse } from '../../http/validate.js';
 import { requirePermission, requireModule } from '../../http/auth.js';
@@ -418,6 +418,37 @@ router.get('/reports/shifts', requirePermission('reports.read'), async (req, res
   const p = period(req);
   const rows = await Shift.find({ openedAt: { $gte: p.start, $lt: p.end } }).sort({ openedAt: -1 }).populate('userId', 'name').populate('tillId', 'name code').lean();
   send(res, p.format, 'shifts', rows.map((s: any) => ({ number: s.number, till: s.tillId?.name, cashier: s.userId?.name, status: s.status, openedAt: s.openedAt, closedAt: s.closedAt, openingFloatCents: s.openingFloatCents, expectedCashCents: s.expectedCashCents, countedCashCents: s.countedCashCents, varianceCents: s.varianceCents, salesCount: s.salesCount, salesTotalCents: s.salesTotalCents })));
+});
+
+/** Every sale in the period: number, time, cashier, till, customer, how it was paid, total and status. */
+router.get('/reports/transactions', requirePermission('reports.read'), async (req, res) => {
+  const p = period(req);
+  const sales = await Sale.find({ completedAt: { $gte: p.start, $lt: p.end }, ...(p.branchIds ? { branchId: { $in: p.branchIds } } : {}) }, { number: 1, completedAt: 1, cashierId: 1, tillId: 1, branchId: 1, customerId: 1, payments: 1, totalCents: 1, taxCents: 1, discountCents: 1, status: 1, lines: 1 })
+    .sort({ completedAt: -1 }).limit(5000).lean();
+  const ids = (k: string) => [...new Set(sales.map((x: any) => String(x[k] ?? '')).filter(Boolean))];
+  const [users, tills, branches, customers] = await Promise.all([
+    User.find({ _id: { $in: ids('cashierId') } }, { name: 1 }).lean(), Till.find({ _id: { $in: ids('tillId') } }, { name: 1 }).lean(),
+    Branch.find({ _id: { $in: ids('branchId') } }, { name: 1 }).lean(), Customer.find({ _id: { $in: ids('customerId') } }, { name: 1 }).lean(),
+  ]);
+  const name = (list: any[]) => new Map(list.map((x) => [String(x._id), x.name as string]));
+  const [u, t, b, c] = [name(users), name(tills), name(branches), name(customers)];
+  send(res, p.format, 'transactions', sales.map((x: any) => ({
+    number: x.number, completedAt: x.completedAt, cashier: u.get(String(x.cashierId)) ?? '', till: t.get(String(x.tillId)) ?? '', branch: b.get(String(x.branchId)) ?? '',
+    customer: x.customerId ? c.get(String(x.customerId)) ?? '' : '', items: (x.lines ?? []).reduce((n: number, l: any) => n + (l.qty ?? 0), 0),
+    paidWith: [...new Set((x.payments ?? []).map((pm: any) => pm.method))].join(', '), discountCents: x.discountCents ?? 0, taxCents: x.taxCents ?? 0, totalCents: x.totalCents, status: x.status,
+  })));
+});
+
+/** Stock transfers created in the period, with where from and to, quantities and where they stand. */
+router.get('/reports/stock-transfers', requirePermission('inventory.read'), requireModule('stockTransfers'), async (req, res) => {
+  const p = period(req);
+  const rows = await StockTransfer.find({ createdAt: { $gte: p.start, $lt: p.end } }).sort({ createdAt: -1 }).limit(5000).lean();
+  const whs = new Map((await Warehouse.find({}, { name: 1 }).lean()).map((w) => [String(w._id), w.name]));
+  send(res, p.format, 'stock-transfers', rows.map((r: any) => ({
+    number: r.number, createdAt: r.createdAt, from: whs.get(String(r.fromWarehouseId)) ?? '', to: whs.get(String(r.toWarehouseId)) ?? '',
+    products: r.lines?.length ?? 0, qty: (r.lines ?? []).reduce((n: number, l: any) => n + (l.qty ?? 0), 0),
+    status: r.status, dispatchedAt: r.dispatchedAt, receivedAt: r.receivedAt,
+  })));
 });
 
 router.get('/reports/mpesa', requirePermission('payments.reconcile'), async (req, res) => {

@@ -91,6 +91,8 @@ export function App() {
         <Route path="suppliers/:id" element={<Gate perm="suppliers.read"><PartyDetailPage kind="supplier" /></Gate>} />
         <Route path="promotions" element={<Gate perm="prices.manage" module="promotions"><PromotionsPage /></Gate>} />
         <Route path="reports" element={<Gate perm="reports.read"><ReportsPage /></Gate>} />
+        {/* One report per menu entry; each report's data checks its own permission (HR, accounts, stock…). */}
+        <Route path="reports/:view" element={<Gate module="reports"><ReportsPage /></Gate>} />
         <Route path="expenses" element={<Gate perm="expenses.manage"><ExpensesPage /></Gate>} />
         <Route path="payments/mpesa" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaPage /></Gate>} />
         <Route path="payments/online" element={<Gate perm="payments.reconcile" module="payments"><OnlinePaymentsPage /></Gate>} />

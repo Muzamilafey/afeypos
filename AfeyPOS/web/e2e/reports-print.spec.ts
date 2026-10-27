@@ -7,7 +7,7 @@ test('reports, invoices and quotations: PDF download and print on the letterhead
   await page.getByLabel('Email').fill('amina@mandera.test');
   await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('link', { name: 'Reports', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'More reports', exact: true })).toBeVisible();
   await page.goto('/reports');
   await expect(page.getByRole('heading', { name: 'Reports' })).toBeVisible();
   await expect(page.locator('[data-stat]').first()).toBeVisible();
@@ -56,3 +56,25 @@ test('reports, invoices and quotations: PDF download and print on the letterhead
   expect(inv.status()).toBe(200);
   expect(await inv.text()).toContain('RCP-000001');
 });
+
+test('the Reports menu opens each report on its own page', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  const menu = page.getByRole('navigation', { name: 'Main' });
+  await expect(menu.getByRole('button', { name: 'Reports' })).toBeVisible();
+  const reports = ['Sales Reports', 'Inventory Reports', 'Financial Reports', 'Customer Reports', 'Brand Report', 'Transaction Report', 'Profit Report', 'User Sales',
+    'Branch Sales', 'Loss Report', 'Trending Products', 'Most Selling Products', 'Not Selling (3 Days)', 'Supplier Report', 'Drawer Calculations', 'HR Reports'];
+  for (const name of reports) {
+    await menu.getByRole('link', { name, exact: true }).click();
+    await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'PDF', exact: true })).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  }
+  // A receipt of today's sales is on the transaction report, with who sold it.
+  await menu.getByRole('link', { name: 'Transaction Report', exact: true }).click();
+  await expect(page.getByRole('cell', { name: /^RCP-/ }).first()).toBeVisible();
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/reports-menu.png` });
+});
+

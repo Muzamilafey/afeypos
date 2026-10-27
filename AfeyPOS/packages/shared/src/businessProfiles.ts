@@ -312,7 +312,7 @@ export interface NavItem {
   module?: ModuleKey;
   anyModule?: ModuleKey[];
   permission?: Permission;
-  group: 'sell' | 'stock' | 'buy' | 'parties' | 'people' | 'finance' | 'admin';
+  group: 'sell' | 'stock' | 'buy' | 'parties' | 'people' | 'reports' | 'finance' | 'admin';
 }
 
 export const NAVIGATION: NavItem[] = [
@@ -353,7 +353,26 @@ export const NAVIGATION: NavItem[] = [
   { key: 'loyalty', label: 'Loyalty program', path: '/loyalty', icon: 'star', module: 'loyalty', permission: 'customers.read', group: 'parties' },
   { key: 'crm', label: 'CRM & campaigns', path: '/crm', icon: 'users', module: 'crm', permission: 'customers.read', group: 'parties' },
   { key: 'accounting', label: 'Accounts', path: '/accounting', icon: 'doc', module: 'accounting', permission: 'accounting.read', group: 'finance' },
-  { key: 'reports', label: 'Reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'finance' },
+  // Reports: one menu entry per report (pages/Finance.tsx ReportsPage, by path).
+  { key: 'reportSales', label: 'Sales Reports', path: '/reports/sales', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportInventory', label: 'Inventory Reports', path: '/reports/inventory', icon: 'chart', module: 'reports', permission: 'inventory.read', group: 'reports' },
+  { key: 'reportHr', label: 'HR Reports', path: '/reports/hr', icon: 'chart', module: 'hr', permission: 'hr.manage', group: 'reports' },
+  { key: 'reportFinancial', label: 'Financial Reports', path: '/reports/financial', icon: 'chart', module: 'reports', permission: 'reports.financial', group: 'reports' },
+  { key: 'reportCustomers', label: 'Customer Reports', path: '/reports/customers', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportBrands', label: 'Brand Report', path: '/reports/brands', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportBalance', label: 'Balance Sheet', path: '/reports/balance-sheet', icon: 'chart', module: 'accounting', permission: 'accounting.read', group: 'reports' },
+  { key: 'reportTransactions', label: 'Transaction Report', path: '/reports/transactions', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportProfit', label: 'Profit Report', path: '/reports/profit', icon: 'chart', module: 'reports', permission: 'reports.financial', group: 'reports' },
+  { key: 'reportUserSales', label: 'User Sales', path: '/reports/user-sales', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportBranchSales', label: 'Branch Sales', path: '/reports/branch-sales', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportLosses', label: 'Loss Report', path: '/reports/losses', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportTrending', label: 'Trending Products', path: '/reports/trending', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportTop', label: 'Most Selling Products', path: '/reports/most-selling', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportNotSelling', label: 'Not Selling (3 Days)', path: '/reports/not-selling', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportSuppliers', label: 'Supplier Report', path: '/reports/suppliers', icon: 'chart', module: 'suppliers', permission: 'reports.financial', group: 'reports' },
+  { key: 'reportDrawer', label: 'Drawer Calculations', path: '/reports/drawer', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportTransfers', label: 'Stock Transfer Report', path: '/reports/stock-transfers', icon: 'chart', module: 'stockTransfers', permission: 'inventory.read', group: 'reports' },
+  { key: 'reports', label: 'More reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
   { key: 'expenses', label: 'Expenses', path: '/expenses', icon: 'wallet', module: 'expenses', permission: 'expenses.manage', group: 'finance' },
   { key: 'mpesa', label: 'M-Pesa', path: '/payments/mpesa', icon: 'phone', module: 'mpesa', permission: 'payments.reconcile', group: 'finance' },
   { key: 'payouts', label: 'M-Pesa payouts', path: '/payments/payouts', icon: 'phone', module: 'mpesa', permission: 'payouts.request', group: 'finance' },
