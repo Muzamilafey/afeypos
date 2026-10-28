@@ -114,8 +114,10 @@ if (-not $up) {
 $mongoUri = "mongodb://127.0.0.1:$mongoPort/afeypos?replicaSet=rs0"
 
 Step 'Configuring, installing and building Afey POS (a few minutes the first time)'
-# An upgrade replaces files the running server uses: stop it first.
+# An upgrade replaces files the running server uses: stop it first (and keep the keeper from restarting it).
+New-Item -ItemType File -Force -Path (Join-Path $InstallDir 'server\.maintenance') | Out-Null
 Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*dist\server.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 # scripts\setup.mjs writes server\.env (new secrets the first time, existing values kept afterwards),
 # runs npm ci and the build, and initialises the database replica set.
@@ -136,12 +138,22 @@ $envFile = Join-Path $InstallDir 'server\.env'
 icacls $envFile /inheritance:r /grant:r "Administrators:F" "SYSTEM:F" | Out-Null
 Write-Host "Configuration: $envFile. BACK UP THIS FILE: without ENCRYPTION_KEY stored secrets cannot be decrypted."
 
-Step 'Registering the Afey POS service (Scheduled Task, runs at startup as SYSTEM)'
+Step 'Registering the Afey POS service (starts with Windows, restarts itself, never stops)'
+# The database service restarts by itself if it ever fails.
+sc.exe failure AfeyMongoDB reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+Set-Service -Name 'AfeyMongoDB' -StartupType Automatic
+# The task runs a keeper (installer\windows\run-server.ps1) as SYSTEM: at startup, before anyone signs in, and every
+# 5 minutes in case the keeper itself was stopped. The keeper starts the server again whenever it stops.
+$keeper = Join-Path $InstallDir 'installer\windows\run-server.ps1'
 $nodeExe = (Get-Command node).Source
-$action = New-ScheduledTaskAction -Execute $nodeExe -Argument '--env-file=.env dist\server.js' -WorkingDirectory (Join-Path $InstallDir 'server')
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName 'AfeyPOS' -Action $action -Trigger $trigger -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$keeper`" -InstallDir `"$InstallDir`" -Node `"$nodeExe`"" -WorkingDirectory $InstallDir
+$triggers = @(
+  (New-ScheduledTaskTrigger -AtStartup),
+  (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5))
+)
+$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName 'AfeyPOS' -Action $action -Trigger $triggers -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+Remove-Item (Join-Path $InstallDir 'server\.maintenance') -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName 'AfeyPOS'
 
 Step 'Scheduling a daily backup at 22:30'

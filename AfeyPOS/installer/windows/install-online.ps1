@@ -109,10 +109,14 @@ Get-File "https://codeload.github.com/$Repo/zip/$Ref" "$tmp\afeypos.zip"
 Expand-Archive -Path "$tmp\afeypos.zip" -DestinationPath "$tmp\src" -Force
 $top = (Get-ChildItem "$tmp\src" -Directory | Select-Object -First 1).FullName
 $src = if (Test-Path "$top\AfeyPOS\package.json") { "$top\AfeyPOS" } elseif (Test-Path "$top\package.json") { $top } else { Fail "The download does not contain Afey POS ($Repo, $Ref)" }
-Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $app | Out-Null
+# Leave the running server stopped while its files are replaced (install.ps1 starts it again).
+New-Item -ItemType Directory -Force -Path (Join-Path $app 'server') | Out-Null
+New-Item -ItemType File -Force -Path (Join-Path $app 'server\.maintenance') | Out-Null
+Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*dist\server.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 # Mirror the new version; keep the configuration, data and installed packages.
-robocopy $src $app /MIR /XD node_modules data .git /XF .env /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $src $app /MIR /XD node_modules data .git logs /XF .env .maintenance /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { Fail "Copying the files to $app failed (robocopy code $LASTEXITCODE)" }
 $global:LASTEXITCODE = 0
 

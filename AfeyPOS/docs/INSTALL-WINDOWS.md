@@ -30,7 +30,7 @@ This guide is for shop owners and the technician setting up the shop. One comput
    - creates the **AfeyMongoDB** Windows service as a single-node replica set (database only listens on 127.0.0.1),
    - writes `server\.env` with new random secrets (readable only by Administrators/SYSTEM),
    - installs and builds Afey POS,
-   - registers the **AfeyPOS** scheduled task that starts at boot as SYSTEM and restarts automatically if it stops,
+   - registers the **AfeyPOS** scheduled task: it runs as SYSTEM from Windows startup (before anyone signs in) and every 5 minutes, and keeps the server running: if it stops for any reason it is started again within seconds (`installer\windows\run-server.ps1`, log in `logs\keeper.log`). A branch server keeps retrying head office every 20 seconds, so sync resumes by itself when the internet returns,
    - schedules a daily backup at 22:30,
    - opens the port in Windows Firewall for Private/Domain networks.
 4. Open `http://localhost:9999` on the server, choose your business type and create the owner account.

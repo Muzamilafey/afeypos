@@ -18,3 +18,7 @@ playwright-report/
 .e2e-backups/
 .e2e-mongo/
 web/test-results/
+
+# Windows keeper logs and the maintenance flag (installer/windows/run-server.ps1)
+logs/
+server/.maintenance
