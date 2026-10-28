@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { setupApp, teardown, registerTenant, createProduct, openShift, rid, BASE, Client, type Ctx } from './helpers.js';
-import { buildStkCallback, callbackUrlProblems, urlToken } from '../src/modules/payments/mpesa.js';
+import { buildStkCallback, callbackUrlProblems, startStk, urlToken } from '../src/modules/payments/mpesa.js';
+import { resetEnv } from '../src/config/env.js';
+import { runInTenant } from '../src/lib/context.js';
 import { DarajaClient, MockMpesaGateway, explainC2BError, darajaTimestamp, stkPassword, parseStkCallback, parseDarajaDate } from '../src/integrations/mpesa/daraja.js';
 import { Tenant } from '../src/models/index.js';
 import { runAsPlatform } from '../src/lib/context.js';
@@ -287,6 +289,33 @@ describe('C2B URL registration', () => {
       expect(body).toEqual({ ShortCode: '123456', ResponseType: 'Completed', ConfirmationURL: 'https://hq.example.co.ke/c', ValidationURL: 'https://hq.example.co.ke/v' });
     } finally {
       fetchMock.mockRestore();
+    }
+  });
+
+  it('an STK prompt Safaricom refuses says why (not "could not reach M-Pesa")', async () => {
+    const cfg = (await t.client.post('/settings/integrations', { kind: 'mpesa', provider: 'daraja', name: 'Live till', environment: 'production', settings: { shortCode: '174379', type: 'till', tillNumber: '3163960' }, secrets: { consumerKey: 'k3', consumerSecret: 's3', passkey: 'p3' } })).body.data;
+    const tenant = await runAsPlatform(() => Tenant.findById(t.tenant.id).lean());
+    const start = () => runInTenant(tenant!._id, () => startStk({ tenant, clientRequestId: rid(), amountCents: 100, phone: '0712345678', configId: cfg.id }));
+    // A private / http callback address can never work with Safaricom.
+    expect(await start().catch((e) => e.code)).toBe('MPESA_CALLBACK_NOT_PUBLIC');
+    const before = process.env.API_PUBLIC_URL;
+    process.env.API_PUBLIC_URL = 'https://hq.example.co.ke';
+    resetEnv();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: any) =>
+      String(url).includes('oauth') ? new Response(JSON.stringify({ access_token: 'tok', expires_in: '3599' })) : new Response(JSON.stringify({ requestId: 'x', errorCode: '400.002.02', errorMessage: 'Bad Request - Invalid BusinessShortCode' }), { status: 400 }));
+    try {
+      const err = await start().catch((e) => e);
+      expect(err.code).toBe('MPESA_REJECTED');
+      expect(err.message).toMatch(/Invalid BusinessShortCode/);
+      expect(err.message).toMatch(/store \(head office\) number/);
+      // Buy Goods: CustomerBuyGoodsOnline to the till number.
+      const body = JSON.parse((fetchMock.mock.calls.at(-1)![1] as any).body);
+      expect(body).toMatchObject({ TransactionType: 'CustomerBuyGoodsOnline', BusinessShortCode: '174379', PartyB: '3163960', CallBackURL: expect.stringMatching(/^https:\/\/hq\.example\.co\.ke\//) });
+    } finally {
+      fetchMock.mockRestore();
+      if (before === undefined) delete process.env.API_PUBLIC_URL;
+      else process.env.API_PUBLIC_URL = before;
+      resetEnv();
     }
   });
 });

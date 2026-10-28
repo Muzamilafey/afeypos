@@ -101,6 +101,18 @@ const stkSchema = z.object({
 });
 
 /** Sends an STK Push and creates the pending intent (till checkout, account payments and online orders). */
+/** What to do about the usual Daraja refusals of an STK push. */
+function stkHint(said: string, status?: number): string {
+  const m = said.toLowerCase();
+  if (/access token|invalid credentials|401/.test(m) || status === 401) return ' Check the consumer key and secret (and that sandbox/production matches the Daraja app).';
+  if (/businessshortcode|merchant does not exist|shortcode/.test(m)) return ' Check the shortcode: for a Buy Goods till, the "shortcode" is the store (head office) number and the till number goes in "Till number".';
+  if (/password|passkey/.test(m)) return ' Check the Lipa Na M-Pesa Online passkey: it belongs to the shortcode and comes from Safaricom when STK is approved.';
+  if (/callback/.test(m)) return ' The callback address must be the public https:// address of the online server.';
+  if (/phone|partya/.test(m)) return ' Check the customer number (Safaricom line, e.g. 0712345678).';
+  if (/not.*(enabled|allowed|permitted)|product/.test(m)) return ' Ask Safaricom to enable Lipa Na M-Pesa Online (STK push) for this shortcode on the Daraja app.';
+  return '';
+}
+
 export async function startStk(opts: { tenant: any; clientRequestId: string; amountCents: number; phone: string; accountReference?: string; tillId?: unknown; branchId?: unknown; initiatedBy?: unknown; description?: string; configId?: unknown }) {
   const existing = await PaymentIntent.findOne({ clientRequestId: opts.clientRequestId });
   if (existing) return { intent: existing, replay: true };
@@ -112,10 +124,15 @@ export async function startStk(opts: { tenant: any; clientRequestId: string; amo
   const cfg = opts.configId ? await IntegrationConfig.findOne({ _id: opts.configId, kind: 'mpesa', enabled: true }) : await findActiveConfig('mpesa', branchId, till?._id);
   if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
   const tenant = opts.tenant;
+  const callbackUrl = callbackUrls(tenant._id, tenant.callbackToken).stk;
+  // Safaricom only calls public HTTPS addresses: a prompt with any other callback is always refused.
+  if (cfg.provider !== 'mock' && !/^https:\/\/(?!localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)[^/]+/i.test(callbackUrl)) {
+    throw new AppError(409, 'MPESA_CALLBACK_NOT_PUBLIC', `M-Pesa prompts need this system's public HTTPS address (now ${new URL(callbackUrl).origin}). Set API_PUBLIC_URL${env().DEPLOYMENT_MODE === 'branch' ? ' / SYNC_HQ_URL' : ''} in server/.env to the https:// address of the online server, then restart.`);
+  }
   const accountReference = (opts.accountReference || tenant.slug).replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'AFEYPOS';
   const [intent] = await PaymentIntent.create([{ source: 'stk', status: 'pending', clientRequestId: opts.clientRequestId, amountCents: opts.amountCents, phone, accountReference, shortCode: cfg.settings?.shortCode, branchId, tillId: till?._id, configId: cfg._id, initiatedBy: opts.initiatedBy }]);
   try {
-    const resp = await gatewayFor(cfg).stkPush({ amount: opts.amountCents / 100, phone, accountReference, description: opts.description ?? 'Payment', callbackUrl: callbackUrls(tenant._id, tenant.callbackToken).stk });
+    const resp = await gatewayFor(cfg).stkPush({ amount: opts.amountCents / 100, phone, accountReference, description: opts.description ?? 'Payment', callbackUrl });
     if (resp.ResponseCode !== '0') {
       await PaymentIntent.updateOne({ _id: intent._id }, { $set: { status: 'failed', resultDesc: resp.ResponseDescription, completedAt: new Date() } });
       throw unprocessable(`M-Pesa rejected the request: ${resp.ResponseDescription}`, 'MPESA_REJECTED');
@@ -125,9 +142,13 @@ export async function startStk(opts: { tenant: any; clientRequestId: string; amo
     await intent.save();
   } catch (err: any) {
     if (err instanceof AppError) throw err;
-    await PaymentIntent.updateOne({ _id: intent._id, status: 'pending' }, { $set: { status: 'failed', resultDesc: `Could not reach M-Pesa: ${err?.message}`, completedAt: new Date() } });
-    logger.warn({ err: err?.message }, 'stk push failed');
-    throw new AppError(502, 'MPESA_UNAVAILABLE', 'Could not reach M-Pesa. Try again or use another payment method.');
+    // Safaricom answered with an error (HTTP 4xx/5xx): show its reason instead of "could not reach".
+    const said = err?.body && typeof err.body === 'object' ? String((err.body as any).errorMessage ?? (err.body as any).ResponseDescription ?? (err.body as any).error_description ?? '') : '';
+    await PaymentIntent.updateOne({ _id: intent._id, status: 'pending' }, { $set: { status: 'failed', resultDesc: said || `Could not reach M-Pesa: ${err?.message}`, completedAt: new Date() } });
+    await MpesaEvent.create({ kind: 'stk_request', payload: { status: err?.status, body: err?.body, message: err?.message }, ip: 'outgoing', outcome: 'rejected', paymentIntentId: intent._id }).catch(() => undefined);
+    logger.warn({ err: err?.message, body: err?.body }, 'stk push failed');
+    if (said || (err?.status && err.status < 500)) throw unprocessable(`M-Pesa refused the prompt: ${said || err.message}.${stkHint(said, err?.status)}`, 'MPESA_REJECTED');
+    throw new AppError(502, 'MPESA_UNAVAILABLE', 'Could not reach M-Pesa. Check the internet connection and try again, or use another payment method.');
   }
   // Safety net: if no callback arrives, query the status and expire.
   const timeout = tenant.settings?.stkPendingTimeoutSeconds ?? 180;

@@ -64,7 +64,7 @@ export type PaymentIntentDoc = InstanceType<typeof PaymentIntent>;
 
 const mpesaEventSchema = new Schema(
   {
-    kind: { type: String, enum: ['stk_callback', 'c2b_validation', 'c2b_confirmation', 'stk_query', 'gateway_webhook', 'gateway_verify', 'txn_status', 'b2c_result', 'async_timeout'], required: true },
+    kind: { type: String, enum: ['stk_callback', 'c2b_validation', 'c2b_confirmation', 'stk_query', 'gateway_webhook', 'gateway_verify', 'txn_status', 'b2c_result', 'async_timeout', 'stk_request'], required: true },
     provider: String,
     configId: ObjectId,
     payload: Schema.Types.Mixed,

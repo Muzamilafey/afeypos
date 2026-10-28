@@ -5,6 +5,10 @@ export interface TemplateDef {
 
 /** Built-in templates. Tenants can override them (NotificationTemplate). Variables use {{name}}. */
 export const DEFAULT_TEMPLATES: Record<string, TemplateDef> = {
+  paymentLink: {
+    sms: '{{business}}: pay {{amount}} here: {{url}} (M-Pesa, Airtel Money or card). Ref {{reference}}',
+    email: { subject: 'Pay {{amount}} to {{business}}', body: 'Hello,\n\nPay {{amount}} to {{business}} here: {{url}}\n\nReference {{reference}}.' },
+  },
   receipt: {
     sms: '{{business}}: Receipt {{number}}. Total {{total}}. Paid {{paid}}. {{footer}}',
     email: { subject: 'Your receipt {{number}} from {{business}}', body: 'Hello {{customer}},\n\nThank you for your purchase.\n\n{{receiptText}}\n\n{{footer}}' },
