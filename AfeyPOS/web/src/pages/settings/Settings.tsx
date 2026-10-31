@@ -420,6 +420,10 @@ function C2BPanel({ config, onChanged }: { config: any; onChanged?: () => void }
 
 export function IntegrationsPage() {
   const toast = useToast();
+  const confirm = useConfirm();
+  const { me } = useAuth();
+  // Removing a connection takes its saved keys with it: owners and administrators only.
+  const isAdmin = me!.user.roles.some((r) => r === 'tenant_owner' || r === 'business_admin');
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['integrations'], queryFn: () => api<{ data: any[]; providers: Record<string, string[]>; callbackUrls: Record<string, string> }>('/settings/integrations') });
   const locs = useLocations();
@@ -529,6 +533,13 @@ export function IntegrationsPage() {
                   <Button size="sm" variant="secondary" onClick={() => { setError(null); setEdit({ ...r, secrets: {} }); }}>Configure</Button>
                   {r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => setC2b(r)}>Register C2B URLs</Button>}
                   {r.kind === 'etims' && <Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/settings/integrations/${r.id}/etims/initialize`, { body: {} }).then((x) => { toast.success(`eTIMS device initialised: SCU ${x.data.sdcId}`); q.refetch(); }).catch(toast.error)}>Initialise device</Button>}
+                  {r.enabled
+                    ? <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: `Turn off ${r.name}?`, message: 'It stops being used. Nothing is deleted and you can turn it on again.', confirmLabel: 'Turn off' })) api(`/settings/integrations/${r.id}`, { method: 'DELETE' }).then(() => { q.refetch(); toast.success('Turned off'); }).catch(toast.error); }}>Turn off</Button>
+                    : <Button size="sm" variant="secondary" onClick={() => api(`/settings/integrations/${r.id}`, { method: 'PATCH', body: { enabled: true } }).then(() => { q.refetch(); toast.success('Turned on'); }).catch(toast.error)}>Turn on</Button>}
+                  {isAdmin && <Button size="sm" variant="danger" onClick={async () => {
+                    if (!(await confirm({ title: `Remove ${r.name}?`, message: 'The connection and its saved keys are deleted for good. Payments already taken keep their records. This cannot be undone.', confirmLabel: 'Remove', danger: true }))) return;
+                    api(`/settings/integrations/${r.id}?remove=true`, { method: 'DELETE' }).then(() => { q.refetch(); toast.success(`${r.name} removed`); }).catch(toast.error);
+                  }}><Icon name="trash" className="h-3.5 w-3.5" />Remove</Button>}
                 </div>
               </article>
             ))}

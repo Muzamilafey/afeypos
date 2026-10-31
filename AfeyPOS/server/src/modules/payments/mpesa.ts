@@ -23,7 +23,7 @@ import { logger } from '../../lib/logger.js';
 import { emitToTenant } from '../../realtime/socket.js';
 import { enqueue, registerJob } from '../../jobs/queue.js';
 import { DarajaClient, MockMpesaGateway, parseAsyncResult, parseDarajaDate, parseStkCallback, splitParty, stkResultToStatus, type MpesaGateway } from '../../integrations/mpesa/daraja.js';
-import { findActiveConfig, openSecrets } from '../integrations/configs.js';
+import { configsForTill, findActiveConfig, openSecrets } from '../integrations/configs.js';
 import { handleB2CResult } from './payouts.js';
 import { finalizeIntent, presentIntent } from './intents.js';
 import { verifyGatewayIntent } from './gateways.js';
@@ -158,8 +158,11 @@ export async function startStk(opts: { tenant: any; clientRequestId: string; amo
 }
 
 router.post('/payments/mpesa/stk', requirePermission('sales.create'), async (req, res) => {
-  const body = parse(stkSchema, req.body);
-  const { intent, replay } = await startStk({ tenant: req.tenant!, clientRequestId: body.clientRequestId, amountCents: body.amountCents, phone: body.phone, accountReference: body.accountReference, tillId: body.tillId, initiatedBy: req.auth!.userId });
+  const body = parse(stkSchema.extend({ configId: objectId.optional() }), req.body);
+  // With more than one M-Pesa account the cashier picks which one the prompt is for.
+  const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
+  const cfg = body.configId ? await tillConfig(till ?? { _id: null }, body.configId) : null;
+  const { intent, replay } = await startStk({ tenant: req.tenant!, clientRequestId: body.clientRequestId, amountCents: body.amountCents, phone: body.phone, accountReference: body.accountReference, tillId: body.tillId, configId: cfg?._id, initiatedBy: req.auth!.userId });
   if (replay) {
     res.json({ data: presentIntent(intent), replay: true });
     return;
@@ -260,17 +263,49 @@ export function buildStkCallback(checkoutRequestId: string, merchantRequestId: s
 }
 
 /** How customers pay this till without a prompt: Paybill number + account, or Buy Goods till number. */
+/**
+ * Configs that collect into the same Paybill/Till number. Several may exist (one per branch on one Safaricom
+ * shortcode, or a Paybill and a Till side by side), and a payment to that number belongs to all of them: matching
+ * a till's waiting payment must not depend on which config was picked.
+ */
+export async function siblingConfigIds(cfg: { _id: unknown; settings?: any }): Promise<Types.ObjectId[]> {
+  const number = String(cfg.settings?.type === 'till' ? (cfg.settings?.tillNumber ?? cfg.settings?.shortCode) : cfg.settings?.shortCode);
+  const all = await IntegrationConfig.find({ kind: 'mpesa' }, { settings: 1 }).lean();
+  const ids = all.filter((c) => String(c.settings?.type === 'till' ? (c.settings?.tillNumber ?? c.settings?.shortCode) : c.settings?.shortCode) === number).map((c) => c._id);
+  return ids.length ? ids : [cfg._id as Types.ObjectId];
+}
+
 function payTo(cfg: InstanceType<typeof IntegrationConfig>) {
   const till = cfg.settings?.type === 'till';
   return { type: till ? 'till' : 'paybill', number: String(till ? (cfg.settings?.tillNumber ?? cfg.settings?.shortCode) : cfg.settings?.shortCode) };
 }
+
+/** The M-Pesa account this till uses: the one the cashier chose (it must be one of the till's), else its default. */
+async function tillConfig(till: { _id: unknown; branchId?: unknown }, configId?: unknown) {
+  const allowed = await configsForTill('mpesa', till.branchId as Types.ObjectId, till._id as Types.ObjectId);
+  if (!allowed.length) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+  if (!configId) return allowed[0]!;
+  const chosen = allowed.find((c) => String(c._id) === String(configId));
+  if (!chosen) throw badRequest('That M-Pesa account cannot be used at this till');
+  return chosen;
+}
+
+/** The M-Pesa accounts a till may take money with (so the cashier can choose when there is more than one). */
+router.get('/payments/mpesa/accounts', requirePermission('sales.create'), async (req, res) => {
+  const q = parse(z.object({ tillId: objectId.optional() }), req.query);
+  const till = q.tillId ? await Till.findById(q.tillId).lean() : null;
+  const configs = await configsForTill('mpesa', till?.branchId, till?._id);
+  res.json({
+    data: configs.map((c, i) => ({ id: c._id, name: c.name, environment: c.environment, isDefault: i === 0, payTo: payTo(c), stk: c.provider === 'mock' || Boolean(openSecrets(c).passkey) })),
+  });
+});
 
 /**
  * The till waits for the customer to pay the Paybill/Till themselves. Paybill: we give an account number
  * to type, so the payment matches this sale exactly. Buy Goods: matched by amount (see handleC2B).
  */
 router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (req, res) => {
-  const body = parse(z.object({ clientRequestId: z.string().min(8).max(100), amountCents: positiveCents.refine((v) => v >= 100 && v % 100 === 0, 'M-Pesa amounts must be whole shillings'), tillId: objectId }), req.body);
+  const body = parse(z.object({ clientRequestId: z.string().min(8).max(100), amountCents: positiveCents.refine((v) => v >= 100 && v % 100 === 0, 'M-Pesa amounts must be whole shillings'), tillId: objectId, configId: objectId.optional() }), req.body);
   const existing = await PaymentIntent.findOne({ clientRequestId: body.clientRequestId }).lean();
   if (existing) {
     res.json({ data: presentIntent(existing), replay: true });
@@ -278,8 +313,7 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   }
   const till = await Till.findById(body.tillId).lean();
   if (!till) throw notFound('Till');
-  const cfg = await findActiveConfig('mpesa', till.branchId, till._id);
-  if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+  const cfg = await tillConfig(till, body.configId);
   const to = payTo(cfg);
   // Short and easy to type on a phone: till code + 4 digits, unique among waiting payments.
   let account = '';
@@ -519,7 +553,7 @@ export async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: stri
       payerName: [payload.FirstName, payload.MiddleName, payload.LastName].filter(Boolean).join(' '),
       transactionDate: parseDarajaDate(String(payload.TransTime ?? '')),
     };
-    const waiting = { configId: cfg._id, source: 'c2b', awaiting: 'expected', status: 'pending' };
+    const waiting = { configId: { $in: await siblingConfigIds(cfg) }, source: 'c2b', awaiting: 'expected', status: 'pending' };
     let expected = billRef ? await PaymentIntent.findOne({ ...waiting, accountReference: billRef }) : null;
     if (!expected && cfg.settings?.type === 'till') {
       const candidates = await PaymentIntent.find({ ...waiting, amountCents: cents, createdAt: { $gt: new Date(Date.now() - 30 * 60_000) } }).limit(2);
@@ -668,7 +702,7 @@ export async function matchExpectedToReceived(expected: PaymentIntentDoc): Promi
   if (!cfg) return false;
   const since = new Date(new Date(expected.createdAt as unknown as Date).getTime() - 2 * 60_000);
   const filter: Record<string, unknown> = {
-    configId: cfg._id, source: 'c2b', awaiting: { $exists: false }, status: 'succeeded', allocatedCents: 0,
+    configId: { $in: await siblingConfigIds(cfg) }, source: 'c2b', awaiting: { $exists: false }, status: 'succeeded', allocatedCents: 0,
     allocatedTo: { $exists: false }, onlineOrderId: { $exists: false }, receiptNumber: { $type: 'string' }, completedAt: { $gte: since },
   };
   if (cfg.settings?.type === 'till') filter.paidAmountCents = expected.amountCents;

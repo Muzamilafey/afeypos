@@ -34,6 +34,19 @@ export async function findActiveConfig(kind: IntegrationKind, branchId?: Types.O
   return general.find((c) => c.branchIds.length === 0) ?? general[0] ?? null;
 }
 
+/** Every M-Pesa account a till may use: its own, then its branch's, then the ones for all branches. */
+export async function configsForTill(kind: IntegrationKind, branchId?: Types.ObjectId | null, tillId?: Types.ObjectId | string | null) {
+  const configs = await IntegrationConfig.find({ kind, enabled: true }).sort({ isDefault: -1, createdAt: 1 });
+  const same = (a: unknown, b: unknown) => String(a) === String(b);
+  const own = tillId ? configs.filter((c) => (c.tillIds ?? []).some((t) => same(t, tillId))) : [];
+  const general = configs.filter((c) => !(c.tillIds ?? []).length);
+  const branch = branchId ? general.filter((c) => c.branchIds.some((b) => same(b, branchId))) : [];
+  const all = general.filter((c) => c.branchIds.length === 0);
+  // A till's own account comes first, then its branch's, then the shared ones; the first is the default.
+  const seen = new Set<string>();
+  return [...own, ...branch, ...all].filter((c) => !seen.has(String(c._id)) && seen.add(String(c._id)));
+}
+
 /** API representation: never exposes secrets, only which secret fields are set. */
 export function presentConfig(c: IntegrationConfigDoc) {
   const secretKeys = Object.keys(openSecrets(c));

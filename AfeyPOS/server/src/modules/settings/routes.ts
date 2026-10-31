@@ -7,7 +7,7 @@ import {
 } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { requireModule, requirePermission, signedIn } from '../../http/auth.js';
-import { AppError, badRequest, forbidden, notFound } from '../../lib/errors.js';
+import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { hashPassword } from '../../lib/crypto.js';
 import { runAsPlatform } from '../../lib/context.js';
@@ -26,7 +26,7 @@ import { explainC2BError } from '../../integrations/mpesa/daraja.js';
 import { notify } from '../notifications/service.js';
 import { DEFAULT_TEMPLATES } from '../notifications/templates.js';
 import { receiptContext, renderReceiptHtml, renderReceiptText, sampleSale } from '../hardware/receipt.js';
-import { CashMovement, Sale } from '../../models/index.js';
+import { CashMovement, PaymentIntent, Sale } from '../../models/index.js';
 import { checkUserAccessChange, roleRoutes } from './roles.js';
 
 const showKeys = ['logo', 'tagline', 'address', 'phone', 'email', 'taxPin', 'cashier', 'till', 'branch', 'customer', 'sku', 'unitPrice', 'itemCount', 'taxSummary', 'savings', 'loyalty', 'barcode', 'qr', 'poweredBy'] as const;
@@ -370,8 +370,28 @@ router.patch('/settings/integrations/:id', requirePermission('integrations.manag
   res.json({ data: presentConfig(cfg) });
 });
 
+/**
+ * Turns an integration off (the default), or removes it for good with ?remove=true. Removing takes its stored
+ * keys with it and is only for owners and administrators; payments already taken keep working, as each one
+ * remembers what it was paid into.
+ */
 router.delete('/settings/integrations/:id', requirePermission('integrations.manage'), async (req, res) => {
-  const r = await IntegrationConfig.findOneAndUpdate({ _id: idParam(req.params.id) }, { $set: { enabled: false } }, { new: true });
+  const id = idParam(req.params.id);
+  if (req.query.remove === 'true') {
+    if (!req.auth!.roles.includes('tenant_owner') && !req.auth!.roles.includes('business_admin')) throw forbidden('Only owners and administrators can remove an integration');
+    const r = await IntegrationConfig.findById(id);
+    if (!r) throw notFound('Integration');
+    // M-Pesa with money still coming in: turn it off instead, so late payments are still recognised.
+    if (r.kind === 'mpesa') {
+      const waiting = await PaymentIntent.countDocuments({ configId: r._id, status: 'pending' });
+      if (waiting) throw unprocessable(`${r.name} has ${waiting} payment${waiting === 1 ? '' : 's'} still waiting. Finish or cancel them first, or just disable it.`, 'INTEGRATION_IN_USE');
+    }
+    await IntegrationConfig.deleteOne({ _id: r._id });
+    await audit(req, { action: 'integration.removed', entity: 'IntegrationConfig', entityId: r._id, details: { kind: r.kind, provider: r.provider, name: r.name } });
+    res.json({ data: { id: r._id, removed: true } });
+    return;
+  }
+  const r = await IntegrationConfig.findOneAndUpdate({ _id: id }, { $set: { enabled: false } }, { new: true });
   if (!r) throw notFound('Integration');
   await audit(req, { action: 'integration.disabled', entity: 'IntegrationConfig', entityId: r._id });
   res.json({ data: presentConfig(r) });

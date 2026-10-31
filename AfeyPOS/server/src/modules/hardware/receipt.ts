@@ -296,6 +296,24 @@ export function renderReceiptText(tenant: ReceiptTenant, sale: ReceiptSale, opts
   return [...lines, '', ...end].join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
+/** A short slip proving the chosen printer works (and the drawer opens), printed from Hardware → This computer. */
+export function testSlipEscPos(business: string, printer: string, width: number, openDrawer: boolean): Buffer {
+  const b = new EscPosBuilder(width);
+  b.align('center').size(true).bold(true).line('TEST PRINT');
+  b.size(false).line(business).line();
+  b.align('left').line(`Printer: ${printer.slice(0, width)}`);
+  b.line(`Printed: ${new Date().toLocaleString('en-KE', { dateStyle: 'medium', timeStyle: 'short' })}`);
+  b.line('-'.repeat(width));
+  b.line('If you can read this, receipts will print');
+  b.line('here by themselves after every sale.');
+  if (openDrawer) {
+    b.line('The cash drawer should have opened.');
+    b.openDrawer();
+  }
+  b.feed(3).cut();
+  return b.build();
+}
+
 export function renderReceiptEscPos(tenant: ReceiptTenant, sale: ReceiptSale, opts: ReceiptOptions = {}): Buffer {
   const model = buildModel(tenant, sale, opts);
   const width = opts.width ?? RECEIPT_WIDTH_CHARS[model.s.paper];

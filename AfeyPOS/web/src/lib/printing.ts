@@ -6,9 +6,10 @@ import { api } from './api';
 import { bridge } from './bridge';
 import { getWorkstation } from './workstation';
 
-export type PrintMode = 'dialog' | 'silent' | 'bridge' | 'network';
+export type PrintMode = 'dialog' | 'silent' | 'bridge' | 'network' | 'server';
 
 export const PRINT_MODES: { value: PrintMode; label: string; help: string }[] = [
+  { value: 'server', label: 'Printer on the Afey POS computer', help: 'Pick one of the printers installed on the computer running Afey POS. Receipts print by themselves, with no print window and no extra software. For shop installations.' },
   { value: 'bridge', label: 'Straight to the receipt printer (device bridge)', help: 'USB, network or installed printers through the Afey device bridge on this PC. No print window; opens the cash drawer on cash sales.' },
   { value: 'network', label: 'Network printer of this till (from the server)', help: 'The server sends ESC/POS to the printer set for this till under Hardware (IP address, port 9100). For local installations.' },
   { value: 'silent', label: 'Browser, without the print window (kiosk printing)', help: 'Prints the receipt page to the default printer at once. Needs Chrome or Edge started with --kiosk-printing (see below).' },
@@ -16,6 +17,9 @@ export const PRINT_MODES: { value: PrintMode; label: string; help: string }[] = 
 ];
 
 export const printMode = (): PrintMode => getWorkstation().printMode ?? (getWorkstation().bridgeUrl ? 'bridge' : 'dialog');
+
+/** Receipts print straight to a printer (no print window) in these modes. */
+export const printsDirectly = () => ['bridge', 'network', 'server'].includes(printMode());
 
 /** Prints an HTML page through a hidden frame (no pop-up window). With --kiosk-printing it prints silently. */
 export async function printHtml(path: string) {
@@ -48,6 +52,10 @@ export async function printReceipt(id: string, opts: { kind?: 'sale' | 'return';
     if (mode === 'bridge') {
       const r = await api<{ data: { base64: string } }>(`${base}?format=escpos${width}`);
       await bridge('/print/raw', { printer: 'receipt', base64: r.data.base64 }, 20_000);
+      return 'printer';
+    }
+    if (mode === 'server' && w.serverPrinter && opts.kind !== 'return') {
+      await api(`/sales/${id}/print`, { body: { tillId: opts.tillId ?? w.tillId, reprint: Boolean(opts.reprint), localPrinter: w.serverPrinter, width: w.receiptWidth, openDrawer: w.openDrawerOnCash !== false } });
       return 'printer';
     }
     if (mode === 'network' && opts.kind !== 'return' && (opts.tillId ?? w.tillId)) {

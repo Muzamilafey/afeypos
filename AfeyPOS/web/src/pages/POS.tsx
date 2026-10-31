@@ -16,7 +16,7 @@ import { CashCount, cashCountTotal, type CashCounts } from '../components/CashCo
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
-import { MpesaPaid, MpesaPanel } from '../components/MpesaPayment';
+import { MpesaPaid, MpesaPanel, type MpesaAccount } from '../components/MpesaPayment';
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
@@ -861,6 +861,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
     }
   }, [stk, payments, toast, total]);
 
+  const mpesaAccounts = useQuery({ queryKey: ['mpesa-accounts', till._id], queryFn: () => api<{ data: MpesaAccount[] }>('/payments/mpesa/accounts', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('mpesa'), staleTime: 60_000 });
   const gateways = useQuery({ queryKey: ['gateways', till._id], queryFn: () => api<{ data: GatewayOption[] }>('/payments/gateways', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('payments'), staleTime: 60_000 });
 
   const methods = [
@@ -996,7 +997,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
                 </>
               )}
               {method === 'mpesa' && (
-                <MpesaPanel amount={amount} tillId={till._id} intent={stk} setIntent={setStk} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
+                <MpesaPanel amount={amount} tillId={till._id} accounts={mpesaAccounts.data ?? []} intent={stk} setIntent={setStk} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
                   onUse={(i) => { setMpesaDone(i); setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - (i.allocatedCents ?? 0), remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}${mpesaPayer(i) ? ` · ${mpesaPayer(i)}` : ''}` }]); }} />
               )}
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}

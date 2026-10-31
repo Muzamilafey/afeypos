@@ -5,10 +5,11 @@ import { HardwareDevice, Sale, Till, Tenant } from '../../models/index.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
+import { listLocalPrinters, printToLocalPrinter, serverHasPrinters } from './localPrinter.js';
 import { audit } from '../../lib/audit.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { env } from '../../config/env.js';
-import { receiptContext, renderReceiptEscPos, renderReceiptHtml, renderReceiptText } from './receipt.js';
+import { receiptContext, renderReceiptEscPos, renderReceiptHtml, renderReceiptText, testSlipEscPos } from './receipt.js';
 import { EscPosBuilder } from './escpos.js';
 
 const router = Router();
@@ -127,19 +128,48 @@ router.get('/sales/:id/receipt', requirePermission('sales.read'), async (req, re
 });
 
 /** Server-side printing to the till's network receipt printer (local installations). */
+/** Prints a receipt from the server: to a printer installed on this computer, or to the till's network printer. */
 router.post('/sales/:id/print', requirePermission('sales.read'), async (req, res) => {
-  const body = parse(z.object({ tillId: objectId, reprint: z.boolean().default(false) }), req.body);
+  const body = parse(z.object({ tillId: objectId.optional(), reprint: z.boolean().default(false), localPrinter: z.string().trim().max(120).optional(), width: z.number().int().min(24).max(96).optional(), openDrawer: z.boolean().optional() }), req.body);
   const sale = await Sale.findById(idParam(req.params.id)).lean();
   if (!sale) throw notFound('Sale');
+  const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
+  const ctx = await receiptContext(tenant as any, sale);
+  const cash = sale.payments.some((p) => p.method === 'cash');
+  if (body.localPrinter) {
+    const bytes = renderReceiptEscPos(tenant as any, sale as any, { ...ctx, reprint: body.reprint, width: body.width, openDrawer: !body.reprint && body.openDrawer !== false && cash });
+    await printToLocalPrinter(body.localPrinter, bytes);
+    if (body.reprint) await audit(req, { action: 'sale.receipt_reprinted', entity: 'Sale', entityId: sale._id });
+    res.json({ ok: true, printer: body.localPrinter });
+    return;
+  }
+  if (!body.tillId) throw badRequest('Choose the till, or a printer on this computer');
   const till = await Till.findById(body.tillId).lean();
   const printer = till?.receiptPrinterId ? await HardwareDevice.findById(till.receiptPrinterId).lean() : await HardwareDevice.findOne({ kind: 'receipt_printer', tillId: body.tillId, active: true }).lean();
   if (!printer || printer.connection !== 'network' || !printer.settings?.host) throw new AppError(409, 'NO_NETWORK_PRINTER', 'No network receipt printer is configured for this till; use browser printing');
   assertNetworkPrintingAllowed(printer.settings.host);
-  const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
-  const ctx = await receiptContext(tenant as any, sale);
-  const bytes = renderReceiptEscPos(tenant as any, sale as any, { ...ctx, reprint: body.reprint, width: printer.settings.width ?? undefined, openDrawer: !body.reprint && printer.settings.openDrawerOnCash !== false && sale.payments.some((p) => p.method === 'cash') });
+  const bytes = renderReceiptEscPos(tenant as any, sale as any, { ...ctx, reprint: body.reprint, width: printer.settings.width ?? undefined, openDrawer: !body.reprint && printer.settings.openDrawerOnCash !== false && cash });
   await sendRaw(printer.settings.host, printer.settings.port ?? 9100, bytes);
   if (body.reprint) await audit(req, { action: 'sale.receipt_reprinted', entity: 'Sale', entityId: sale._id });
+  res.json({ ok: true });
+});
+
+/** The printers installed on the computer Afey POS runs on, for a till to choose from. */
+router.get('/hardware/printers/local', requirePermission('sales.create'), async (_req, res) => {
+  if (!serverHasPrinters()) {
+    res.json({ data: { available: false, reason: 'This is the online head-office server, which has no printers. Use the till’s network printer or the Afey device bridge.', printers: [] } });
+    return;
+  }
+  const printers = await listLocalPrinters();
+  res.json({ data: { available: true, ...(printers.length ? {} : { reason: 'No printer is installed on the Afey POS computer yet. Install the receipt printer in Windows (or CUPS), then look again.' }), printers } });
+});
+
+/** Prints a test slip so the cashier can see the chosen printer works, and the drawer opens. */
+router.post('/hardware/printers/local/test', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({ printer: z.string().trim().min(1).max(120), width: z.number().int().min(24).max(96).optional(), openDrawer: z.boolean().default(false) }), req.body);
+  const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
+  await printToLocalPrinter(body.printer, testSlipEscPos(tenant?.name ?? 'Afey POS', body.printer, body.width ?? 32, body.openDrawer));
+  await audit(req, { action: 'hardware.printer_tested', details: { printer: body.printer } });
   res.json({ ok: true });
 });
 

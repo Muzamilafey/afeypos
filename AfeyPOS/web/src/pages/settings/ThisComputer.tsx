@@ -9,6 +9,7 @@ import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { dateTime } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Modal, Select, useToast } from '../../components/ui';
+import { Icon } from '../../components/icons';
 
 type BridgePrinter = { type: 'system'; name: string } | { type: 'network'; host: string; port?: number } | { type: 'device'; path: string } | { type: 'windows-share'; share: string };
 
@@ -22,6 +23,14 @@ export function ReceiptPrinterCard() {
   const [auto, setAuto] = useState(Boolean(getWorkstation().autoPrint));
   const [width, setWidth] = useState(getWorkstation().receiptWidth ?? 42);
   const paired = bridgeConfigured();
+  // Printers installed on the computer Afey POS runs on: a shop install can print to them with nothing else to set up.
+  const [serverPrinter, setServerPrinter] = useState(getWorkstation().serverPrinter ?? '');
+  const [drawer, setDrawer] = useState(getWorkstation().openDrawerOnCash !== false);
+  const local = useQuery({
+    queryKey: ['local-printers'],
+    queryFn: () => api<{ data: { available: boolean; reason?: string; printers: { name: string; isDefault: boolean; port?: string }[] } }>('/hardware/printers/local').then((r) => r.data),
+    enabled: mode === 'server', retry: false,
+  });
   const printers = useQuery({ queryKey: ['bridge-printers'], queryFn: () => bridge<{ configured: Record<string, BridgePrinter>; system: { name: string; default?: boolean; port?: string }[]; devices: string[] }>('/printers', undefined, 15_000), enabled: mode === 'bridge' && paired, retry: false });
   const current = printers.data?.configured?.receipt;
   const [choice, setChoice] = useState<string>('');
@@ -78,6 +87,35 @@ export function ReceiptPrinterCard() {
               <p className="mt-2 text-xs text-ink-500">Thermal printers installed in Windows (any driver, or "Generic / Text Only") and CUPS printers on Linux/macOS are listed. The bridge sends the receipt as a raw ESC/POS job, so it prints at once with the logo-free thermal layout and cuts the paper.</p>
             </>
           )}
+        </div>
+      )}
+      {mode === 'server' && (
+        <div className="mt-4 rounded-lg border border-ink-100 p-3 dark:border-ink-800">
+          {local.isLoading ? <p className="text-sm text-ink-500">Looking for printers on the Afey POS computer…</p>
+            : local.isError ? <ErrorBox error={local.error} />
+              : !local.data?.available ? <p className="text-sm text-amber-700">{local.data?.reason}</p>
+                : (
+                  <>
+                    <p className="mb-2 text-sm">This till prints to: <b data-testid="server-printer">{serverPrinter || 'Not chosen yet'}</b></p>
+                    <div className="grid items-end gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                      <Field label="Printer on the Afey POS computer">
+                        <Select value={serverPrinter} onChange={(e) => { setServerPrinter(e.target.value); save({ serverPrinter: e.target.value }); }} placeholder="Choose a printer"
+                          options={(local.data.printers ?? []).map((p) => ({ value: p.name, label: `${p.name}${p.isDefault ? ' (default)' : ''}${p.port ? ` · ${p.port}` : ''}` }))} />
+                      </Field>
+                      <Button variant="secondary" onClick={() => local.refetch()}><Icon name="refresh" className="h-4 w-4" />Look again</Button>
+                      <Button loading={busy} disabled={!serverPrinter} onClick={async () => {
+                        setBusy(true);
+                        try {
+                          await api('/hardware/printers/local/test', { body: { printer: serverPrinter, width, openDrawer: drawer } });
+                          toast.success('Test slip sent: check the printer');
+                        } catch (e) { toast.error(e); } finally { setBusy(false); }
+                      }}>Print test</Button>
+                    </div>
+                    {!local.data.printers.length && <p className="mt-2 text-sm text-amber-700">{local.data.reason}</p>}
+                    <div className="mt-3"><Checkbox label="Open the cash drawer on cash sales" checked={drawer} onChange={(v) => { setDrawer(v); save({ openDrawerOnCash: v }); }} /></div>
+                    <p className="mt-2 text-xs text-ink-500">The printer is remembered on this device only, so each till can use its own. Receipts are sent as a raw ESC/POS job: they print at once, with no print window, and the paper is cut.</p>
+                  </>
+                )}
         </div>
       )}
       {mode === 'silent' && (

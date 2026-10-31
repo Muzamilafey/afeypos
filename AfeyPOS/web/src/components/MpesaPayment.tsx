@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api, newRequestId } from '../lib/api';
 import { dateTime, money, mpesaPayer } from '../lib/format';
-import { Button, cx, ErrorBox, Input, Spinner } from './ui';
+import { Button, cx, ErrorBox, Field, Input, Select, Spinner } from './ui';
 import { Icon } from './icons';
 
 type Mode = 'stk' | 'paybill' | 'code';
@@ -21,15 +21,22 @@ const MODES: { key: Mode; label: string; hint: string; icon: string }[] = [
  * Payments that reached the Paybill/Till without a sale are not listed at the till (anyone could pick a
  * stranger's payment): the cashier finds one only by its M-Pesa code, checks the name and amount, then uses it.
  */
-export function MpesaPanel({ amount, tillId, intent, setIntent, usedIds, onUse }: {
+export interface MpesaAccount { id: string; name: string; environment: string; isDefault: boolean; payTo: { type: 'paybill' | 'till'; number: string }; stk: boolean }
+
+export function MpesaPanel({ amount, tillId, accounts = [], intent, setIntent, usedIds, onUse }: {
   amount: number | null;
   tillId: string;
+  /** Every M-Pesa account this till may use; the cashier picks one when there is more than one. */
+  accounts?: MpesaAccount[];
   intent: any;
   setIntent: (i: any) => void;
   usedIds: string[];
   onUse: (i: any) => void;
 }) {
   const [mode, setMode] = useState<Mode>('stk');
+  const [accountId, setAccountId] = useState('');
+  const account = accounts.find((a) => a.id === accountId) ?? accounts[0];
+  const configId = accounts.length > 1 ? account?.id : undefined;
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [found, setFound] = useState<any>(null);
@@ -50,8 +57,8 @@ export function MpesaPanel({ amount, tillId, intent, setIntent, usedIds, onUse }
       setBusy(false);
     }
   };
-  const startStk = () => call(async () => setIntent((await api<{ data: any }>('/payments/mpesa/stk', { body: { clientRequestId: newRequestId(), amountCents: amount, phone, tillId } })).data));
-  const expect = () => call(async () => setIntent((await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId } })).data));
+  const startStk = () => call(async () => setIntent((await api<{ data: any }>('/payments/mpesa/stk', { body: { clientRequestId: newRequestId(), amountCents: amount, phone, tillId, configId } })).data));
+  const expect = () => call(async () => setIntent((await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId } })).data));
   const lookup = () => call(async () => {
     setFound(null);
     const r = await api<{ data: any; found: boolean }>('/payments/mpesa/lookup', { body: { receipt: code.trim().toUpperCase(), clientRequestId: newRequestId(), tillId } });
@@ -87,6 +94,12 @@ export function MpesaPanel({ amount, tillId, intent, setIntent, usedIds, onUse }
       )}
 
       <div className="space-y-3 p-4">
+        {!pending && accounts.length > 1 && (
+          <Field label="M-Pesa account" hint="Which Paybill or Till the money goes to">
+            <Select value={account?.id ?? ''} onChange={(e) => setAccountId(e.target.value)}
+              options={accounts.map((a) => ({ value: a.id, label: `${a.name} · ${a.payTo.type === 'till' ? 'Till' : 'Paybill'} ${a.payTo.number}${a.environment === 'sandbox' ? ' (test)' : ''}` }))} />
+          </Field>
+        )}
         {!pending && <p className="text-sm text-ink-500 dark:text-ink-400">{current.hint}</p>}
 
         {pending && mine.source === 'stk' && (
@@ -121,6 +134,9 @@ export function MpesaPanel({ amount, tillId, intent, setIntent, usedIds, onUse }
           </div>
         )}
 
+        {!pending && mode === 'stk' && account && !account.stk && (
+          <p className="text-xs text-amber-600">{account.name} has no Lipa Na M-Pesa passkey, so it cannot send a prompt. Use “Customer pays Paybill/Till”, or add the passkey in Settings → Integrations.</p>
+        )}
         {!pending && mode === 'stk' && (
           <div className="flex gap-2">
             <Input className={field} placeholder="Customer phone, e.g. 0712 345 678" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" aria-label="Customer phone"
