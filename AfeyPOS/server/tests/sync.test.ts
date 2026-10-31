@@ -130,11 +130,27 @@ describe('branch server bootstrap', () => {
     expect(lookup.body.data.stock.qty).toBe(50);
   });
 
-  it('refuses to edit head-office data on the branch', async () => {
-    const r = await branch.post('/products', { name: 'Local item', sku: 'LOC1', prices: { retail: 100 } });
-    expect(r.status).toBe(409);
-    expect(r.body.error.code).toBe('MANAGED_AT_HQ');
-    expect((await branch.post('/settings/users', { name: 'X', email: 'x@y.z', roles: ['cashier'] })).body.error.code).toBe('MANAGED_AT_HQ');
+  it('staff at the branch cannot edit head-office data, but an owner or administrator can, and it reaches HQ', async () => {
+    await hq.client.post('/settings/users', { name: 'Mary Manager', email: 'mary@chain.test', password: 'MaryPass12345', roles: ['branch_manager'], extraPermissions: ['products.manage', 'users.manage'] });
+    await runSync();
+    const mgr = new Client(branch.api, 'branch');
+    await mgr.login('mary@chain.test', 'MaryPass12345');
+    const refused = await mgr.post('/products', { name: 'Local item', sku: 'LOC1', prices: { retail: 100 } });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('MANAGED_AT_HQ');
+
+    // The owner works without restriction on the shop's own server.
+    const made = await branch.post('/products', { name: 'Branch item', sku: 'BRN1', prices: { retail: 2500 } });
+    expect(made.status).toBe(201);
+    const betty = await branch.post('/settings/users', { name: 'Branch Betty', email: 'betty@chain.test', password: 'BettyPass12345', roles: ['cashier'] });
+    expect(betty.status).toBe(201);
+    // Staff added on a branch get its own employee numbers, so they never clash with head office's.
+    expect(betty.body.data.employeeNo).toMatch(/^EMP-MSA01-/);
+    // …and what they added arrives at head office.
+    await runSync();
+    const atHq = await hq.client.get('/products?q=BRN1');
+    expect(atHq.body.data.map((p: any) => p.sku)).toContain('BRN1');
+    expect((await hq.client.get('/settings/users')).body.data.map((u: any) => u.email)).toContain('betty@chain.test');
   });
 });
 

@@ -144,13 +144,14 @@ export function createApp() {
   tenant.use('/accounting', requireModule('accounting'));
   tenant.use('/crm', requireModule('crm'));
   tenant.use('/online-orders', requireModule('onlineStore'));
-  tenant.use(branchReadOnly);
   tenant.use('/sync', hqSyncRoutes);
   tenant.use(biometricBridgeRoutes);
   tenant.use('/store', storefrontRoutes);
   tenant.use('/auth', recoveryRoutes);
   tenant.use('/auth', authRoutes);
   tenant.use(authenticate);
+  // After sign-in: the rule depends on who is asking (owners and administrators are not restricted).
+  tenant.use(branchReadOnly);
   tenant.use(hideCostsUnlessPermitted);
   for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, loyaltyRoutes, onlineOrderRoutes, terminalRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
     tenant.use(r);

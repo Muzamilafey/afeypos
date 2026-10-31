@@ -6,7 +6,8 @@
  */
 import { Router } from 'express';
 import type { Request } from 'express';
-import { Counter, User } from '../../models/index.js';
+import { User } from '../../models/index.js';
+import { nextNumber } from '../../lib/numbering.js';
 import { idParam } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { base32Encode, decrypt, encrypt, sha256 } from '../../lib/crypto.js';
@@ -16,10 +17,9 @@ import crypto from 'node:crypto';
 
 const router = Router();
 
-/** EMP-0001, EMP-0002... (staff are created at head office, so no branch prefix). */
+/** EMP-0001, EMP-0002…; staff added on a branch server carry its code (EMP-MSA01-0001) so numbers never clash. */
 export async function nextEmployeeNo() {
-  const c = await Counter.findOneAndUpdate({ key: 'employee' }, { $inc: { seq: 1 } }, { upsert: true, new: true });
-  return `EMP-${String(c!.seq).padStart(4, '0')}`;
+  return nextNumber('employee', 'EMP', 4);
 }
 
 /** Card codes look like "AFE7Q2M9KX4TRB3P": a fixed prefix (so the till recognises a staff card) plus 13 base32 characters. */

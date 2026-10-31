@@ -48,16 +48,18 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: Branch, dir: 'down', field: 'updatedAt' },
   { model: Warehouse, dir: 'down', field: 'updatedAt' },
   { model: Till, dir: 'down', field: 'updatedAt' },
-  { model: User, dir: 'down', field: 'updatedAt' },
+  // Head office owns these, but an owner or administrator may also add and change them on a branch server
+  // (see sync/guards.ts), so they travel both ways: whoever saved last wins, as everywhere else.
+  { model: User, dir: 'both', field: 'updatedAt' },
   // Custom roles give users their permissions on branch servers too.
-  { model: CustomRole, dir: 'down', field: 'updatedAt' },
-  { model: Category, dir: 'down', field: 'updatedAt' },
-  { model: Brand, dir: 'down', field: 'updatedAt' },
-  { model: UnitOfMeasure, dir: 'down', field: 'updatedAt', cursorVersion: 2 },
-  { model: Product, dir: 'down', field: 'updatedAt' },
-  { model: CustomerPrice, dir: 'down', field: 'updatedAt' },
-  { model: Promotion, dir: 'down', field: 'updatedAt' },
-  { model: Supplier, dir: 'down', field: 'updatedAt' },
+  { model: CustomRole, dir: 'both', field: 'updatedAt' },
+  { model: Category, dir: 'both', field: 'updatedAt' },
+  { model: Brand, dir: 'both', field: 'updatedAt' },
+  { model: UnitOfMeasure, dir: 'both', field: 'updatedAt', cursorVersion: 2 },
+  { model: Product, dir: 'both', field: 'updatedAt' },
+  { model: CustomerPrice, dir: 'both', field: 'updatedAt' },
+  { model: Promotion, dir: 'both', field: 'updatedAt' },
+  { model: Supplier, dir: 'both', field: 'updatedAt' },
   { model: NotificationTemplate, dir: 'down', field: 'updatedAt' },
   { model: IntegrationConfig, dir: 'down', field: 'updatedAt', downFilter: (b) => ({ $or: [{ branchIds: { $size: 0 } }, { branchIds: { $in: ids(new Set([b.branchId])) } }] }) },
 

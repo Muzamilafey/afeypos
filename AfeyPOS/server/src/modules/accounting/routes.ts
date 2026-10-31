@@ -18,8 +18,11 @@ import { ensureChart, postJournal, postPending, resetPostingFlags } from './post
 
 const router = Router();
 
-router.use('/accounting', (_req, _res, next) => {
-  if (env().DEPLOYMENT_MODE === 'branch') throw new AppError(409, 'MANAGED_AT_HQ', 'Accounts are kept on the head-office server, which receives every branch’s transactions');
+// The books live at head office, which receives every branch's transactions; an owner or administrator may
+// still open them on a branch server (what it shows there covers this branch only).
+router.use('/accounting', (req, _res, next) => {
+  const admin = req.auth?.roles.some((r) => r === 'tenant_owner' || r === 'business_admin');
+  if (env().DEPLOYMENT_MODE === 'branch' && !admin) throw new AppError(409, 'MANAGED_AT_HQ', 'Accounts are kept on the head-office server, which receives every branch’s transactions');
   next();
 });
 
