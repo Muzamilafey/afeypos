@@ -5,7 +5,7 @@ import { STANDARD_UNITS, type ProductField } from '@afeypos/shared';
 import { api, download } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useList, useLocations } from '../../lib/hooks';
-import { money, qty } from '../../lib/format';
+import { date, money, qty } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, Select, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
@@ -244,8 +244,33 @@ export function ProductEditPage() {
             <ul className="text-sm">{existing.data.levels.map((l: any) => <li key={l._id} className="flex justify-between py-1"><span>{locs.data?.warehouses.find((w) => w._id === l.warehouseId)?.name}</span><span className="tabular-nums">{qty(l.qty)} {p.baseUnit} · reserved {qty(l.reserved)} · in transit {qty(l.inTransit)} · avg cost {money(l.avgCostCents)}</span></li>)}</ul>
           </Card>
         )}
+        {!isNew && can('purchasing.read') && <PurchaseHistoryCard productId={p._id ?? id!} unit={p.baseUnit} />}
       </div>
     </div>
+  );
+}
+
+/** Every delivery of this product: when, from whom, how many and at what buying price. */
+function PurchaseHistoryCard({ productId, unit }: { productId: string; unit: string }) {
+  const { can } = useAuth();
+  const q = useQuery({ queryKey: ['purchase-history', productId], queryFn: () => api<any>('/reports/purchase-history', { query: { productId } }) });
+  const d = q.data;
+  if (!d?.data?.length) return null;
+  const s = d.summary;
+  return (
+    <Card title="Purchase history" className="lg:col-span-3">
+      {can('products.cost') && <p className="mb-2 text-sm text-ink-500">{s.deliveries} deliveries · {qty(s.qty)} {unit} · {money(s.spentCents)} spent · buying price {money(s.lowestCostCents)} to {money(s.highestCostCents)}</p>}
+      <table className="min-w-full text-sm">
+        <thead><tr><th className="th">Received</th><th className="th">GRN</th><th className="th">Supplier</th><th className="th">Invoice</th><th className="th num">Qty</th>{can('products.cost') && <><th className="th num">Unit cost</th><th className="th num">Total</th></>}</tr></thead>
+        <tbody>{d.data.map((r: any, i: number) => (
+          <tr key={i}>
+            <td className="td">{date(r.receivedAt)}</td><td className="td">{r.number}</td><td className="td">{r.supplier}</td><td className="td">{r.invoiceNo || '—'}</td>
+            <td className="td num">{qty(r.qty)} {r.unitCode}</td>
+            {can('products.cost') && <><td className="td num">{money(r.unitCostCents)}</td><td className="td num">{money(r.totalCents)}</td></>}
+          </tr>
+        ))}</tbody>
+      </table>
+    </Card>
   );
 }
 

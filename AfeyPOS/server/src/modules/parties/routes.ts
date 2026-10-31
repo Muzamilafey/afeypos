@@ -272,6 +272,33 @@ router.post('/suppliers/:id/payments', requirePermission('suppliers.pay'), requi
   res.status(201).json({ data: r });
 });
 
+/** What was bought from a supplier, what was paid and what is left, in date order. */
+router.get('/suppliers/:id/statement', requirePermission('suppliers.read'), requireModule('suppliers'), async (req, res) => {
+  const id = idParam(req.params.id);
+  const q = parse(z.object({ from: z.coerce.date().optional(), to: z.coerce.date().optional() }), req.query);
+  const sup = await Supplier.findById(id).lean();
+  if (!sup) throw notFound('Supplier');
+  const filter: Record<string, unknown> = { partyType: 'supplier', partyId: id };
+  if (q.from || q.to) filter.at = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
+  const entries = await LedgerEntry.find(filter).sort({ at: 1 }).lean();
+  const opening = q.from ? (await LedgerEntry.findOne({ partyType: 'supplier', partyId: id, at: { $lt: q.from } }).sort({ at: -1 }).lean())?.balanceAfterCents ?? 0 : 0;
+  res.json({ data: { supplier: sup, openingBalanceCents: opening, entries, closingBalanceCents: entries.length ? entries[entries.length - 1]!.balanceAfterCents : opening, ageing: (await ageing('supplier', id))[0] ?? null } });
+});
+
+router.post('/suppliers/:id/statement/send', requirePermission('suppliers.read'), requireModule('suppliers'), async (req, res) => {
+  const sup = await Supplier.findById(idParam(req.params.id)).lean();
+  if (!sup) throw notFound('Supplier');
+  const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
+  const cur = tenant?.settings?.currency ?? 'KES';
+  const entries = await LedgerEntry.find({ partyType: 'supplier', partyId: sup._id }).sort({ at: -1 }).limit(30).lean();
+  const statementText = entries.reverse().map((e) => `${e.at.toISOString().slice(0, 10)}  ${e.kind.padEnd(12)} ${(e.ref?.number ?? '').padEnd(14)} ${formatMoney(e.amountCents, cur).padStart(14)}  bal ${formatMoney(e.balanceAfterCents, cur)}`).join('\n');
+  const data = { business: tenant?.name, customer: sup.name, balance: formatMoney(sup.balanceCents, cur), statementText };
+  const out: Record<string, unknown> = {};
+  if (sup.email) out.email = await notify({ channel: 'email', to: sup.email, templateKey: 'customer_statement', data });
+  if (sup.phone) out.sms = await notify({ channel: 'sms', to: sup.phone, templateKey: 'customer_statement', data });
+  res.status(202).json({ data: out });
+});
+
 router.get('/payables/ageing', requirePermission('reports.financial'), requireModule('suppliers'), async (_req, res) => {
   const rows = await ageing('supplier');
   const names = new Map((await Supplier.find({ _id: { $in: rows.map((r) => r._id) } }, { name: 1 }).lean()).map((c) => [String(c._id), c]));

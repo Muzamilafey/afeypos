@@ -7,7 +7,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { Types } from 'mongoose';
-import { GoodsReceipt, Product, Promotion, PurchaseOrder, Sale, SaleReturn, StockLevel, StockMovement, Supplier, User, Warehouse } from '../../models/index.js';
+import { CashMovement, Expense, GoodsReceipt, LedgerEntry, Product, Promotion, PurchaseOrder, Sale, SaleReturn, StockBatch, StockLevel, StockMovement, Supplier, User, Warehouse } from '../../models/index.js';
 import { objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { period, saleMatch, send } from './routes.js';
@@ -473,6 +473,91 @@ router.get('/reports/stock-analysis', requirePermission('inventory.read'), async
   }).filter((r) => r.onHand > 0 && (r.monthsOfCover === null || r.monthsOfCover >= 2) && r.excess > 0);
   rows.sort((a, b) => b.excessValueCents - a.excessValueCents);
   send(res, p.format, 'overstock', rows, { totalExcessValueCents: rows.reduce((a, r) => a + r.excessValueCents, 0), params: { days: q.days, leadDays: q.leadDays, coverDays: q.coverDays } });
+});
+
+/** How long the stock on the shelf has been there: 0-30, 31-60, 61-90, 91-180 and over 180 days, by value. */
+router.get('/reports/stock-ageing', requirePermission('inventory.read'), async (req, res) => {
+  const p = period(req);
+  const q = parse(z.object({ warehouseId: objectId.optional() }), p.query);
+  const warehouses = await scopedWarehouses(p, q.warehouseId);
+  const whMatch = warehouses ? { warehouseId: { $in: warehouses } } : {};
+  const [products, batches, lastIn, lastOut] = await Promise.all([
+    Product.find({ trackStock: true, type: 'stock', active: { $ne: false } }, { name: 1, sku: 1, baseUnit: 1 }).lean(),
+    StockBatch.aggregate([{ $match: { qty: { $gt: 0 }, ...whMatch } }, { $group: { _id: '$productId', oldest: { $min: '$receivedAt' }, newest: { $max: '$receivedAt' } } }]),
+    StockMovement.aggregate([{ $match: { type: { $in: ['purchase_receipt', 'adjustment', 'transfer_in', 'opening'] }, qty: { $gt: 0 }, ...whMatch } }, { $group: { _id: '$productId', at: { $max: '$at' } } }]),
+    StockMovement.aggregate([{ $match: { type: { $in: ['sale'] }, ...whMatch } }, { $group: { _id: '$productId', at: { $max: '$at' } } }]),
+  ]);
+  const stock = await onHandByProduct(warehouses);
+  const batch = new Map(batches.map((b) => [String(b._id), b]));
+  const received = new Map(lastIn.map((r) => [String(r._id), r.at as Date]));
+  const sold = new Map(lastOut.map((r) => [String(r._id), r.at as Date]));
+  const buckets = [30, 60, 90, 180];
+  const totals = { d0_30: 0, d31_60: 0, d61_90: 0, d91_180: 0, d180plus: 0 };
+  const rows = products.flatMap((prod) => {
+    const id = String(prod._id);
+    const level = stock.get(id);
+    if (!level || level.qty <= 0) return [];
+    // The oldest batch still in stock, else the last delivery, says how long it has been standing.
+    const since = batch.get(id)?.oldest ?? received.get(id) ?? null;
+    const days = since ? Math.floor((Date.now() - new Date(since).getTime()) / 86400_000) : null;
+    const key = days === null ? 'd180plus' : days <= buckets[0]! ? 'd0_30' : days <= buckets[1]! ? 'd31_60' : days <= buckets[2]! ? 'd61_90' : days <= buckets[3]! ? 'd91_180' : 'd180plus';
+    totals[key as keyof typeof totals] += level.valueCents;
+    const lastSold = sold.get(id) ?? null;
+    return [{
+      productId: prod._id, name: prod.name, sku: prod.sku, unit: prod.baseUnit, qty: level.qty, valueCents: level.valueCents,
+      inStockSince: since, daysInStock: days, bucket: { d0_30: '0-30 days', d31_60: '31-60 days', d61_90: '61-90 days', d91_180: '91-180 days', d180plus: 'over 180 days' }[key],
+      lastSoldAt: lastSold, daysSinceSale: lastSold ? Math.floor((Date.now() - new Date(lastSold).getTime()) / 86400_000) : null,
+    }];
+  });
+  rows.sort((a, b) => (b.daysInStock ?? 9999) - (a.daysInStock ?? 9999));
+  send(res, p.format, 'stock-ageing', rows, { totals, totalValueCents: Object.values(totals).reduce((a, b) => a + b, 0) });
+});
+
+/** Cash in and out in the period: what came in by payment method, and what went out. */
+router.get('/reports/cash-flow', requirePermission('reports.financial'), async (req, res) => {
+  const p = period(req);
+  const match = saleMatch(p);
+  const [received, refunds, expenses, drawer, supplierPaid, customerPaid] = await Promise.all([
+    Sale.aggregate([{ $match: match }, { $unwind: '$payments' }, { $match: { 'payments.method': { $ne: 'credit' } } }, { $group: { _id: '$payments.method', count: { $sum: 1 }, amountCents: { $sum: '$payments.amountCents' } } }, { $sort: { amountCents: -1 } }]),
+    SaleReturn.aggregate([{ $match: returnMatch(p) }, { $group: { _id: '$refundMethod', count: { $sum: 1 }, amountCents: { $sum: '$refundCents' } } }]),
+    Expense.aggregate([{ $match: { date: { $gte: p.start, $lt: p.end } } }, { $group: { _id: '$method', count: { $sum: 1 }, amountCents: { $sum: '$amountCents' } } }]),
+    CashMovement.aggregate([{ $match: { at: { $gte: p.start, $lt: p.end }, type: { $in: ['cash_in', 'cash_out'] } } }, { $group: { _id: '$type', count: { $sum: 1 }, amountCents: { $sum: '$amountCents' } } }]),
+    LedgerEntry.aggregate([{ $match: { partyType: 'supplier', kind: 'payment', at: { $gte: p.start, $lt: p.end } } }, { $group: { _id: null, amountCents: { $sum: { $abs: '$amountCents' } } } }]),
+    LedgerEntry.aggregate([{ $match: { partyType: 'customer', kind: 'payment', at: { $gte: p.start, $lt: p.end } } }, { $group: { _id: null, amountCents: { $sum: { $abs: '$amountCents' } } } }]),
+  ]);
+  const sum = (rows: any[]) => rows.reduce((a, r) => a + (r.amountCents ?? 0), 0);
+  const inRows = [
+    ...received.map((r) => ({ what: `Sales paid by ${r._id}`, direction: 'in', count: r.count, amountCents: r.amountCents })),
+    ...(customerPaid[0] ? [{ what: 'Customers paying their credit', direction: 'in', count: 0, amountCents: customerPaid[0].amountCents }] : []),
+    ...drawer.filter((r) => r._id === 'cash_in').map((r) => ({ what: 'Cash put into the till', direction: 'in', count: r.count, amountCents: r.amountCents })),
+  ];
+  const outRows = [
+    ...refunds.filter((r) => r.amountCents).map((r) => ({ what: `Refunds by ${r._id ?? 'cash'}`, direction: 'out', count: r.count, amountCents: r.amountCents })),
+    ...expenses.map((r) => ({ what: `Expenses paid by ${r._id}`, direction: 'out', count: r.count, amountCents: r.amountCents })),
+    ...(supplierPaid[0] ? [{ what: 'Paid to suppliers', direction: 'out', count: 0, amountCents: supplierPaid[0].amountCents }] : []),
+    ...drawer.filter((r) => r._id === 'cash_out').map((r) => ({ what: 'Cash taken out of the till', direction: 'out', count: r.count, amountCents: r.amountCents })),
+  ];
+  const inCents = sum(inRows);
+  const outCents = sum(outRows);
+  send(res, p.format, 'cash-flow', [...inRows, ...outRows], { summary: { inCents, outCents, netCents: inCents - outCents }, byMethod: received });
+});
+
+/** Every delivery of one product: when, from whom, how many and at what cost (the buying price over time). */
+router.get('/reports/purchase-history', requirePermission('purchasing.read'), async (req, res) => {
+  const p = period(req);
+  const q = parse(z.object({ productId: objectId }), p.query);
+  const receipts = await GoodsReceipt.find({ 'lines.productId': q.productId }).sort({ createdAt: -1 }).limit(500).lean();
+  const suppliers = new Map((await Supplier.find({ _id: { $in: receipts.map((r: any) => r.supplierId).filter(Boolean) } }, { name: 1 }).lean()).map((s: any) => [String(s._id), s.name]));
+  const rows = receipts.flatMap((r: any) => (r.lines ?? []).filter((l: any) => String(l.productId) === String(q.productId)).map((l: any) => ({
+    number: r.number, receivedAt: r.createdAt, supplier: r.supplierId ? suppliers.get(String(r.supplierId)) ?? '' : 'No supplier (stock received)',
+    invoiceNo: r.supplierInvoiceNo ?? '', qty: l.qty, unitCode: l.unitCode, unitCostCents: l.unitCostCents, totalCents: Math.round((l.qty ?? 0) * (l.unitCostCents ?? 0)),
+    batchNo: l.batchNo ?? '', expiryDate: l.expiryDate ?? null,
+  })));
+  const costs = rows.map((r) => r.unitCostCents).filter((c) => c > 0);
+  send(res, p.format, 'purchase-history', rows, {
+    product: await Product.findById(q.productId, { name: 1, sku: 1, baseUnit: 1, costCents: 1 }).lean(),
+    summary: { deliveries: rows.length, qty: rows.reduce((a, r) => a + (r.qty ?? 0), 0), spentCents: rows.reduce((a, r) => a + r.totalCents, 0), lowestCostCents: costs.length ? Math.min(...costs) : 0, highestCostCents: costs.length ? Math.max(...costs) : 0 },
+  });
 });
 
 export const retailReports = router;

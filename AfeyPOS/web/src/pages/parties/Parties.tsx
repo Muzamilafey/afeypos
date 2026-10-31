@@ -102,7 +102,8 @@ export function PartyDetailPage({ kind }: { kind: 'customer' | 'supplier' }) {
   const { can, has } = useAuth();
   const path = kind === 'customer' ? '/customers' : '/suppliers';
   const q = useQuery({ queryKey: [path, id], queryFn: () => api<{ data: any }>(`${path}/${id}`).then((r) => r.data) });
-  const statement = useQuery({ queryKey: [path, id, 'statement'], queryFn: () => api<{ data: any }>(`/customers/${id}/statement`).then((r) => r.data), enabled: kind === 'customer' });
+  // Suppliers have the same statement as customers: what was bought, paid and is still owed.
+  const statement = useQuery({ queryKey: [path, id, 'statement'], queryFn: () => api<{ data: any }>(`/${kind === 'customer' ? 'customers' : 'suppliers'}/${id}/statement`).then((r) => r.data) });
   const [editing, setEditing] = useState(false);
   const [paying, setPaying] = useState(false);
   const [pay, setPay] = useState<{ amountCents: number | null; method: string; reference: string }>({ amountCents: null, method: 'cash', reference: '' });
@@ -111,14 +112,14 @@ export function PartyDetailPage({ kind }: { kind: 'customer' | 'supplier' }) {
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorBox error={q.error} />;
   const p = q.data;
-  const entries = kind === 'customer' ? statement.data?.entries ?? [] : p.entries ?? [];
-  const ageing = kind === 'customer' ? statement.data?.ageing : p.ageing;
+  const entries = statement.data?.entries ?? (kind === 'customer' ? [] : p.entries ?? []);
+  const ageing = statement.data?.ageing ?? (kind === 'customer' ? undefined : p.ageing);
   const canPay = kind === 'customer' ? can('customers.payments') && has('customerCredit') : can('suppliers.pay');
   return (
     <div>
       <PageHeader title={p.name} subtitle={`${p.code}${p.phone ? ' · ' + p.phone : ''}`} actions={<>
         <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
-        {kind === 'customer' && (p.email || p.phone) && <Button variant="secondary" onClick={() => api(`/customers/${id}/statement/send`, { body: {} }).then(() => toast.success('Statement queued')).catch(toast.error)}>Send statement</Button>}
+        {(p.email || p.phone) && <Button variant="secondary" onClick={() => api(`/${kind === 'customer' ? 'customers' : 'suppliers'}/${id}/statement/send`, { body: {} }).then(() => toast.success('Statement queued')).catch(toast.error)}>Send statement</Button>}
         {canPay && <Button onClick={() => setPaying(true)}>{kind === 'customer' ? 'Receive payment' : 'Pay supplier'}</Button>}
       </>} />
       <div className="grid gap-3 sm:grid-cols-4">

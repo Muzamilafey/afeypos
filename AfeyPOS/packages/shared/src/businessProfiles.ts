@@ -371,6 +371,8 @@ export const NAVIGATION: NavItem[] = [
   { key: 'reportNotSelling', label: 'Not Selling (3 Days)', path: '/reports/not-selling', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
   { key: 'reportSuppliers', label: 'Supplier Report', path: '/reports/suppliers', icon: 'chart', module: 'suppliers', permission: 'reports.financial', group: 'reports' },
   { key: 'reportDrawer', label: 'Drawer Calculations', path: '/reports/drawer', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportAgeing', label: 'Stock Ageing Report', path: '/reports/stock-ageing', icon: 'clock', module: 'reports', permission: 'inventory.read', group: 'reports' },
+  { key: 'reportCashFlow', label: 'Cash Flow Movement', path: '/reports/cash-flow', icon: 'wallet', module: 'reports', permission: 'reports.financial', group: 'reports' },
   { key: 'reportStockAnalysis', label: 'Stock analysis', path: '/reports/stock-analysis', icon: 'trendUp', module: 'reports', permission: 'inventory.read', group: 'reports' },
   { key: 'reportTransfers', label: 'Stock Transfer Report', path: '/reports/stock-transfers', icon: 'chart', module: 'stockTransfers', permission: 'inventory.read', group: 'reports' },
   { key: 'reports', label: 'More reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },

@@ -16,7 +16,7 @@ export interface ReportView {
   groupBy?: string;
   days?: number;
   /** Or one of the views below. */
-  custom?: 'inventory' | 'hr' | 'financial' | 'balance' | 'transactions' | 'trending' | 'top' | 'suppliers' | 'transfers';
+  custom?: 'inventory' | 'hr' | 'financial' | 'balance' | 'transactions' | 'trending' | 'top' | 'suppliers' | 'transfers' | 'ageing' | 'cashflow';
   /** No period (stock on hand, balances). */
   noPeriod?: boolean;
   csv?: string;
@@ -40,6 +40,8 @@ export const REPORT_VIEWS: Record<string, ReportView> = {
   'not-selling': { title: 'Not Selling (3 Days)', subtitle: 'Products in stock with no sale in the last days', tab: 'dead', days: 3, noPeriod: true },
   suppliers: { title: 'Supplier Report', subtitle: 'What was bought from each supplier and what is still owed', custom: 'suppliers' },
   drawer: { title: 'Drawer Calculations', subtitle: 'Cash expected in each till drawer against what was counted at closing', tab: 'shifts' },
+  'stock-ageing': { title: 'Stock Ageing Report', subtitle: 'How long the stock on the shelf has been standing, and the money in each age group', custom: 'ageing', noPeriod: true, csv: '/reports/stock-ageing' },
+  'cash-flow': { title: 'Cash Flow Movement', subtitle: 'Money that came in and money that went out in the period', custom: 'cashflow', csv: '/reports/cash-flow' },
   'stock-transfers': { title: 'Stock Transfer Report', subtitle: 'Transfers between stores and branches in the period', custom: 'transfers', csv: '/reports/stock-transfers' },
 };
 
@@ -69,6 +71,10 @@ export async function loadCustomView(custom: NonNullable<ReportView['custom']>, 
       return (await get('/reports/transactions', period)).data;
     case 'transfers':
       return (await get('/reports/stock-transfers', period)).data;
+    case 'ageing':
+      return get('/reports/stock-ageing');
+    case 'cashflow':
+      return get('/reports/cash-flow', period);
     case 'top':
       return (await get('/reports/sales', { ...period, groupBy: 'product' })).data.slice().sort((a: any, b: any) => (b.qty ?? 0) - (a.qty ?? 0)).slice(0, 200);
     case 'trending': {
@@ -213,6 +219,45 @@ export function CustomView({ custom, d }: { custom: NonNullable<ReportView['cust
           { key: 'p', header: 'Products', className: 'num', render: (r: any) => r.products }, { key: 'q', header: 'Qty', className: 'num', render: (r: any) => qty(r.qty) },
           { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
           { key: 'r', header: 'Received', render: (r: any) => (r.receivedAt ? dateTime(r.receivedAt) : '—') },
+        ]} /></div>
+      </div>
+    );
+  }
+  if (custom === 'ageing') {
+    const t = d.totals;
+    const groups: [string, number][] = [['0-30 days', t.d0_30], ['31-60 days', t.d31_60], ['61-90 days', t.d61_90], ['91-180 days', t.d91_180], ['over 180 days', t.d180plus]];
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          {groups.map(([label, cents], i) => <Stat key={label} label={label} value={money(cents)} hint={i === 4 ? 'Standing longest' : undefined} tone={i === 4 && cents ? 'red' : undefined} />)}
+        </div>
+        <div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: String(r.productId) }))} empty="Nothing in stock" columns={[
+          { key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 's', header: 'SKU', render: (r: any) => r.sku },
+          { key: 'q', header: 'In stock', className: 'num', render: (r: any) => `${qty(r.qty)} ${r.unit}` },
+          { key: 'v', header: 'Value', className: 'num', render: (r: any) => money(r.valueCents) },
+          { key: 'i', header: 'In stock since', render: (r: any) => (r.inStockSince ? date(r.inStockSince) : 'unknown') },
+          { key: 'd', header: 'Days standing', className: 'num font-semibold', render: (r: any) => (r.daysInStock ?? '—') },
+          { key: 'b', header: 'Age group', render: (r: any) => <Badge tone={r.bucket === 'over 180 days' ? 'red' : r.bucket === '91-180 days' ? 'amber' : 'gray'}>{r.bucket}</Badge> },
+          { key: 'l', header: 'Last sold', render: (r: any) => (r.lastSoldAt ? `${date(r.lastSoldAt)} (${r.daysSinceSale} d)` : 'never') },
+        ]} /></div>
+      </div>
+    );
+  }
+  if (custom === 'cashflow') {
+    const rows = d.data ?? d;
+    const s = d.summary;
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <Stat label="Money in" value={money(s.inCents)} tone="green" />
+          <Stat label="Money out" value={money(s.outCents)} tone={s.outCents ? 'red' : undefined} />
+          <Stat label="Net movement" value={money(s.netCents)} tone={s.netCents < 0 ? 'red' : 'green'} />
+        </div>
+        <div className="card"><DataTable rows={rows.map((r: any, i: number) => ({ ...r, id: String(i) }))} empty="No money moved in this period" columns={[
+          { key: 'w', header: 'What', render: (r: any) => r.what },
+          { key: 'd', header: 'Direction', render: (r: any) => <Badge tone={r.direction === 'in' ? 'green' : 'red'}>{r.direction === 'in' ? 'in' : 'out'}</Badge> },
+          { key: 'c', header: 'Count', className: 'num', render: (r: any) => (r.count || '') },
+          { key: 'a', header: 'Amount', className: 'num font-semibold', render: (r: any) => money(r.amountCents) },
         ]} /></div>
       </div>
     );
