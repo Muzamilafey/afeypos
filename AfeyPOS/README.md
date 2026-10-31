@@ -72,6 +72,10 @@ Open http://localhost:5173. In local mode you are asked to set up the business o
 
 ## Documentation
 
+**Setting it up, step by step:**
+- [One shop, no internet needed](docs/SETUP-LOCAL.md) — everything on the shop's own computer
+- [Online head office (your VPS, your domain) with shops that keep selling offline](docs/SETUP-VPS-AND-LOCAL.md)
+
 - [Architecture](docs/ARCHITECTURE.md): modules, multi-tenancy, business profiles, data model
 - [Database](docs/DATABASE.md): replica set, transactions, indexes, migrations
 - [Windows installation](docs/INSTALL-WINDOWS.md) for shop owners
