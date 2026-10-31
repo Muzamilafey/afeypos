@@ -12,7 +12,7 @@ import { runAsPlatform } from '../../lib/context.js';
 import { enqueue, registerJob } from '../../jobs/queue.js';
 import { IntegrationError } from '../../integrations/http.js';
 import { EtimsClient, MockEtimsGateway, etimsDate, type EtimsGateway, type EtimsSale, type EtimsSaleLine } from '../../integrations/etims/client.js';
-import { findActiveConfig, openSecrets } from '../integrations/configs.js';
+import { configsForTill, findActiveConfig, openSecrets } from '../integrations/configs.js';
 
 type Cfg = InstanceType<typeof IntegrationConfig>;
 
@@ -50,8 +50,13 @@ const QTY_UNIT: Record<string, string> = { pc: 'U', kg: 'KG', g: 'GRM', l: 'LTR'
 const r2 = (cents: number) => Math.round(cents) / 100;
 const PAYMENT_CODE: Record<string, string> = { cash: '01', credit: '02', bank: '04', card: '05', mpesa: '06', gateway: '06', loyalty: '07', voucher: '07', other: '07' };
 
-export async function etimsConfigForBranch(branchId?: Types.ObjectId | null) {
-  return findActiveConfig('etims', branchId);
+export async function etimsConfigForBranch(branchId?: Types.ObjectId | null, tillId?: Types.ObjectId | null) {
+  return findActiveConfig('etims', branchId, tillId);
+}
+
+/** The ETR devices a till may sign with: its own, then its branch's, then the ones for the whole business. */
+export async function etimsDevicesForTill(branchId?: Types.ObjectId | null, tillId?: Types.ObjectId | null) {
+  return configsForTill('etims', branchId, tillId);
 }
 
 async function nextInvoiceNo(configId: Types.ObjectId) {
@@ -60,9 +65,11 @@ async function nextInvoiceNo(configId: Types.ObjectId) {
 }
 
 /** Called inside the checkout transaction: reserve the eTIMS invoice number and queue the submission. */
-export async function queueSaleForEtims(saleId: Types.ObjectId, branchId: Types.ObjectId, caps: { modules: readonly string[] }) {
+export async function queueSaleForEtims(saleId: Types.ObjectId, branchId: Types.ObjectId, caps: { modules: readonly string[] }, opts: { tillId?: Types.ObjectId | null; configId?: Types.ObjectId | null } = {}) {
   if (!caps.modules.includes('etims')) return;
-  const cfg = await etimsConfigForBranch(branchId);
+  // The device the till chose, if it may use it; otherwise the till's own, its branch's, or the business's.
+  const allowed = await etimsDevicesForTill(branchId, opts.tillId);
+  const cfg = (opts.configId && allowed.find((c) => String(c._id) === String(opts.configId))) ?? allowed[0] ?? null;
   if (!cfg) return;
   const invcNo = await nextInvoiceNo(cfg._id);
   await Sale.updateOne({ _id: saleId }, { $set: { etims: { status: 'pending', configId: cfg._id, invcNo, orgInvcNo: 0, attempts: 0 } } });

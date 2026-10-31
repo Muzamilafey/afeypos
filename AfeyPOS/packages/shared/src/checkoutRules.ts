@@ -38,6 +38,29 @@ export interface CheckoutRules {
     /** A cashier may only have one open shift at a time. */
     oneOpenShiftPerCashier: boolean;
   };
+  /** M-Pesa at the till. */
+  mpesa: {
+    /** Choosing M-Pesa starts watching for a payment to the Paybill/Till in the background, with nothing to press. */
+    watchTillPayments: boolean;
+    /** A payment that covers the whole sale completes it by itself (and prints the receipt). */
+    autoComplete: boolean;
+  };
+  /** Whether the till collects the customer's phone number, and what it does with it. */
+  customer: {
+    /**
+     * off: the till never asks and the sale belongs to nobody (no customer is shown or assigned).
+     * ask: the cashier may type the phone number at checkout.
+     * mpesa: the number of whoever paid by M-Pesa is used by itself.
+     * both: either way.
+     */
+    phone: 'off' | 'ask' | 'mpesa' | 'both';
+    /** A customer is created from the number (so the loyalty points have an owner). */
+    createFromPhone: boolean;
+    /** Points are awarded for the sale when a customer was found or created. */
+    awardLoyalty: boolean;
+    /** The cashier must enter a number before the sale can be completed ("ask" and "both" only). */
+    required: boolean;
+  };
   /** Pages a user whose only role is Cashier can open (navigation keys). Checkout is always allowed. */
   cashierPages: string[];
   /** Ways to pay offered at checkout (and accepted by the server). */
@@ -73,6 +96,8 @@ export const CHECKOUT_RULE_DEFAULTS: CheckoutRules = {
   items: { removeNeedsApproval: false, reduceQtyNeedsApproval: false, clearNeedsApproval: false, holdAllowed: true },
   discounts: { allowed: true, lineLimitBp: 1000, saleLimitBp: 1000, maxAmountCents: 0 },
   shifts: { required: true, minOpeningFloatCents: 0, blindClose: false, closeNeedsApproval: false, maxCashInDrawerCents: 0, oneOpenShiftPerCashier: true },
+  mpesa: { watchTillPayments: true, autoComplete: true },
+  customer: { phone: 'both', createFromPhone: true, awardLoyalty: true, required: false },
   cashierPages: CASHIER_PAGE_OPTIONS.map((p) => p.key),
   paymentMethods: PAYMENT_METHOD_OPTIONS.map((p) => p.key),
 };
@@ -105,6 +130,16 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
       closeNeedsApproval: bool(s.shifts?.closeNeedsApproval, d.shifts.closeNeedsApproval),
       maxCashInDrawerCents: int(s.shifts?.maxCashInDrawerCents, d.shifts.maxCashInDrawerCents),
       oneOpenShiftPerCashier: bool(s.shifts?.oneOpenShiftPerCashier, d.shifts.oneOpenShiftPerCashier),
+    },
+    mpesa: {
+      watchTillPayments: bool(s.mpesa?.watchTillPayments, d.mpesa.watchTillPayments),
+      autoComplete: bool(s.mpesa?.autoComplete, d.mpesa.autoComplete),
+    },
+    customer: {
+      phone: (['off', 'ask', 'mpesa', 'both'] as const).includes(s.customer?.phone) ? s.customer.phone : d.customer.phone,
+      createFromPhone: bool(s.customer?.createFromPhone, d.customer.createFromPhone),
+      awardLoyalty: bool(s.customer?.awardLoyalty, d.customer.awardLoyalty),
+      required: bool(s.customer?.required, d.customer.required),
     },
     cashierPages: Array.isArray(s.cashierPages) ? s.cashierPages.filter((k: unknown) => CASHIER_PAGE_OPTIONS.some((p) => p.key === k)) : d.cashierPages,
     paymentMethods: paymentMethodsOf(s.paymentMethods),

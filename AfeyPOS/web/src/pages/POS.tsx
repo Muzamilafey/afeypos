@@ -422,7 +422,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     { kind: 'card', label: 'Card payment', hint: 'F6', onClick: () => pay('card'), disabled: cantPay },
     { kind: 'loyalty', label: 'Loyalty card', onClick: () => setLoyaltyOpen(true), disabled: !has('loyalty'), title: has('loyalty') ? undefined : 'Turn on the Loyalty module in Settings' },
     { kind: 'voucher', label: 'Voucher', hint: 'F7', onClick: () => setVoucherOpen(true), disabled: cantPay, badge: cart.couponCode || undefined },
-    { kind: 'customer', label: cart.customer ? `Customer: ${cart.customer.name}` : 'Customer', onClick: () => setCustomerOpen(true), hint: 'F4', badge: cart.customer ? '✓' : undefined },
+    ...(rules.customer.phone !== 'off' ? [{ kind: 'customer' as const, label: cart.customer ? `Customer: ${cart.customer.name}` : 'Customer', onClick: () => setCustomerOpen(true), hint: 'F4', badge: cart.customer ? '✓' : undefined }] : []),
     { kind: 'hold', label: 'Hold sale', onClick: suspend, disabled: !cart.lines.length || !rules.items.holdAllowed, hint: 'F8', title: rules.items.holdAllowed ? undefined : 'Holding sales is turned off in Checkout rules' },
   ];
   const tiles = allTiles.filter((t) => !['mpesa', 'cash', 'card', 'voucher'].includes(t.kind) || allowed(t.kind));
@@ -482,7 +482,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
           <Icon name="cart" className="h-5 w-5 text-brand-500" />
           <h2 className="text-[15px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-white">Transaction lines</h2>
           <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-bold text-brand-600 dark:bg-brand-500/15 dark:text-brand-200">{fmtQty(totals.items)} {totals.items === 1 ? 'ITEM' : 'ITEMS'}</span>
-          <button type="button" onClick={() => setCustomerOpen(true)} className="ml-auto flex max-w-[45%] items-center gap-1.5 truncate rounded-full bg-ink-50 px-3 py-1 text-xs font-semibold text-ink-600 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300"><Icon name="user" className="h-3.5 w-3.5" /><span className="truncate">{cart.customer ? cart.customer.name : 'Walk-in customer (F4)'}</span></button>
+          {rules.customer.phone !== 'off' && <button type="button" onClick={() => setCustomerOpen(true)} className="ml-auto flex max-w-[45%] items-center gap-1.5 truncate rounded-full bg-ink-50 px-3 py-1 text-xs font-semibold text-ink-600 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300"><Icon name="user" className="h-3.5 w-3.5" /><span className="truncate">{cart.customer ? cart.customer.name : 'Walk-in customer (F4)'}</span></button>}
           <span className="text-xs font-semibold text-ink-400">{cart.label}</span>
         </div>
         {error ? <div className="px-5 pb-2"><ErrorBox error={error} /></div> : null}
@@ -858,8 +858,18 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
       setPayments((ps) => [...ps, { method: isMpesa ? 'mpesa' : 'gateway', amountCents: Math.min(free, ps.reduce((a, p) => a - p.amountCents, total)), paymentIntentId: stk.id, label: `${label} ${stk.receiptNumber ?? ''}${who ? ` · ${who}` : ''}` }]);
       toast.success(`${label} payment confirmed: ${money(stk.paidAmountCents ?? stk.amountCents)}${who ? ` from ${who}` : ''}`);
       if (isMpesa) setMpesaDone(stk);
+      // The money is in and it covers the sale: finish it and print, with nothing to press (Checkout rules).
+      if (isMpesa && checkoutRules.mpesa.autoComplete && Math.min(free, total) >= total - payments.reduce((a, p) => a + p.amountCents, 0)) autoFinish.current = true;
     }
-  }, [stk, payments, toast, total]);
+  }, [stk, payments, toast, total, checkoutRules.mpesa.autoComplete]);
+
+  // Completing runs once the confirmed payment is in the list, so the sale carries it.
+  const autoFinish = useRef(false);
+  useEffect(() => {
+    if (!autoFinish.current || busy || remaining > 0) return;
+    autoFinish.current = false;
+    void complete();
+  });
 
   const mpesaAccounts = useQuery({ queryKey: ['mpesa-accounts', till._id], queryFn: () => api<{ data: MpesaAccount[] }>('/payments/mpesa/accounts', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('mpesa'), staleTime: 60_000 });
   const gateways = useQuery({ queryKey: ['gateways', till._id], queryFn: () => api<{ data: GatewayOption[] }>('/payments/gateways', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('payments'), staleTime: 60_000 });
@@ -920,6 +930,14 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   };
 
 
+  // Checkout rules decide whether the till collects the buyer's number (for loyalty) and shows a customer at all.
+  const custRules = checkoutRules.customer;
+  const askPhone = custRules.phone === 'ask' || custRules.phone === 'both';
+  const [phone, setPhone] = useState('');
+  // KRA: which ETR device signs this sale, when the till may use more than one.
+  const etrDevices = useQuery({ queryKey: ['etr-devices', till._id], queryFn: () => api<{ data: any[] }>('/etims/devices', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('etims'), staleTime: 60_000 });
+  const [etrId, setEtrId] = useState('');
+
   const complete = async (overrideToken?: string, cashTendered?: number) => {
     setBusy(true);
     setError(null);
@@ -931,6 +949,8 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
         clientRequestId: requestId,
         tillId: till._id,
         customerId: cart.customer?._id,
+        customerPhone: askPhone && !cart.customer ? phone.trim() || undefined : undefined,
+        etimsConfigId: etrDevices.data && etrDevices.data.length > 1 ? etrId || undefined : undefined,
         priceList: cart.priceList,
         couponCode: cart.couponCode || undefined,
         lines: cart.lines.map((l) => ({ productId: l.product._id, unitCode: l.unitCode, qty: l.qty, unitPriceCents: l.unitPriceCents !== l.quotedCents ? l.unitPriceCents : undefined, discountCents: l.discountCents || undefined, serials: l.serials.length ? l.serials : undefined, prescriptionRef: l.prescriptionRef })),
@@ -997,7 +1017,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
                 </>
               )}
               {method === 'mpesa' && (
-                <MpesaPanel amount={amount} tillId={till._id} accounts={mpesaAccounts.data ?? []} intent={stk} setIntent={setStk} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
+                <MpesaPanel amount={amount} tillId={till._id} accounts={mpesaAccounts.data ?? []} watchTill={checkoutRules.mpesa.watchTillPayments} intent={stk} setIntent={setStk} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
                   onUse={(i) => { setMpesaDone(i); setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - (i.allocatedCents ?? 0), remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}${mpesaPayer(i) ? ` · ${mpesaPayer(i)}` : ''}` }]); }} />
               )}
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}
@@ -1038,6 +1058,21 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
           <div className="mt-3"><ErrorBox error={error} /></div>
         </div>
         <div className="rounded-lg bg-ink-50 p-3 text-sm dark:bg-ink-800/50">
+          {askPhone && !cart.customer && (
+            <div className="mb-3">
+              <Field label={custRules.required ? 'Customer phone (needed)' : 'Customer phone (for points)'} hint={custRules.awardLoyalty ? 'Loyalty points go to this number' : undefined}>
+                <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="e.g. 0712345678" aria-label="Customer phone" />
+              </Field>
+            </div>
+          )}
+          {has('etims') && (etrDevices.data?.length ?? 0) > 1 && (
+            <div className="mb-3">
+              <Field label="KRA ETR device" hint="Which device signs this sale">
+                <Select value={etrId || etrDevices.data!.find((d) => d.isDefault)?.id || ''} onChange={(e) => setEtrId(e.target.value)}
+                  options={etrDevices.data!.map((d) => ({ value: d.id, label: `${d.name} · ${d.mode.toUpperCase()}${d.serial ? ` · ${d.serial}` : ''}${d.environment === 'sandbox' ? ' (test)' : ''}` }))} />
+              </Field>
+            </div>
+          )}
           <div className="label">Payments</div>
           <ul className="space-y-1">{payments.map((p, i) => (
             <li key={i} className="flex items-center justify-between"><span>{p.label}</span><span className="flex items-center gap-1 tabular-nums">{money(p.amountCents)}{!p.paymentIntentId && !p.terminalTransactionId && <button aria-label="Remove payment" onClick={() => setPayments((ps) => ps.filter((_, j) => j !== i))}><Icon name="x" className="h-3.5 w-3.5" /></button>}</span></li>

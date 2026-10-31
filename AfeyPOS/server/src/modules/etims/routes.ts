@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { IntegrationConfig, Product, Sale, SaleReturn } from '../../models/index.js';
+import { IntegrationConfig, Product, Sale, SaleReturn, Till } from '../../models/index.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { enqueue } from '../../jobs/queue.js';
+import { etimsDevicesForTill } from './service.js';
 import { openSecrets, sealSecrets } from '../integrations/configs.js';
 import { etimsGateway, queueItemRegistration } from './service.js';
 
@@ -23,6 +24,19 @@ router.post('/settings/integrations/:id/etims/initialize', requirePermission('in
   await cfg.save();
   await audit(req, { action: 'etims.initialized', entity: 'IntegrationConfig', entityId: cfg._id, details: { sdcId: info.sdcId, mrcNo: info.mrcNo } });
   res.json({ data: { sdcId: info.sdcId, mrcNo: info.mrcNo, taxpayer: info.taxprNm, branch: info.bhfNm } });
+});
+
+/** The KRA ETR devices this till may sign with, so it can be chosen when a shop has more than one. */
+router.get('/etims/devices', requirePermission('sales.create'), async (req, res) => {
+  const q = parse(z.object({ tillId: objectId.optional() }), req.query);
+  const till = q.tillId ? await Till.findById(q.tillId).lean() : null;
+  const devices = await etimsDevicesForTill(till?.branchId, till?._id);
+  res.json({
+    data: devices.map((c, i) => ({
+      id: c._id, name: c.name, mode: c.provider === 'vscu' ? 'vscu' : 'oscu', environment: c.environment, isDefault: i === 0,
+      tin: c.settings?.tin ?? '', bhfId: c.settings?.bhfId ?? '00', serial: c.settings?.dvcSrlNo ?? '', initialised: Boolean(c.settings?.sdcId),
+    })),
+  });
 });
 
 router.get('/etims/status', requirePermission('reports.financial'), async (_req, res) => {

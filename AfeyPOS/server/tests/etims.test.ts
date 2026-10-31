@@ -126,3 +126,21 @@ describe('signing sales, credit notes and voids', () => {
     expect(status.body.data.failed).toHaveLength(0);
   });
 });
+
+describe('choosing the ETR device', () => {
+  it('a till lists the devices it may sign with, and the sale is signed by the chosen one', async () => {
+    // A second ETR device, set up for this till only, comes first for it.
+    const second = await t.client.post('/settings/integrations', { kind: 'etims', provider: 'mock', name: 'Counter 2 ETR', settings: { tin: 'p051234567x', bhfId: '01', dvcSrlNo: 'DVC-002' }, tillIds: [till] });
+    expect(second.status).toBe(201);
+    const devices = (await t.client.get(`/etims/devices?tillId=${till}`)).body.data;
+    expect(devices.map((d: any) => d.name)).toEqual(['Counter 2 ETR', 'eTIMS (simulator)']);
+    expect(devices[0]).toMatchObject({ isDefault: true, mode: 'oscu', bhfId: '01', serial: 'DVC-002' });
+
+    // Without a choice the till's own device signs; with one, the device asked for.
+    const product = await createProduct(t.client, { name: 'Soda 500ml', sku: 'KSODA', prices: { retail: 10000 }, openingStock: [{ warehouseId: wh, qty: 10 }] });
+    const sale = (await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: product._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 10000 }] })).body.data;
+    expect(String((await t.client.get(`/sales/${sale._id}`)).body.data.etims.configId)).toBe(second.body.data.id);
+    const chosen = (await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: product._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 10000 }], etimsConfigId: cfgId })).body.data;
+    expect(String((await t.client.get(`/sales/${chosen._id}`)).body.data.etims.configId)).toBe(cfgId);
+  });
+});

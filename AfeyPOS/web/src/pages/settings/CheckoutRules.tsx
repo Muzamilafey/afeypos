@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { CASHIER_PAGE_OPTIONS, PAYMENT_METHOD_OPTIONS, KENYA_BANKS, type CheckoutRules } from '@afeypos/shared';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { Button, Card, cx, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, useToast } from '../../components/ui';
+import { Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
 
 interface Terminal { name: string; bank: string; terminalId: string }
@@ -104,6 +104,39 @@ export function CheckoutRulesPage() {
               );
             })}
           </div>
+        </Card>
+
+        <Card title={<span className="flex items-center gap-2"><Icon name="phone" className="h-4 w-4 text-emerald-500" />M-Pesa at the till</span>}>
+          <div className="space-y-2">
+            <Checkbox label="Watch for a payment to the Paybill/Till as soon as M-Pesa is chosen" checked={rules.mpesa.watchTillPayments} onChange={(v) => set('mpesa', { watchTillPayments: v })} />
+            <p className="pl-6 text-xs text-ink-500">The till starts looking by itself, with nothing to press: the customer just pays. The cashier can still send a prompt or type the M-Pesa code.</p>
+            <Checkbox label="Complete the sale by itself when the payment covers it" checked={rules.mpesa.autoComplete} onChange={(v) => set('mpesa', { autoComplete: v })} />
+            <p className="pl-6 text-xs text-ink-500">The receipt prints at once (with the KRA QR code when eTIMS is on). Without this the cashier presses Complete sale.</p>
+          </div>
+        </Card>
+
+        <Card title={<span className="flex items-center gap-2"><Icon name="users" className="h-4 w-4 text-amber-500" />Customer &amp; loyalty at checkout</span>}>
+          <p className="mb-2 text-xs text-ink-500">Whether the till collects the buyer's phone number, so loyalty points have an owner. Turned off, the till never asks and sales belong to nobody.</p>
+          <div className="grid gap-2 sm:grid-cols-2" data-testid="customer-rules">
+            {([
+              ['off', 'Do not collect it', 'No customer is shown or assigned to the sale'],
+              ['ask', 'Ask at checkout', 'The cashier types the number when the customer wants points'],
+              ['mpesa', 'From the M-Pesa payment', 'The number that paid is used by itself, nothing to type'],
+              ['both', 'Both', 'Typed if the cashier enters one, otherwise from the M-Pesa payment'],
+            ] as const).map(([v, t, d]) => (
+              <button key={v} type="button" role="radio" aria-checked={rules.customer.phone === v} onClick={() => { set('customer', { phone: v }); }}
+                className={cx('rounded-lg border p-3 text-left transition', rules.customer.phone === v ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500 dark:bg-brand-500/10' : 'border-ink-200 hover:border-ink-300 dark:border-ink-700')}>
+                <span className="block text-sm font-semibold">{t}</span><span className="block text-xs text-ink-500">{d}</span>
+              </button>
+            ))}
+          </div>
+          {rules.customer.phone !== 'off' && (
+            <div className="mt-3 space-y-2">
+              <Checkbox label="Add a customer for a number that is not known yet" checked={rules.customer.createFromPhone} onChange={(v) => set('customer', { createFromPhone: v })} />
+              <Checkbox label="Give loyalty points for the sale" checked={rules.customer.awardLoyalty} onChange={(v) => set('customer', { awardLoyalty: v })} />
+              {rules.customer.phone !== 'mpesa' && <Checkbox label="The cashier must enter a number before completing a sale" checked={rules.customer.required} onChange={(v) => set('customer', { required: v })} />}
+            </div>
+          )}
         </Card>
 
         <Card title={<span className="flex items-center gap-2"><Icon name="lock" className="h-4 w-4 text-sky-500" />Pages cashiers can open</span>}>

@@ -136,6 +136,8 @@ const rulesSchema = z.object({
   items: z.object({ removeNeedsApproval: z.boolean(), reduceQtyNeedsApproval: z.boolean(), clearNeedsApproval: z.boolean(), holdAllowed: z.boolean() }).partial(),
   discounts: z.object({ allowed: z.boolean(), lineLimitBp: bp, saleLimitBp: bp, maxAmountCents: positiveCents }).partial(),
   shifts: z.object({ required: z.boolean(), minOpeningFloatCents: positiveCents, blindClose: z.boolean(), closeNeedsApproval: z.boolean(), maxCashInDrawerCents: positiveCents, oneOpenShiftPerCashier: z.boolean() }).partial(),
+  mpesa: z.object({ watchTillPayments: z.boolean(), autoComplete: z.boolean() }).partial(),
+  customer: z.object({ phone: z.enum(['off', 'ask', 'mpesa', 'both']), createFromPhone: z.boolean(), awardLoyalty: z.boolean(), required: z.boolean() }).partial(),
   cashierPages: z.array(z.enum(CASHIER_PAGE_OPTIONS.map((p) => p.key) as [string, ...string[]])).max(CASHIER_PAGE_OPTIONS.length),
   paymentMethods: z.array(z.enum(PAYMENT_METHOD_OPTIONS.map((p) => p.key) as [string, ...string[]])).min(1, 'Keep at least one way to pay').max(PAYMENT_METHOD_OPTIONS.length),
 }).partial();

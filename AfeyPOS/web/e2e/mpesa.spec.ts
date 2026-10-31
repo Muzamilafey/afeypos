@@ -54,29 +54,28 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
     await fetch(`/api/v1/payments/mpesa/simulate/${list.data[0].id}`, { method: 'POST', headers: h, body: JSON.stringify({ resultCode: 0 }) });
   });
   await expect(page.getByText('M-Pesa payment confirmed')).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Complete sale' }).click();
-  await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
+  // Nothing to press: the confirmed payment covers the sale, so the till completes and prints it.
+  await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'New sale' }).click();
 
-  // Customer pays the Paybill themselves with the account number shown at the till.
+  // Customer pays the Paybill themselves: the till is already watching for it, with nothing to press.
   await scan.fill('MILK500');
   await scan.press('Enter');
   await page.getByRole('button', { name: /^Pay / }).click();
   await page.getByRole('button', { name: 'M-Pesa', exact: true }).click();
-  await page.getByRole('radio', { name: 'Customer pays Paybill/Till' }).click();
-  await page.getByRole('button', { name: 'Show payment details' }).click();
-  const payTo = page.getByTestId('mpesa-pay-to');
-  await expect(payTo).toContainText('174379');
+  const watching = page.getByTestId('mpesa-watching');
+  await expect(watching).toContainText('174379');
+  // The cashier can still send a prompt or type a code while the till watches.
+  await expect(page.getByRole('radio', { name: 'Customer pays Paybill/Till' })).toBeVisible();
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/pos-mpesa-paybill.png` });
-  const account = await payTo.locator('text=/^T1\\d{4}$/').innerText();
+  const account = await watching.locator('text=/^T1\\d{4}$/').innerText();
   await page.evaluate(async (acct) => {
     const { accessToken } = await (await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })).json();
     const h = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
     await fetch('/api/v1/payments/mpesa/simulate-c2b', { method: 'POST', headers: h, body: JSON.stringify({ amountCents: 6500, account: acct }) });
   }, account);
   await expect(page.getByText('M-Pesa payment confirmed')).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Complete sale' }).click();
-  await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
+  await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'New sale' }).click();
 
   // Money paid to the till without a sale is not listed: the cashier finds it only by its M-Pesa code.

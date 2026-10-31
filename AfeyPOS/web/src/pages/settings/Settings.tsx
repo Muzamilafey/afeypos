@@ -448,9 +448,10 @@ export function IntegrationsPage() {
     try {
       // Who uses it (M-Pesa): every branch, chosen branches (all their tills), or chosen tills only.
       const scope = scopeOf(edit);
-      // M-Pesa: whole business, chosen branches or chosen tills. Payment gateways (Pesapal…): whole business or chosen branches.
-      const scoped = edit.kind === 'mpesa' || edit.kind === 'payment';
-      const usedBy = scoped ? { branchIds: scope === 'branches' ? edit.branchIds ?? [] : [], tillIds: edit.kind === 'mpesa' && scope === 'tills' ? edit.tillIds ?? [] : [] } : {};
+      // M-Pesa and KRA ETR devices: whole business, chosen branches or chosen tills. Gateways: business or branches.
+      const perTill = edit.kind === 'mpesa' || edit.kind === 'etims';
+      const scoped = perTill || edit.kind === 'payment';
+      const usedBy = scoped ? { branchIds: scope === 'branches' ? edit.branchIds ?? [] : [], tillIds: perTill && scope === 'tills' ? edit.tillIds ?? [] : [] } : {};
       if (scoped && scope === 'branches' && !usedBy.branchIds?.length) throw new Error('Choose at least one branch, or "All branches and tills"');
       if (edit.kind === 'mpesa' && scope === 'tills' && !usedBy.tillIds?.length) throw new Error('Choose at least one till, or "All branches and tills"');
       const body = { provider: edit.provider, name: edit.name, enabled: edit.enabled, isDefault: edit.isDefault, environment: edit.environment, settings: edit.settings, secrets: edit.secrets, ...usedBy };
@@ -523,7 +524,7 @@ export function IntegrationsPage() {
                   <div><dt className="text-ink-500">Credentials</dt><dd className="mt-0.5 font-medium">{r.secretsSet.length ? `${r.secretsSet.length} saved` : 'none needed'}</dd></div>
                   <div><dt className="text-ink-500">Last test</dt><dd className="mt-0.5">{r.lastTest?.at ? <StatusPill tone={r.lastTest.ok ? 'green' : 'red'}>{r.lastTest.ok ? 'Passed' : 'Failed'}{r.lastTest.at ? ` · ${dateTime(r.lastTest.at)}` : ''}</StatusPill> : <span className="text-ink-400">Not tested yet</span>}</dd></div>
                 </dl>
-                {(r.kind === 'mpesa' || r.kind === 'payment') && <p className="mt-2 text-xs text-ink-500" data-testid={`${r.kind}-used-by`}>Used by: <b>{usedByText(r, locs.data)}</b></p>}
+                {(r.kind === 'mpesa' || r.kind === 'payment' || r.kind === 'etims') && <p className="mt-2 text-xs text-ink-500" data-testid={`${r.kind}-used-by`}>Used by: <b>{usedByText(r, locs.data)}</b></p>}
                 {r.kind === 'mpesa' && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-ink-500">C2B URLs: {r.c2bRegistration ? <StatusPill tone={r.c2bRegistration.ok ? 'green' : 'red'}>{r.c2bRegistration.ok ? `Registered (${r.c2bRegistration.shortCode})` : 'Registration failed'}</StatusPill> : <StatusPill tone="amber">Not registered</StatusPill>}</p>
                 )}
@@ -621,7 +622,7 @@ export function IntegrationsPage() {
               </div>
               <div className="flex flex-wrap gap-5"><Checkbox label="Enabled" checked={edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} /><Checkbox label="Default" checked={edit.isDefault} onChange={(v) => setEdit({ ...edit, isDefault: v })} /></div>
             </fieldset>
-            {edit.kind === 'mpesa' && locs.data && (locs.data.branches.length > 1 || locs.data.tills.length > 1) && <MpesaUsedBy edit={edit} setEdit={setEdit} locs={locs.data} />}
+            {(edit.kind === 'mpesa' || edit.kind === 'etims') && locs.data && (locs.data.branches.length > 1 || locs.data.tills.length > 1) && <MpesaUsedBy edit={edit} setEdit={setEdit} locs={locs.data} kind={edit.kind} />}
             {edit.kind === 'payment' && locs.data && locs.data.branches.length > 1 && <MpesaUsedBy edit={edit} setEdit={setEdit} locs={locs.data} branchesOnly />}
             <fieldset className="space-y-3">
               <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Account details</legend>
@@ -798,15 +799,16 @@ function usedByText(c: any, locs?: Locations) {
  * Which branches and tills use this M-Pesa account. A till uses an M-Pesa set up for that till, else its branch's
  * (shared by all the branch's tills), else the one for all branches.
  */
-function MpesaUsedBy({ edit, setEdit, locs, branchesOnly = false }: { edit: any; setEdit: (e: any) => void; locs: Locations; branchesOnly?: boolean }) {
+function MpesaUsedBy({ edit, setEdit, locs, branchesOnly = false, kind = 'mpesa' }: { edit: any; setEdit: (e: any) => void; locs: Locations; branchesOnly?: boolean; kind?: string }) {
+  const thing = kind === 'etims' ? 'ETR device' : 'M-Pesa account';
   const scope = scopeOf(edit);
   const toggle = (key: 'branchIds' | 'tillIds', id: string, on: boolean) => setEdit({ ...edit, scope, [key]: on ? [...(edit[key] ?? []), id] : (edit[key] ?? []).filter((x: string) => x !== id) });
   const options: { v: Scope; t: string; d: string }[] = branchesOnly
     ? [{ v: 'all', t: 'All branches', d: 'Every branch can take payments with it' }, { v: 'branches', t: 'Chosen branches', d: 'Only these branches show it at checkout' }]
     : [
-      { v: 'all', t: 'All branches and tills', d: 'One M-Pesa account for the whole business' },
-      { v: 'branches', t: 'Chosen branches', d: 'Every till in these branches uses this account' },
-      { v: 'tills', t: 'Chosen tills only', d: 'For a separate Till number per counter' },
+      { v: 'all', t: 'All branches and tills', d: `One ${thing} for the whole business` },
+      { v: 'branches', t: 'Chosen branches', d: `Every till in these branches uses this ${kind === 'etims' ? 'device' : 'account'}` },
+      { v: 'tills', t: 'Chosen tills only', d: kind === 'etims' ? 'For a separate ETR device per counter' : 'For a separate Till number per counter' },
     ];
   return (
     <fieldset className="space-y-3">
@@ -836,7 +838,7 @@ function MpesaUsedBy({ edit, setEdit, locs, branchesOnly = false }: { edit: any;
           })}
         </div>
       )}
-      <p className="text-xs text-ink-500">{branchesOnly ? 'Tills of the chosen branches offer this payment method at checkout.' : 'Each till uses the M-Pesa set up for that till, otherwise its branch’s, otherwise the one for all branches. Register the C2B URLs for each account (button on its card).'}</p>
+      <p className="text-xs text-ink-500">{branchesOnly ? 'Tills of the chosen branches offer this payment method at checkout.' : kind === 'etims' ? 'Each till signs with the ETR device set up for that till, otherwise its branch’s, otherwise the one for the whole business. A cashier can pick another one the till may use at checkout.' : 'Each till uses the M-Pesa set up for that till, otherwise its branch’s, otherwise the one for all branches. Register the C2B URLs for each account (button on its card).'}</p>
     </fieldset>
   );
 }

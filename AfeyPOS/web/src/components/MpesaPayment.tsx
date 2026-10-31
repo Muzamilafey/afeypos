@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, newRequestId } from '../lib/api';
 import { dateTime, money, mpesaPayer } from '../lib/format';
 import { Button, cx, ErrorBox, Field, Input, Select, Spinner } from './ui';
@@ -23,11 +23,13 @@ const MODES: { key: Mode; label: string; hint: string; icon: string }[] = [
  */
 export interface MpesaAccount { id: string; name: string; environment: string; isDefault: boolean; payTo: { type: 'paybill' | 'till'; number: string }; stk: boolean }
 
-export function MpesaPanel({ amount, tillId, accounts = [], intent, setIntent, usedIds, onUse }: {
+export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, intent, setIntent, usedIds, onUse }: {
   amount: number | null;
   tillId: string;
   /** Every M-Pesa account this till may use; the cashier picks one when there is more than one. */
   accounts?: MpesaAccount[];
+  /** Start looking for a payment to the Paybill/Till as soon as M-Pesa is chosen (Checkout rules). */
+  watchTill?: boolean;
   intent: any;
   setIntent: (i: any) => void;
   usedIds: string[];
@@ -43,7 +45,10 @@ export function MpesaPanel({ amount, tillId, accounts = [], intent, setIntent, u
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const mine = intent && (intent.provider ?? 'mpesa') === 'mpesa' ? intent : null;
-  const pending = mine?.status === 'pending';
+  // The background watch runs quietly beside the normal choices; only a payment the cashier started takes over.
+  const watching = useRef<{ amount: number; id: string } | null>(null);
+  const autoWatch = Boolean(mine && mine.status === 'pending' && watching.current?.id && watching.current.id === mine.id);
+  const pending = mine?.status === 'pending' && !autoWatch;
   const whole = amount !== null && amount % 100 === 0;
 
   const call = async (fn: () => Promise<void>) => {
@@ -57,10 +62,17 @@ export function MpesaPanel({ amount, tillId, accounts = [], intent, setIntent, u
       setBusy(false);
     }
   };
-  const startStk = () => call(async () => setIntent((await api<{ data: any }>('/payments/mpesa/stk', { body: { clientRequestId: newRequestId(), amountCents: amount, phone, tillId, configId } })).data));
-  const expect = () => call(async () => setIntent((await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId } })).data));
+  const startStk = () => call(async () => {
+    await stopWatch();
+    setIntent((await api<{ data: any }>('/payments/mpesa/stk', { body: { clientRequestId: newRequestId(), amountCents: amount, phone, tillId, configId } })).data);
+  });
+  const expect = () => call(async () => {
+    await stopWatch();
+    setIntent((await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId } })).data);
+  });
   const lookup = () => call(async () => {
     setFound(null);
+    await stopWatch();
     const r = await api<{ data: any; found: boolean }>('/payments/mpesa/lookup', { body: { receipt: code.trim().toUpperCase(), clientRequestId: newRequestId(), tillId } });
     if (r.found) {
       if (usedIds.includes(r.data.id)) throw new Error(`${r.data.receiptNumber} is already on this sale`);
@@ -76,6 +88,40 @@ export function MpesaPanel({ amount, tillId, accounts = [], intent, setIntent, u
     await api(`/payments/intents/${mine.id}/cancel`, { body: {} }).catch(() => undefined);
     setIntent(null);
   };
+  /** Stops the background watch before the cashier takes another route (a prompt, or a code). */
+  const stopWatch = async () => {
+    const w = watching.current;
+    // Keep the amount so the watch does not start itself again behind the route the cashier chose.
+    watching.current = { amount: amount ?? 0, id: '' };
+    if (w?.id) {
+      await api(`/payments/intents/${w.id}/cancel`, { body: {} }).catch(() => undefined);
+      setIntent(null);
+    }
+  };
+
+  /**
+   * Watching the till: as soon as M-Pesa is chosen the server starts waiting for a payment of this amount,
+   * so the customer can simply pay the Till and the sale finishes by itself. Changing the amount starts again.
+   */
+  useEffect(() => {
+    if (!watchTill || pending || mine?.status === 'succeeded' || !amount || amount % 100 !== 0) return;
+    if (watching.current?.amount === amount) return;
+    const started = watching.current;
+    watching.current = { amount, id: '' };
+    void (async () => {
+      // Drop the previous wait (the cart changed), then wait for the new amount.
+      if (started?.id) await api(`/payments/intents/${started.id}/cancel`, { body: {} }).catch(() => undefined);
+      try {
+        const r = await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId } });
+        watching.current = { amount, id: r.data.id };
+        setIntent(r.data);
+      } catch {
+        // No M-Pesa for this till, or it is offline: the cashier can still prompt or type the code.
+        watching.current = null;
+      }
+    })();
+  }, [watchTill, amount, tillId, configId, pending, mine?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const current = MODES.find((m) => m.key === mode)!;
   const field = 'h-12 text-base';
 
@@ -94,6 +140,12 @@ export function MpesaPanel({ amount, tillId, accounts = [], intent, setIntent, u
       )}
 
       <div className="space-y-3 p-4">
+        {autoWatch && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-100" data-testid="mpesa-watching">
+            <Spinner className="h-4 w-4" />
+            <span>Watching the {mine.accountReference ? 'Paybill' : 'Till'} <b className="tabular-nums">{mine.shortCode}</b>{mine.accountReference ? <> · account <b className="tracking-wider">{mine.accountReference}</b></> : null} for {money(mine.amountCents)}: the customer can just pay, and the sale finishes by itself.</span>
+          </div>
+        )}
         {!pending && accounts.length > 1 && (
           <Field label="M-Pesa account" hint="Which Paybill or Till the money goes to">
             <Select value={account?.id ?? ''} onChange={(e) => setAccountId(e.target.value)}
