@@ -31,6 +31,7 @@ import { CardTerminalsPage } from './pages/settings/CardTerminals';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
 import { BarcodeVerifyPage, BrandsPage, CategoriesPage, StockAlertsPage, UnitsPage } from './pages/inventory/Catalog';
 import { ImportProductsPage } from './pages/inventory/ImportProducts';
+import { StockAnalysisPage } from './pages/reports/StockAnalysis';
 import { ReceiveStockPage } from './pages/inventory/ReceiveStock';
 import { EtimsPage } from './pages/Etims';
 
@@ -92,6 +93,7 @@ export function App() {
         <Route path="promotions" element={<Gate perm="prices.manage" module="promotions"><PromotionsPage /></Gate>} />
         <Route path="reports" element={<Gate perm="reports.read"><ReportsPage /></Gate>} />
         {/* One report per menu entry; each report's data checks its own permission (HR, accounts, stock…). */}
+        <Route path="reports/stock-analysis" element={<Gate perm="inventory.read" module="reports"><StockAnalysisPage /></Gate>} />
         <Route path="reports/:view" element={<Gate module="reports"><ReportsPage /></Gate>} />
         <Route path="expenses" element={<Gate perm="expenses.manage"><ExpensesPage /></Gate>} />
         <Route path="payments/mpesa" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaPage /></Gate>} />

@@ -78,3 +78,40 @@ test('the Reports menu opens each report on its own page', async ({ page }) => {
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/reports-menu.png` });
 });
 
+test('Stock analysis: predictions by days and months, pairs, overstock and busy days', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Stock analysis', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Stock analysis' })).toBeVisible();
+
+  // Prediction by days: every product with stock or sales, with how long it lasts.
+  const header = (name: string) => page.locator('th').filter({ hasText: name });
+  await expect(header('Days left')).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Fresh milk 500ml' }).first()).toBeVisible();
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/stock-analysis.png` });
+
+  // Each tab answers, with its own figures (a tab with nothing to show says so instead of a table).
+  for (const [tab, shown] of [
+    ['Stock prediction (months)', 'Products selling'], ['Bought together', 'Receipts with 2+ products'],
+    ['Money in slow stock', 'Products overstocked'], ['Busy days & months', 'Sales by weekday'],
+  ] as const) {
+    await page.getByRole('tab', { name: tab }).click();
+    await expect(page.getByText(shown, { exact: false }).first()).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  }
+
+  // The prediction follows the settings, and downloads as PDF and CSV.
+  await page.getByRole('tab', { name: 'Stock prediction (days)' }).click();
+  await page.getByLabel('Delivery takes (days)').fill('60');
+  await expect(page.getByText('order now').first()).toBeVisible();
+  const [csv] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'CSV' }).click()]);
+  expect(csv.suggestedFilename()).toBe('stock-forecastDays.csv');
+  const [pdf] = await Promise.all([
+    page.waitForResponse((r) => r.url().includes('/render/report') && r.url().includes('format=pdf')),
+    page.getByRole('button', { name: 'PDF', exact: true }).click(),
+  ]);
+  expect(pdf.request().postDataJSON().title).toBe('Stock analysis · Stock prediction (days)');
+});
+

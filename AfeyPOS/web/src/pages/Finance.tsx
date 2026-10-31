@@ -13,7 +13,7 @@ import { Icon } from '../components/icons';
 import { ReportActions } from '../components/ReportActions';
 import { CustomView, loadCustomView, REPORT_VIEWS } from './reports/ReportViews';
 
-function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void }) {
+export function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void }) {
   return (
     <div className="flex flex-wrap items-end gap-2">
       <Field label="From"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>

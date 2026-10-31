@@ -294,4 +294,185 @@ router.get('/reports/reorder', requirePermission('inventory.read'), async (req, 
   send(res, p.format, 'reorder', rows, { params: { days: q.days, leadDays: q.leadDays, coverDays: q.coverDays }, totalCostCents: rows.reduce((a, r) => a + r.estCostCents, 0) });
 });
 
+/**
+ * Stock analysis: what sells together, what the stock will do next, and what is tying money up.
+ *   pairs        products bought together in the same receipt (how often, and how much of one is with the other)
+ *   forecastDays stock, sales per day, days of cover and the day it runs out, with how much to order
+ *   forecastMonths what each month used the last 6 months, and what the next 3 are expected to need
+ *   overstock    stock worth more than months of sales (money standing still)
+ *   seasonality  sales per weekday and month, so buying follows the busy days
+ * Predictions are an average of the last weeks: they follow what the shop actually sold, nothing more.
+ */
+router.get('/reports/stock-analysis', requirePermission('inventory.read'), async (req, res) => {
+  const p = period(req);
+  const q = parse(z.object({
+    tab: z.enum(['pairs', 'forecastDays', 'forecastMonths', 'overstock', 'seasonality']).default('forecastDays'),
+    days: z.coerce.number().int().min(7).max(365).default(28),
+    leadDays: z.coerce.number().int().min(0).max(120).default(7),
+    coverDays: z.coerce.number().int().min(1).max(180).default(14),
+    warehouseId: objectId.optional(),
+  }), p.query);
+  const warehouses = await scopedWarehouses(p, q.warehouseId);
+  const whMatch = warehouses ? { warehouseId: { $in: warehouses } } : {};
+  const dayMs = 86400_000;
+
+  if (q.tab === 'pairs') {
+    // Receipts with at least two different products in the chosen period.
+    const sales = await Sale.find({ ...saleMatch(p), 'lines.1': { $exists: true } }, { lines: { productId: 1, name: 1, baseQty: 1, totalCents: 1 } }).limit(20_000).lean();
+    const pairs = new Map<string, { a: string; b: string; count: number; cents: number }>();
+    const alone = new Map<string, number>();
+    const names = new Map<string, string>();
+    for (const sale of sales) {
+      const items = new Map<string, number>();
+      for (const l of sale.lines ?? []) {
+        const id = String((l as any).productId ?? '');
+        if (!id) continue;
+        names.set(id, (l as any).name ?? '');
+        items.set(id, (items.get(id) ?? 0) + ((l as any).totalCents ?? 0));
+      }
+      const ids = [...items.keys()].sort();
+      for (const id of ids) alone.set(id, (alone.get(id) ?? 0) + 1);
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) {
+          const key = `${ids[i]}|${ids[j]}`;
+          const e = pairs.get(key) ?? { a: ids[i]!, b: ids[j]!, count: 0, cents: 0 };
+          e.count += 1;
+          e.cents += (items.get(ids[i]!) ?? 0) + (items.get(ids[j]!) ?? 0);
+          pairs.set(key, e);
+        }
+      }
+    }
+    const rows = [...pairs.values()]
+      .filter((x) => x.count >= 2)
+      .map((x) => ({
+        a: names.get(x.a) ?? '', b: names.get(x.b) ?? '', count: x.count, salesCents: x.cents,
+        // Of the receipts with A, how many also had B (and the other way round).
+        withABp: Math.round((x.count / Math.max(1, alone.get(x.a) ?? 1)) * 10_000),
+        withBBp: Math.round((x.count / Math.max(1, alone.get(x.b) ?? 1)) * 10_000),
+      }))
+      .sort((m, n) => n.count - m.count || n.salesCents - m.salesCents)
+      .slice(0, 200);
+    send(res, p.format, 'bought-together', rows, { receipts: sales.length });
+    return;
+  }
+
+  if (q.tab === 'seasonality') {
+    const [weekdays, months] = await Promise.all([
+      Sale.aggregate([{ $match: saleMatch(p) }, { $group: { _id: { $dayOfWeek: { date: '$completedAt', timezone: p.tz } }, count: { $sum: 1 }, grossCents: { $sum: '$totalCents' }, units: { $sum: { $sum: '$lines.baseQty' } } } }, { $sort: { _id: 1 } }]),
+      Sale.aggregate([
+        { $match: { ...saleMatch(p), completedAt: { $gte: new Date(Date.now() - 365 * dayMs) } } },
+        { $group: { _id: { $dateToString: { date: '$completedAt', format: '%Y-%m', timezone: p.tz } }, count: { $sum: 1 }, grossCents: { $sum: '$totalCents' }, units: { $sum: { $sum: '$lines.baseQty' } } } },
+        { $sort: { _id: 1 } },
+      ]),
+    ]);
+    const names = ['', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const avg = weekdays.reduce((a, r) => a + r.grossCents, 0) / Math.max(1, weekdays.length);
+    res.json({
+      data: {
+        weekdays: weekdays.map((r) => ({ name: names[r._id], count: r.count, grossCents: r.grossCents, units: Math.round((r.units ?? 0) * 100) / 100, vsAverageBp: avg ? Math.round(((r.grossCents - avg) / avg) * 10_000) : 0 })),
+        months: months.map((r) => ({ month: r._id, count: r.count, grossCents: r.grossCents, units: Math.round((r.units ?? 0) * 100) / 100 })),
+      },
+    });
+    return;
+  }
+
+  // The three stock tabs share the sales rate of the last `days` days.
+  const since = new Date(Date.now() - q.days * dayMs);
+  const [products, rate, onOrder] = await Promise.all([
+    Product.find({ trackStock: true, type: 'stock', active: { $ne: false } }, { name: 1, sku: 1, baseUnit: 1, reorderLevel: 1, reorderQty: 1, costCents: 1, prices: 1 }).lean(),
+    StockMovement.aggregate([{ $match: { type: { $in: ['sale', 'sale_return'] }, at: { $gte: since }, ...whMatch } }, { $group: { _id: '$productId', qty: { $sum: '$qty' } } }]),
+    PurchaseOrder.aggregate([
+      { $match: { status: { $in: ['sent', 'partially_received'] }, ...whMatch } }, { $unwind: '$lines' },
+      { $group: { _id: '$lines.productId', qty: { $sum: { $multiply: [{ $subtract: ['$lines.qty', { $ifNull: ['$lines.receivedQty', 0] }] }, { $ifNull: ['$lines.factor', 1] }] } } } },
+    ]),
+  ]);
+  const stock = await onHandByProduct(warehouses);
+  const sold = new Map(rate.map((r) => [String(r._id), Math.max(0, -(r.qty as number))]));
+  const ordered = new Map(onOrder.map((r) => [String(r._id), r.qty as number]));
+
+  if (q.tab === 'forecastDays') {
+    const rows = products.map((prod) => {
+      const id = String(prod._id);
+      const perDay = (sold.get(id) ?? 0) / q.days;
+      const onHand = stock.get(id)?.qty ?? 0;
+      const incoming = ordered.get(id) ?? 0;
+      const daysLeft = perDay > 0 ? Math.floor((onHand + incoming) / perDay) : null;
+      const needByCover = Math.ceil(perDay * (q.leadDays + q.coverDays) - onHand - incoming);
+      return {
+        productId: prod._id, name: prod.name, sku: prod.sku, unit: prod.baseUnit, onHand, onOrder: incoming,
+        perDay: Math.round(perDay * 100) / 100, perWeek: Math.round(perDay * 7 * 10) / 10,
+        daysLeft, outOn: daysLeft === null ? null : new Date(Date.now() + daysLeft * dayMs),
+        expected7: Math.round(perDay * 7 * 10) / 10, expected30: Math.round(perDay * 30 * 10) / 10,
+        orderQty: Math.max(0, needByCover), orderCostCents: Math.max(0, needByCover) * (prod.costCents ?? 0),
+        status: perDay <= 0 ? (onHand > 0 ? 'not selling' : 'no sales') : daysLeft! <= q.leadDays ? 'order now' : daysLeft! <= q.leadDays + q.coverDays ? 'order soon' : 'enough',
+      };
+    }).filter((r) => r.onHand > 0 || r.perDay > 0);
+    rows.sort((a, b) => (a.daysLeft ?? 99_999) - (b.daysLeft ?? 99_999));
+    send(res, p.format, 'stock-forecast-days', rows, {
+      params: { days: q.days, leadDays: q.leadDays, coverDays: q.coverDays },
+      summary: {
+        orderNow: rows.filter((r) => r.status === 'order now').length, orderSoon: rows.filter((r) => r.status === 'order soon').length,
+        notSelling: rows.filter((r) => r.status === 'not selling').length, orderCostCents: rows.reduce((a, r) => a + r.orderCostCents, 0),
+      },
+    });
+    return;
+  }
+
+  if (q.tab === 'forecastMonths') {
+    // What each of the last 6 months used, then the next 3 months from the recent daily rate.
+    const start = new Date(Date.now() - 183 * dayMs);
+    const history = await StockMovement.aggregate([
+      { $match: { type: { $in: ['sale', 'sale_return'] }, at: { $gte: start }, ...whMatch } },
+      { $group: { _id: { p: '$productId', m: { $dateToString: { date: '$at', format: '%Y-%m', timezone: p.tz } } }, qty: { $sum: '$qty' } } },
+    ]);
+    const byProduct = new Map<string, Map<string, number>>();
+    for (const h of history) {
+      const id = String(h._id.p);
+      const m = byProduct.get(id) ?? new Map<string, number>();
+      m.set(h._id.m, Math.max(0, -(h.qty as number)));
+      byProduct.set(id, m);
+    }
+    const monthKeys: string[] = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) monthKeys.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)).toISOString().slice(0, 7));
+    const nextKeys: string[] = [];
+    for (let i = 1; i <= 3; i++) nextKeys.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + i, 1)).toISOString().slice(0, 7));
+    const rows = products.map((prod) => {
+      const id = String(prod._id);
+      const hist = byProduct.get(id) ?? new Map<string, number>();
+      const perDay = (sold.get(id) ?? 0) / q.days;
+      const past = monthKeys.map((m) => Math.round((hist.get(m) ?? 0) * 100) / 100);
+      // A month is about 30.4 days of the recent rate.
+      const expected = Math.round(perDay * 30.4 * 10) / 10;
+      const onHand = stock.get(id)?.qty ?? 0;
+      const need3 = Math.max(0, Math.ceil(expected * 3 - onHand - (ordered.get(id) ?? 0)));
+      return {
+        productId: prod._id, name: prod.name, sku: prod.sku, unit: prod.baseUnit, onHand,
+        months: Object.fromEntries(monthKeys.map((m, i) => [m, past[i]])), lastMonth: past.at(-1) ?? 0, average: Math.round((past.reduce((a, b) => a + b, 0) / Math.max(1, past.filter((x) => x > 0).length || 1)) * 10) / 10,
+        expectedPerMonth: expected, next3: Object.fromEntries(nextKeys.map((m) => [m, expected])), orderForNext3: need3, orderCostCents: need3 * (prod.costCents ?? 0),
+      };
+    }).filter((r) => r.expectedPerMonth > 0 || r.lastMonth > 0);
+    rows.sort((a, b) => b.expectedPerMonth - a.expectedPerMonth);
+    send(res, p.format, 'stock-forecast-months', rows, { months: monthKeys, nextMonths: nextKeys, totalOrderCostCents: rows.reduce((a, r) => a + r.orderCostCents, 0) });
+    return;
+  }
+
+  // overstock: stock that will last far longer than it should, with the money standing in it.
+  const rows = products.map((prod) => {
+    const id = String(prod._id);
+    const perDay = (sold.get(id) ?? 0) / q.days;
+    const onHand = stock.get(id)?.qty ?? 0;
+    const valueCents = stock.get(id)?.valueCents ?? 0;
+    const monthsOfCover = perDay > 0 ? Math.round((onHand / (perDay * 30.4)) * 10) / 10 : null;
+    const target = Math.ceil(perDay * (q.leadDays + q.coverDays));
+    return {
+      productId: prod._id, name: prod.name, sku: prod.sku, unit: prod.baseUnit, onHand, valueCents,
+      perDay: Math.round(perDay * 100) / 100, monthsOfCover, target, excess: Math.max(0, onHand - target),
+      excessValueCents: Math.round(Math.max(0, onHand - target) * (valueCents / Math.max(1, onHand))),
+    };
+  }).filter((r) => r.onHand > 0 && (r.monthsOfCover === null || r.monthsOfCover >= 2) && r.excess > 0);
+  rows.sort((a, b) => b.excessValueCents - a.excessValueCents);
+  send(res, p.format, 'overstock', rows, { totalExcessValueCents: rows.reduce((a, r) => a + r.excessValueCents, 0), params: { days: q.days, leadDays: q.leadDays, coverDays: q.coverDays } });
+});
+
 export const retailReports = router;
