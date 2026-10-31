@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Types } from 'mongoose';
 import { CASHIER_PAGE_OPTIONS, PAYMENT_METHOD_OPTIONS, MODULES, PAYMENT_PROVIDER_INFO, RECEIPT_TEMPLATES, mergeCheckoutRules, mergeReceipt, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import {
-  AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
+  AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, RepairTicket, Shift,
 } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { requireModule, requirePermission, signedIn } from '../../http/auth.js';
@@ -26,7 +26,7 @@ import { explainC2BError } from '../../integrations/mpesa/daraja.js';
 import { notify } from '../notifications/service.js';
 import { DEFAULT_TEMPLATES } from '../notifications/templates.js';
 import { receiptContext, renderReceiptHtml, renderReceiptText, sampleSale } from '../hardware/receipt.js';
-import { CashMovement, PaymentIntent, Sale } from '../../models/index.js';
+import { PaymentIntent, Sale } from '../../models/index.js';
 import { checkUserAccessChange, roleRoutes } from './roles.js';
 
 const showKeys = ['logo', 'tagline', 'address', 'phone', 'email', 'taxPin', 'cashier', 'till', 'branch', 'customer', 'sku', 'unitPrice', 'itemCount', 'taxSummary', 'savings', 'loyalty', 'barcode', 'qr', 'poweredBy'] as const;
@@ -72,6 +72,7 @@ const settingsSchema = z.object({
       staffLogin: z.object({ cardRequiresPin: z.boolean() }).partial(),
       store: z.object({ enabled: z.boolean(), branchId: objectId.nullable(), warehouseId: objectId.nullable(), pickup: z.boolean(), delivery: z.boolean(), deliveryAreas: z.array(z.object({ name: z.string().trim().min(1).max(60), feeCents: z.number().int().min(0) })).max(50), deliveryFeeCents: z.number().int().min(0), freeDeliveryAboveCents: z.number().int().min(0), minOrderCents: z.number().int().min(0), payOnDelivery: z.boolean(), mpesa: z.boolean(), notifyPhone: z.string().max(20), contactPhone: z.string().max(20), announcement: z.string().max(200), hours: z.string().max(120), mpesaConfigId: objectId.nullable(), gatewayConfigId: objectId.nullable(), publicUrl: z.string().trim().url().max(200).or(z.literal('')) }).partial(),
       crm: z.object({ tiers: z.array(z.object({ name: z.string().trim().min(1).max(30), minSpendCents: z.number().int().min(0) })).min(1).max(8), birthdayGreeting: z.object({ enabled: z.boolean(), channel: z.enum(['sms', 'email']), offer: z.string().max(200) }).partial() }).partial(),
+      expenses: z.object({ approvalAboveCents: z.number().int().min(0) }).partial(),
       returns: z.object({ windowDays: z.number().int().min(0).max(365), approvalAboveCents: z.number().int().min(0), restockByDefault: z.boolean() }).partial(),
     })
     .partial(),
@@ -541,28 +542,6 @@ router.get('/audit', requirePermission('audit.read'), async (req, res) => {
   if (q.from || q.to) filter.at = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
   const [data, total] = await Promise.all([AuditLog.find(filter).sort({ at: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), AuditLog.countDocuments(filter)]);
   res.json({ data, total, page: q.page, limit: q.limit });
-});
-
-// ---------- expenses ----------
-router.get('/expenses', requirePermission('expenses.manage'), requireModule('expenses'), async (req, res) => {
-  const q = parse(pagination.extend({ from: z.coerce.date().optional(), to: z.coerce.date().optional(), category: z.string().optional() }), req.query);
-  const filter: Record<string, unknown> = {};
-  if (q.category) filter.category = q.category;
-  if (q.from || q.to) filter.date = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
-  const [data, total] = await Promise.all([Expense.find(filter).sort({ date: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), Expense.countDocuments(filter)]);
-  res.json({ data, total, page: q.page, limit: q.limit });
-});
-router.post('/expenses', requirePermission('expenses.manage'), requireModule('expenses'), async (req, res) => {
-  const body = parse(z.object({ category: z.string().trim().min(2).max(60), amountCents: positiveCents.refine((v) => v > 0), taxCents: positiveCents.default(0), method: z.enum(['cash', 'mpesa', 'bank', 'card', 'other']).default('cash'), branchId: objectId.optional(), shiftId: objectId.optional(), payee: z.string().max(120).optional(), reference: z.string().max(80).optional(), notes: z.string().max(500).optional(), date: z.coerce.date().optional() }), req.body);
-  const number = await nextNumber('expense', 'EXP');
-  const e = await Expense.create({ ...body, number, userId: req.auth!.userId });
-  if (body.method === 'cash' && body.shiftId) {
-    const shift = await Shift.findOne({ _id: body.shiftId, status: 'open' });
-    if (!shift) throw badRequest('Shift is not open');
-    await CashMovement.create({ shiftId: shift._id, tillId: shift.tillId, type: 'expense', amountCents: -body.amountCents, reason: body.category, userId: req.auth!.userId, ref: { type: 'Expense', id: e._id, number } });
-  }
-  await audit(req, { action: 'expense.recorded', entity: 'Expense', entityId: e._id, details: { amountCents: body.amountCents, category: body.category } });
-  res.status(201).json({ data: e });
 });
 
 // ---------- repairs (electronics) ----------

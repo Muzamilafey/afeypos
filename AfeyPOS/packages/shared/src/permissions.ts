@@ -57,6 +57,7 @@ export const PERMISSIONS = [
   'terminals.refund',
   'terminals.reconcile',
   'expenses.manage',
+  'expenses.approve',
   // HR, accounting, CRM, online orders
   'hr.manage',
   'payroll.manage',
@@ -116,7 +117,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   cashier: ['products.read', 'inventory.read', 'customers.read', 'sales.create', 'sales.read', 'sales.discount', 'shifts.open', 'cash.movement', 'customers.payments', 'orders.manage'],
   accountant: [
     'products.read', 'products.cost', 'inventory.read', 'customers.read', 'suppliers.read', 'suppliers.pay', 'purchasing.read', 'sales.read', 'sales.read.all',
-    'payments.reconcile', 'terminals.reconcile', 'payouts.request', 'expenses.manage', 'customers.payments', 'reports.read', 'reports.financial', 'commissions.read', 'audit.read',
+    'payments.reconcile', 'terminals.reconcile', 'payouts.request', 'expenses.manage', 'expenses.approve', 'customers.payments', 'reports.read', 'reports.financial', 'commissions.read', 'audit.read',
     'payroll.manage', 'accounting.read', 'accounting.manage',
   ],
   auditor: [
@@ -205,6 +206,7 @@ export const PERMISSION_INFO: Record<Permission, { label: string; group: (typeof
   'shifts.manage': { label: 'Manage all shifts and tills', group: 'Till & cash', sensitive: true },
   'cash.movement': { label: 'Cash in / cash out (drawer)', group: 'Till & cash', sensitive: true },
   'expenses.manage': { label: 'Record expenses', group: 'Till & cash', sensitive: true },
+  'expenses.approve': { label: 'Approve expenses, budgets and recurring bills', group: 'Till & cash', sensitive: true },
   'payments.reconcile': { label: 'Reconcile M-Pesa and online payments', group: 'Payments', sensitive: true },
   'payouts.request': { label: 'Request M-Pesa payouts', group: 'Payments', sensitive: true },
   'payouts.approve': { label: 'Approve and send M-Pesa payouts', group: 'Payments', sensitive: true },

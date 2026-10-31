@@ -241,10 +241,44 @@ const expenseSchema = new Schema(
     notes: String,
     date: { type: Date, default: () => new Date() },
     userId: ObjectId,
+    /** Which real account the money left (Accounts → Money accounts). */
+    bankAccountId: ObjectId,
+    supplierId: ObjectId,
+    /** Photo or PDF of the bill (modules/files). */
+    attachmentFileId: String,
+    /** Expenses above the approval amount wait for a manager. */
+    status: { type: String, enum: ['approved', 'pending', 'rejected'], default: 'approved' },
+    approvedBy: ObjectId,
+    approvedAt: Date,
+    rejectedReason: String,
+    /** Set when a recurring expense created this one. */
+    recurringId: ObjectId,
   },
   { timestamps: true },
 );
 expenseSchema.index({ tenantId: 1, number: 1 }, { unique: true });
+expenseSchema.index({ tenantId: 1, status: 1, date: -1 });
+
+/** A bill that comes every month (rent, electricity): the server records it on the chosen day. */
+const recurringExpenseSchema = new Schema(
+  {
+    category: { type: String, required: true },
+    amountCents: { type: Number, required: true, min: 1 },
+    method: { type: String, enum: ['cash', 'mpesa', 'bank', 'card', 'other'], default: 'bank' },
+    bankAccountId: ObjectId,
+    branchId: ObjectId,
+    payee: String,
+    notes: String,
+    /** 1-28: the day of the month it is recorded. */
+    dayOfMonth: { type: Number, required: true, min: 1, max: 28 },
+    active: { type: Boolean, default: true },
+    lastRunPeriod: String,
+    createdBy: ObjectId,
+  },
+  { timestamps: true },
+);
+recurringExpenseSchema.index({ tenantId: 1, category: 1, payee: 1 });
+export const RecurringExpense = tenantModel('RecurringExpense', recurringExpenseSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 expenseSchema.index({ tenantId: 1, date: -1 });
 export const Expense = tenantModel('Expense', expenseSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 

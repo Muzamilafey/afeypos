@@ -86,6 +86,10 @@ const tenantSettingsSchema = new Schema(
     accounting: { lockDate: String },
     staffLogin: { cardRequiresPin: { type: Boolean, default: true } },
     /** Returns policy: older sales or bigger refunds need someone with returns.approve. */
+    /** Expenses above this amount wait for someone with expenses.approve (0 = never). */
+    expenses: {
+      approvalAboveCents: { type: Number, default: 0 },
+    },
     returns: {
       windowDays: { type: Number, default: 14 },
       approvalAboveCents: { type: Number, default: 0 },

@@ -7,6 +7,7 @@ import { date, money, todayLocal } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { MoneyAccounts, Reconciliation } from './Banking';
 import { ReportActions } from '../../components/ReportActions';
 
 const monthStart = () => `${todayLocal().slice(0, 7)}-01`;
@@ -40,11 +41,13 @@ export function AccountingPage() {
   return (
     <div>
       <PageHeader title="Accounts" subtitle="Double-entry books kept automatically from sales, purchases, payments, stock, expenses and payroll" actions={can('accounting.manage') && <Button variant="secondary" onClick={() => api<{ data: Record<string, number> }>('/accounting/post', { body: {} }).then((r) => { toast.success(`${Object.values(r.data).reduce((a, b) => a + b, 0)} documents posted`); qc.invalidateQueries(); }).catch(toast.error)}><Icon name="refresh" className="h-4 w-4" />Post now</Button>} />
-      <Tabs tabs={[{ key: 'pl', label: 'Profit & loss' }, { key: 'bs', label: 'Balance sheet' }, { key: 'tb', label: 'Trial balance' }, { key: 'vat', label: 'VAT' }, { key: 'coa', label: 'Chart of accounts' }, { key: 'journals', label: 'Journals' }, ...(can('accounting.manage') ? [{ key: 'close', label: 'Close books' }] : [])]} value={tab} onChange={setTab} />
+      <Tabs tabs={[{ key: 'pl', label: 'Profit & loss' }, { key: 'bs', label: 'Balance sheet' }, { key: 'tb', label: 'Trial balance' }, { key: 'vat', label: 'VAT' }, { key: 'money', label: 'Money accounts' }, { key: 'rec', label: 'Reconciliation' }, { key: 'coa', label: 'Chart of accounts' }, { key: 'journals', label: 'Journals' }, ...(can('accounting.manage') ? [{ key: 'close', label: 'Close books' }] : [])]} value={tab} onChange={setTab} />
       {tab === 'pl' && <ProfitLoss />}
       {tab === 'bs' && <BalanceSheet />}
       {tab === 'tb' && <TrialBalance />}
       {tab === 'vat' && <Vat />}
+      {tab === 'money' && <MoneyAccounts />}
+      {tab === 'rec' && <Reconciliation />}
       {tab === 'coa' && <Chart />}
       {tab === 'journals' && <Journals />}
       {tab === 'close' && <CloseBooks />}

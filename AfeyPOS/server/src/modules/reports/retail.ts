@@ -10,7 +10,7 @@ import type { Types } from 'mongoose';
 import { CashMovement, Expense, GoodsReceipt, LedgerEntry, Product, Promotion, PurchaseOrder, Sale, SaleReturn, StockBatch, StockLevel, StockMovement, Supplier, User, Warehouse } from '../../models/index.js';
 import { objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
-import { period, saleMatch, send } from './routes.js';
+import { localDateString, period, saleMatch, send } from './routes.js';
 
 const router = Router();
 
@@ -432,11 +432,13 @@ router.get('/reports/stock-analysis', requirePermission('inventory.read'), async
       m.set(h._id.m, Math.max(0, -(h.qty as number)));
       byProduct.set(id, m);
     }
+    // Months are counted in the business timezone, like the sales themselves (near midnight the two differ).
+    const local = localDateString(new Date(), p.tz);
+    const [y, m] = [Number(local.slice(0, 4)), Number(local.slice(5, 7)) - 1];
     const monthKeys: string[] = [];
-    const now = new Date();
-    for (let i = 5; i >= 0; i--) monthKeys.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)).toISOString().slice(0, 7));
+    for (let i = 5; i >= 0; i--) monthKeys.push(new Date(Date.UTC(y, m - i, 1)).toISOString().slice(0, 7));
     const nextKeys: string[] = [];
-    for (let i = 1; i <= 3; i++) nextKeys.push(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + i, 1)).toISOString().slice(0, 7));
+    for (let i = 1; i <= 3; i++) nextKeys.push(new Date(Date.UTC(y, m + i, 1)).toISOString().slice(0, 7));
     const rows = products.map((prod) => {
       const id = String(prod._id);
       const hist = byProduct.get(id) ?? new Map<string, number>();

@@ -41,6 +41,8 @@ export const DEFAULT_CHART: AccountDef[] = [
   { code: '6030', name: 'NITA levy', type: 'expense', subtype: 'operating_expense', key: 'nita_expense' },
   { code: '6900', name: 'Rounding and differences', type: 'expense', subtype: 'operating_expense', key: 'rounding' },
   { code: '6950', name: 'Bad debts written off', type: 'expense', subtype: 'operating_expense', key: 'bad_debts' },
+  { code: '6960', name: 'Bank charges', type: 'expense', subtype: 'operating_expense', key: 'bank_charges' },
+  { code: '4400', name: 'Bank interest received', type: 'income', subtype: 'other_income', key: 'bank_interest' },
 ];
 
 /** Expense categories get their own accounts from 6100 upwards. */

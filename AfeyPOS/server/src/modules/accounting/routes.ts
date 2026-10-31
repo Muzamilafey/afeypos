@@ -15,6 +15,7 @@ import { runAsPlatform } from '../../lib/context.js';
 import { registerJob } from '../../jobs/queue.js';
 import { localDateString, localMidnightUtc } from '../reports/routes.js';
 import { ensureChart, postJournal, postPending, resetPostingFlags } from './posting.js';
+import { bankingRoutes } from './banking.js';
 
 const router = Router();
 
@@ -264,5 +265,7 @@ registerJob('accounting.post', async () => {
   if (env().DEPLOYMENT_MODE === 'branch') return;
   await postPending();
 });
+
+router.use(bankingRoutes);
 
 export const accountingRoutes = router;

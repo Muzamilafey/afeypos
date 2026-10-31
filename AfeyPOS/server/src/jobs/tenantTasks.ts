@@ -20,6 +20,8 @@ registerJob('tenants.dailyTasks', async () => {
       if (hour === 21 && t.settings?.dailyReportEmails?.length) await enqueue('reports.dailySummary', { day }, { dedupeKey: `daily-report:${t._id}:${day}` });
       if (hour === 9 && t.settings?.crm?.birthdayGreeting?.enabled) await enqueue('crm.birthdays', { day, tenantId: String(t._id) }, { dedupeKey: `birthdays:${t._id}:${day}` });
       if (hour === 9 && t.settings?.creditReminders?.enabled) await enqueue('customers.creditReminders', { day }, { dedupeKey: `credit-reminders:${t._id}:${day}` });
+      // Bills that come every month (rent, electricity) are recorded on the day they are due.
+      if (hour === 7) await enqueue('expenses.recurring', {}, { dedupeKey: `recurring-expenses:${t._id}:${day}` });
     });
   }
 });

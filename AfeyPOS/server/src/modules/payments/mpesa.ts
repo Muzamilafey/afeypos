@@ -105,7 +105,9 @@ const stkSchema = z.object({
 function stkHint(said: string, status?: number): string {
   const m = said.toLowerCase();
   if (/access token|invalid credentials|401/.test(m) || status === 401) return ' Check the consumer key and secret (and that sandbox/production matches the Daraja app).';
-  if (/businessshortcode|merchant does not exist|shortcode/.test(m)) return ' Check the shortcode: for a Buy Goods till, the "shortcode" is the store (head office) number and the till number goes in "Till number".';
+  if (/businessshortcode|merchant does not exist|shortcode|invalid.*initiator/.test(m)) {
+    return ' Check the shortcode in Settings → Integrations: for Buy Goods, "shortcode" is the store (head office) number from Safaricom and the till number goes in "Till number"; for a Paybill it is the Paybill number. The same number must be the one Lipa Na M-Pesa Online (STK) was approved for, and the passkey must belong to it.';
+  }
   if (/password|passkey/.test(m)) return ' Check the Lipa Na M-Pesa Online passkey: it belongs to the shortcode and comes from Safaricom when STK is approved.';
   if (/callback/.test(m)) return ' The callback address must be the public https:// address of the online server.';
   if (/phone|partya/.test(m)) return ' Check the customer number (Safaricom line, e.g. 0712345678).';
@@ -134,8 +136,10 @@ export async function startStk(opts: { tenant: any; clientRequestId: string; amo
   try {
     const resp = await gatewayFor(cfg).stkPush({ amount: opts.amountCents / 100, phone, accountReference, description: opts.description ?? 'Payment', callbackUrl });
     if (resp.ResponseCode !== '0') {
-      await PaymentIntent.updateOne({ _id: intent._id }, { $set: { status: 'failed', resultDesc: resp.ResponseDescription, completedAt: new Date() } });
-      throw unprocessable(`M-Pesa rejected the request: ${resp.ResponseDescription}`, 'MPESA_REJECTED');
+      // Safaricom's own words plus what to check, so the cashier is not left with "Merchant does not exist".
+      const said = `${resp.ResponseDescription ?? 'rejected'}${stkHint(String(resp.ResponseDescription ?? ''))}`;
+      await PaymentIntent.updateOne({ _id: intent._id }, { $set: { status: 'failed', resultDesc: said, completedAt: new Date() } });
+      throw unprocessable(`M-Pesa rejected the request: ${said}`, 'MPESA_REJECTED');
     }
     intent.checkoutRequestId = resp.CheckoutRequestID;
     intent.merchantRequestId = resp.MerchantRequestID;

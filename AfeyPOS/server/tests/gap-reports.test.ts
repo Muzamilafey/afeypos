@@ -7,8 +7,9 @@ let till: string;
 let wh: string;
 let sugar: any;
 let supplier: any;
-const today = () => new Date().toISOString().slice(0, 10);
-const period = `from=${today()}&to=${today()}`;
+const day = (offset: number) => new Date(Date.now() + offset * 86400_000).toISOString().slice(0, 10);
+// A business day is counted in its own timezone, so the window spans yesterday to tomorrow.
+const period = `from=${day(-1)}&to=${day(1)}`;
 
 beforeAll(async () => {
   ctx = await setupApp();
