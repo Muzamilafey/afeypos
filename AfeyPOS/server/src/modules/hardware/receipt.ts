@@ -30,7 +30,7 @@ interface ReceiptSale {
   creditCents?: number | null;
   status?: string;
   loyalty?: { earned?: number | null; redeemed?: number | null } | null;
-  etims?: { status?: string | null; invcNo?: number | null; rcptNo?: number | null; totRcptNo?: number | null; intrlData?: string | null; rcptSign?: string | null; sdcId?: string | null; mrcNo?: string | null; sdcDateTime?: string | null; qrUrl?: string | null } | null;
+  etims?: { status?: string | null; invcNo?: number | null; rcptNo?: number | null; totRcptNo?: number | null; intrlData?: string | null; rcptSign?: string | null; sdcId?: string | null; mrcNo?: string | null; sdcDateTime?: string | null; qrUrl?: string | null; device?: string | null; cuInvoiceNo?: string | null; cuSerial?: string | null } | null;
 }
 
 export interface ReceiptOptions {
@@ -86,7 +86,19 @@ export function etimsLines(sale: ReceiptSale, width: number): string[] {
     out.push(rest);
     return out;
   };
-  if (e.status !== 'signed') return ['KRA eTIMS: awaiting signature', 'Reprint this receipt for the signed copy'];
+  if (e.status !== 'signed') return [e.device === 'etr' ? 'KRA ETR: awaiting signature' : 'KRA eTIMS: awaiting signature', 'Reprint this receipt for the signed copy'];
+  if (e.device === 'etr') {
+    // Signed by the ETR device (TIMS control unit) on the Afey POS computer.
+    const when = e.sdcDateTime && !/^\d{14}$/.test(e.sdcDateTime) && !Number.isNaN(Date.parse(e.sdcDateTime))
+      ? new Date(e.sdcDateTime).toLocaleString('en-GB', { timeZone: 'Africa/Nairobi', hour12: false })
+      : etimsTime(e.sdcDateTime);
+    return [
+      'KRA TIMS · ETR',
+      ...wrap('CU Serial No.: ', e.cuSerial ?? e.sdcId ?? ''),
+      ...wrap('CU Invoice No.: ', e.cuInvoiceNo ?? ''),
+      ...(when ? [pad('Date', when, width)] : []),
+    ];
+  }
   return [
     'KRA eTIMS',
     pad('CU Invoice No.', `${e.sdcId ?? ''}/${e.rcptNo ?? ''}`, width),

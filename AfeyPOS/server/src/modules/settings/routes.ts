@@ -13,6 +13,7 @@ import { hashPassword } from '../../lib/crypto.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { nextNumber } from '../../lib/numbering.js';
 import { env } from '../../config/env.js';
+import { etimsGateway } from '../etims/service.js';
 import { revokeAllSessions } from '../auth/service.js';
 import { passwordSchema } from '../tenants/provisioning.js';
 import { nextEmployeeNo } from '../staff/cards.js';
@@ -305,12 +306,21 @@ const integrationSchema = z.object({
 const PROVIDERS: Record<string, string[]> = {
   mpesa: ['daraja', 'mock'],
   payment: PAYMENT_PROVIDERS.filter((p) => PAYMENT_PROVIDER_INFO[p].availability === 'available'),
-  etims: ['oscu', 'vscu', 'mock'],
+  etims: ['oscu', 'vscu', 'etr', 'mock'],
   sms: ['talksasa', 'africastalking', 'console'],
   email: ['smtp', 'console'],
 };
 
 const isSimulator = (c: { provider: string }) => c.provider === 'mock' || c.provider === 'simulator';
+
+/** An ETR device is reached on the Afey POS computer: the online head office cannot reach one in a shop. */
+function assertEtrSettings(st: Record<string, unknown>) {
+  const how = String(st.connection ?? 'http');
+  if (!['http', 'folder', 'simulator'].includes(how)) throw badRequest('ETR device: choose how Afey POS reaches its program');
+  if (how !== 'simulator' && env().DEPLOYMENT_MODE === 'hq') throw badRequest('ETR device: it is plugged into the shop computer, so set it up on that computer (the branch server), not on the online head office');
+  if (how === 'http' && !/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost)/.test(String(st.url ?? ''))) throw badRequest('ETR device: enter the address of its program on this computer, e.g. http://127.0.0.1:4444');
+  if (how === 'folder' && (!st.inbox || !st.outbox)) throw badRequest('ETR device: enter the inbox and outbox folders of its program');
+}
 
 /** Checks a payment gateway config has every required field (secrets may already be stored). */
 function assertGatewayFields(provider: string, settings: Record<string, unknown>, secrets: Record<string, unknown>) {
@@ -346,6 +356,7 @@ router.post('/settings/integrations', requirePermission('integrations.manage'), 
     if (!/^[AP]\d{9}[A-Z]$/.test(String(body.settings.tin ?? '').toUpperCase())) throw badRequest('eTIMS: enter the KRA PIN, e.g. P051234567X');
     if (!/^\d{2}$/.test(String(body.settings.bhfId ?? ''))) throw badRequest('eTIMS: branch id is two digits, "00" for head office');
     if (body.provider === 'vscu' && !body.settings.baseUrl) throw badRequest('eTIMS: enter the VSCU address on your network');
+    if (body.provider === 'etr') assertEtrSettings(body.settings);
     body.settings.tin = String(body.settings.tin).toUpperCase();
   }
   await scopeToTills(body);
@@ -367,6 +378,7 @@ router.patch('/settings/integrations/:id', requirePermission('integrations.manag
   if (isSimulator(cfg) && cfg.environment === 'production') throw badRequest('The simulator cannot be used in production mode');
   if (secrets) cfg.secretsEnc = sealSecrets(cfg._id, { ...openSecrets(cfg), ...Object.fromEntries(Object.entries(secrets).filter(([, v]) => v !== '')) });
   if (cfg.kind === 'payment') assertGatewayFields(cfg.provider, cfg.settings ?? {}, openSecrets(cfg));
+  if (cfg.kind === 'etims' && cfg.provider === 'etr') assertEtrSettings(cfg.settings ?? {});
   cfg.markModified('settings');
   await cfg.save();
   await audit(req, { action: 'integration.updated', entity: 'IntegrationConfig', entityId: cfg._id, details: { fields: Object.keys(rest), secretKeys: Object.keys(secrets ?? {}) } });
@@ -418,6 +430,10 @@ router.post('/settings/integrations/:id/test', requirePermission('integrations.m
       message = `Daraja OAuth token obtained (${done.join(' and ')})`;
     } else if (cfg.kind === 'payment') {
       message = await paymentGatewayFor(cfg).testCredentials();
+    } else if (cfg.kind === 'etims' && cfg.provider === 'etr') {
+      // An ETR device: its program must answer (or its folders be usable) on this computer.
+      await etimsGateway(cfg).initialize();
+      message = cfg.settings?.connection === 'simulator' ? 'ETR simulator ready' : cfg.settings?.connection === 'folder' ? `Folders ready: ${cfg.settings?.inbox} → ${cfg.settings?.outbox}` : `ETR program answers at ${cfg.settings?.url}`;
     } else if (cfg.kind === 'etims') {
       if (!openSecrets(cfg).cmcKey) throw new Error('Not initialised yet: press Initialise device');
       message = `Initialised: SCU ${cfg.settings?.sdcId ?? '?'}, MRC ${cfg.settings?.mrcNo ?? '?'}`;

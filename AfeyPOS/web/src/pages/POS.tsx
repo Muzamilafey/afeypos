@@ -1333,9 +1333,10 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
         {sale.changeCents > 0 && <div className="mt-2 text-xl font-semibold text-emerald-700">Change: {money(sale.changeCents)}</div>}
         {sale.etims && (
           <div className="mt-2 text-xs">
-            {sale.etims.status === 'signed' ? <Badge tone="green">KRA eTIMS signed · CU {sale.etims.sdcId}/{sale.etims.rcptNo}</Badge>
-              : sale.etims.status === 'failed' ? <Badge tone="red">eTIMS rejected: see KRA eTIMS page</Badge>
-              : <Badge tone="amber">{waited ? 'eTIMS will sign when KRA is reachable; reprint later' : 'Signing with KRA eTIMS…'}</Badge>}
+            {sale.etims.status === 'signed'
+              ? (sale.etims.device === 'etr' ? <Badge tone="green">Signed by the KRA ETR · CU invoice {sale.etims.cuInvoiceNo}</Badge> : <Badge tone="green">KRA eTIMS signed · CU {sale.etims.sdcId}/{sale.etims.rcptNo}</Badge>)
+              : sale.etims.status === 'failed' ? <Badge tone="red">{sale.etims.device === 'etr' ? 'ETR' : 'eTIMS'} rejected: see KRA eTIMS page</Badge>
+              : <Badge tone="amber">{waited ? 'Will be signed when KRA / the ETR device answers; reprint later' : 'Signing with KRA…'}</Badge>}
           </div>
         )}
       </div>

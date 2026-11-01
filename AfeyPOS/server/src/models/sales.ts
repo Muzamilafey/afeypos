@@ -16,6 +16,10 @@ const etimsSubmissionSchema = new Schema(
     mrcNo: String,
     sdcDateTime: String,
     qrUrl: String,
+    /** "etr": signed by a KRA ETR device (TIMS control unit) on the Afey POS computer. */
+    device: String,
+    cuInvoiceNo: String,
+    cuSerial: String,
     attempts: { type: Number, default: 0 },
     error: String,
     signedAt: Date,

@@ -15,6 +15,7 @@ Afey POS uses standard protocols and does **not** claim universal compatibility.
 | Weighing scale | (a) price/weight-embedded EAN-13 scale labels parsed at checkout (prefixes 20-29, configurable), (b) bridge serial read (CAS/generic frames) | (a) implemented and tested; (b) not verified |
 | RFID reader | Keyboard-wedge readers work like scanners | Not verified |
 | Fingerprint reader | See BIOMETRICS.md | Protocol implemented; vendor SDKs not integrated |
+| KRA ETR device (TIMS) on the Afey POS computer | Through the device's own program: local web address or inbox/outbox folders. See [KRA-ETR-DEVICE.md](KRA-ETR-DEVICE.md) | Implemented; tested against simulated programs, not a physical device |
 
 ## Configuration
 

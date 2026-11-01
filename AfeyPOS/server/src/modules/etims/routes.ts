@@ -33,8 +33,8 @@ router.get('/etims/devices', requirePermission('sales.create'), async (req, res)
   const devices = await etimsDevicesForTill(till?.branchId, till?._id);
   res.json({
     data: devices.map((c, i) => ({
-      id: c._id, name: c.name, mode: c.provider === 'vscu' ? 'vscu' : 'oscu', environment: c.environment, isDefault: i === 0,
-      tin: c.settings?.tin ?? '', bhfId: c.settings?.bhfId ?? '00', serial: c.settings?.dvcSrlNo ?? '', initialised: Boolean(c.settings?.sdcId),
+      id: c._id, name: c.name, mode: c.provider === 'vscu' ? 'vscu' : c.provider === 'etr' ? 'etr' : 'oscu', environment: c.environment, isDefault: i === 0,
+      tin: c.settings?.tin ?? '', bhfId: c.settings?.bhfId ?? '00', serial: c.settings?.dvcSrlNo ?? c.settings?.cuSerial ?? '', initialised: Boolean(c.settings?.sdcId),
     })),
   });
 });

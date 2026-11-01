@@ -375,10 +375,18 @@ const PROVIDER_FIELDS: Record<string, { settings: [string, string][]; secrets: [
   console: { settings: [], secrets: [] },
   oscu: { settings: [['tin', 'KRA PIN of the business'], ['bhfId', 'KRA branch id (00 = head office)'], ['dvcSrlNo', 'Device serial number (from KRA)']], secrets: [] },
   vscu: { settings: [['tin', 'KRA PIN of the business'], ['bhfId', 'KRA branch id (00 = head office)'], ['dvcSrlNo', 'Device serial number (from KRA)'], ['baseUrl', 'VSCU address on your network, e.g. http://192.168.1.5:8088']], secrets: [] },
+  etr: {
+    settings: [['tin', 'KRA PIN of the business'], ['bhfId', 'KRA branch id (00 = head office)'], ['cuSerial', 'CU serial number (on the ETR device)'], ['connection', 'How Afey POS reaches the ETR program'],
+      ['url', 'Program address on this computer, e.g. http://127.0.0.1:4444'], ['invoicePath', 'Path invoices are sent to (default /invoice)'],
+      ['inbox', 'Inbox folder the program reads, e.g. C:\\ETR\\in'], ['outbox', 'Outbox folder it answers in, e.g. C:\\ETR\\out'],
+      ['timeoutSeconds', 'Seconds to wait for the device (default 30)'],
+      ['fieldInvoice', 'Answer field with the CU invoice number (only if not found)'], ['fieldSerial', 'Answer field with the CU serial (optional)'], ['fieldQr', 'Answer field with the QR link (optional)']],
+    secrets: [['authHeader', 'Key header, if the program asks for one (e.g. X-Api-Key: abc)']],
+  },
 };
 
 const providerLabel = (kind: string, p: string) =>
-  kind === 'payment' ? PAYMENT_PROVIDER_INFO[p as PaymentProviderKey]?.label ?? p : p === 'oscu' ? 'OSCU (online, KRA servers)' : p === 'vscu' ? 'VSCU (KRA software on your network)' : p === 'mock' ? 'Simulator (testing)' : p === 'console' ? 'Development log (no delivery)' : p === 'daraja' ? 'Safaricom Daraja' : p;
+  kind === 'payment' ? PAYMENT_PROVIDER_INFO[p as PaymentProviderKey]?.label ?? p : p === 'oscu' ? 'OSCU (online, KRA servers)' : p === 'vscu' ? 'VSCU (KRA software on your network)' : p === 'etr' ? 'ETR device on the Afey POS computer' : p === 'mock' ? 'Simulator (testing)' : p === 'console' ? 'Development log (no delivery)' : p === 'daraja' ? 'Safaricom Daraja' : p;
 
 type IntegrationKind = 'mpesa' | 'payment' | 'etims' | 'sms' | 'email';
 const KIND_INFO: Record<IntegrationKind, { label: string; icon: string; blurb: string }> = {
@@ -399,6 +407,7 @@ const OTHER_PROVIDERS: Record<string, string> = {
   daraja: 'Safaricom Daraja: STK push, Paybill / Buy Goods confirmations, B2C payouts.',
   oscu: 'Online signing with KRA servers. Needs internet at the till.',
   vscu: 'KRA software running on your shop network. Keeps signing when the internet is down.',
+  etr: 'A KRA ETR device (TIMS) plugged into the Afey POS computer, through the program that came with it. Signs every receipt with its CU invoice number.',
   talksasa: 'Kenyan SMS provider with sender IDs.',
   africastalking: "Africa's Talking SMS across Africa.",
   smtp: 'Any email account or service with SMTP (Gmail, Zoho, Mailgun, your host).',
@@ -717,7 +726,15 @@ export function IntegrationsPage() {
                 ) : (
                   <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}><Input value={edit.settings?.[f.key] ?? ''} placeholder={f.placeholder} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [f.key]: e.target.value } })} /></Field>
                 ))}
-                {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => k === 'type' && edit.kind === 'mpesa' ? (
+                {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => edit.provider === 'etr' && (
+                  (['url', 'invoicePath'].includes(k) && (edit.settings?.connection ?? 'http') !== 'http')
+                  || (['inbox', 'outbox'].includes(k) && edit.settings?.connection !== 'folder')
+                  || (['url', 'invoicePath', 'inbox', 'outbox', 'timeoutSeconds', 'fieldInvoice', 'fieldSerial', 'fieldQr'].includes(k) && edit.settings?.connection === 'simulator')
+                ) ? null : k === 'connection' && edit.provider === 'etr' ? (
+                  <Field key={k} label={l}><Select value={edit.settings?.connection ?? 'http'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, connection: e.target.value } })} options={[
+                    { value: 'http', label: 'Its program listens on this computer (web address)' }, { value: 'folder', label: 'Folder exchange (inbox / outbox)' }, { value: 'simulator', label: 'Simulator (training, nothing sent to KRA)' },
+                  ]} /></Field>
+                ) : k === 'type' && edit.kind === 'mpesa' ? (
                   <Field key={k} label={l}><Select value={edit.settings?.type ?? 'paybill'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, type: e.target.value } })} options={[{ value: 'paybill', label: 'Paybill (customers enter an account number)' }, { value: 'till', label: 'Buy Goods / Till number' }]} /></Field>
                 ) : (k === 'tillNumber' && edit.kind === 'mpesa' && (edit.settings?.type ?? 'paybill') !== 'till') ? null : (
                   <Field key={k} label={l}><Input value={edit.settings?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [k]: k === 'port' ? Number(e.target.value) : e.target.value } })} /></Field>

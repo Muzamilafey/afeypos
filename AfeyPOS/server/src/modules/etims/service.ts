@@ -12,6 +12,7 @@ import { runAsPlatform } from '../../lib/context.js';
 import { enqueue, registerJob } from '../../jobs/queue.js';
 import { IntegrationError } from '../../integrations/http.js';
 import { EtimsClient, MockEtimsGateway, etimsDate, type EtimsGateway, type EtimsSale, type EtimsSaleLine } from '../../integrations/etims/client.js';
+import { EtrGateway, type EtrConfig, type EtrSignature } from '../../integrations/etims/etr.js';
 import { configsForTill, findActiveConfig, openSecrets } from '../integrations/configs.js';
 
 type Cfg = InstanceType<typeof IntegrationConfig>;
@@ -19,6 +20,15 @@ type Cfg = InstanceType<typeof IntegrationConfig>;
 export function etimsGateway(cfg: Cfg): EtimsGateway {
   if (cfg.provider === 'mock') return new MockEtimsGateway();
   const s = cfg.settings ?? {};
+  if (cfg.provider === 'etr') {
+    // An ETR device on this computer, through the program that comes with it.
+    const etr: EtrConfig = {
+      connection: s.connection === 'folder' || s.connection === 'simulator' ? s.connection : 'http', url: s.url, invoicePath: s.invoicePath, inbox: s.inbox, outbox: s.outbox,
+      cuSerial: s.cuSerial, timeoutSeconds: Number(s.timeoutSeconds) || undefined, fieldInvoice: s.fieldInvoice, fieldSerial: s.fieldSerial, fieldQr: s.fieldQr, fieldDate: s.fieldDate,
+      authHeader: openSecrets(cfg).authHeader,
+    };
+    return new EtrGateway(etr, { name: s.registeredName, pin: s.tin });
+  }
   return new EtimsClient({
     mode: cfg.provider === 'vscu' ? 'vscu' : 'oscu', environment: cfg.environment as 'sandbox' | 'production',
     tin: String(s.tin ?? ''), bhfId: String(s.bhfId ?? '00'), dvcSrlNo: s.dvcSrlNo, baseUrl: s.baseUrl, cmcKey: openSecrets(cfg).cmcKey,
@@ -172,6 +182,8 @@ async function buildCreditNote(ret: any): Promise<EtimsSale> {
     pmtTyCd: ret.refundMethod === 'mpesa' ? '06' : ret.refundMethod === 'card' ? '05' : ret.refundMethod === 'account' ? '02' : '01', salesSttsCd: '02',
     cfmDt: etimsDate(at), salesDt: etimsDate(at, false), rfdDt: etimsDate(at), rfdRsnCd: ret.isVoid ? '11' : '05', totItemCnt: items.length, ...totals(items),
     prchrAcptcYn: 'N', remark: (ret.reason ?? '').slice(0, 400) || null, ...h.user, receipt: { ...h.receipt, rptNo: ret.etims.invcNo }, itemList: items,
+    // ETR devices refer to the original sale by its receipt and CU invoice numbers.
+    ...({ orgTrdInvcNo: sale?.number, orgCuInvoiceNo: sale?.etims?.cuInvoiceNo ?? undefined } as object),
   };
 }
 
@@ -187,10 +199,13 @@ registerJob('etims.submit', async ({ kind, id }: { kind: 'sale' | 'return'; id: 
   const payload = kind === 'sale' ? await buildSale(doc) : await buildCreditNote(doc);
   try {
     const sig = await etimsGateway(cfg).saveSale(payload);
+    const etr = cfg.provider === 'etr' ? (sig as EtrSignature) : null;
     await (model as typeof Sale).updateOne({ _id: id }, {
       $set: {
         'etims.status': 'signed', 'etims.rcptNo': sig.curRcptNo, 'etims.totRcptNo': sig.totRcptNo, 'etims.intrlData': sig.intrlData, 'etims.rcptSign': sig.rcptSign,
-        'etims.sdcId': sig.sdcId ?? cfg.settings?.sdcId, 'etims.mrcNo': sig.mrcNo ?? cfg.settings?.mrcNo, 'etims.sdcDateTime': sig.sdcDateTime, 'etims.qrUrl': etimsQrUrl(cfg, sig.rcptSign), 'etims.signedAt': new Date(),
+        'etims.sdcId': sig.sdcId ?? cfg.settings?.sdcId, 'etims.mrcNo': sig.mrcNo ?? cfg.settings?.mrcNo, 'etims.sdcDateTime': sig.sdcDateTime, 'etims.signedAt': new Date(),
+        // The ETR device gives its own CU invoice number and QR link; eTIMS receipts link to KRA's eTIMS page.
+        ...(etr ? { 'etims.device': 'etr', 'etims.cuInvoiceNo': etr.cuInvoiceNo, 'etims.cuSerial': etr.cuSerial, 'etims.qrUrl': etr.qrUrl ?? '' } : { 'etims.qrUrl': etimsQrUrl(cfg, sig.rcptSign) }),
       },
       $inc: { 'etims.attempts': 1 }, $unset: { 'etims.error': 1 },
     });
@@ -214,7 +229,8 @@ registerJob('etims.item', async ({ productId }: { productId: string }) => {
   const qtyUnit = p.etims?.qtyUnitCd || QTY_UNIT[p.baseUnit] || 'U';
   const pkg = p.etims?.pkgUnitCd || 'NT';
   const itemCd = await itemCodeFor(p, pkg, qtyUnit);
-  const configs = await IntegrationConfig.find({ kind: 'etims', enabled: true });
+  // ETR (TIMS) devices do not keep an item list.
+  const configs = await IntegrationConfig.find({ kind: 'etims', enabled: true, provider: { $ne: 'etr' } });
   try {
     for (const cfg of configs) {
       await etimsGateway(cfg).saveItem({

@@ -37,7 +37,7 @@ export function EtimsPage() {
       <Card title="Devices" className="mb-4">
         <DataTable rows={d.configs} empty="No devices" columns={[
           { key: 'n', header: 'Name', render: (c) => c.name },
-          { key: 'm', header: 'Type', render: (c) => (c.provider === 'vscu' ? 'VSCU' : c.provider === 'oscu' ? 'OSCU' : 'Simulator') },
+          { key: 'm', header: 'Type', render: (c) => (c.provider === 'vscu' ? 'VSCU' : c.provider === 'oscu' ? 'OSCU' : c.provider === 'etr' ? 'ETR device' : 'Simulator') },
           { key: 'e', header: 'Mode', render: (c) => <Badge tone={c.environment === 'production' ? 'green' : 'amber'}>{c.environment}</Badge> },
           { key: 't', header: 'KRA PIN / branch', render: (c) => `${c.tin ?? ''} / ${c.bhfId ?? ''}` },
           { key: 's', header: 'SCU / MRC', render: (c) => (c.sdcId ? `${c.sdcId} / ${c.mrcNo ?? ''}` : <Badge tone="amber">not initialised</Badge>) },
