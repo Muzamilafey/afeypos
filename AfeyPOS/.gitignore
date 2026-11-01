@@ -12,6 +12,7 @@ coverage/
 /server/data/
 /server/backups/
 /server/uploads/
+/web/data/
 test-results/
 playwright-report/
 .mongo-test/
