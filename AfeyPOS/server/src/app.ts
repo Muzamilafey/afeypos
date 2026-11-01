@@ -13,6 +13,7 @@ import { requireTenant } from './http/tenant.js';
 import { authenticate, requireAnyModule, requireModule } from './http/auth.js';
 import { dbStatus, pingDatabase } from './db/connection.js';
 import { appIconOf, publicRoutes } from './modules/public/routes.js';
+import { bridgeDownloadRoutes } from './modules/hardware/bridgeDownload.js';
 import { findTenantForRequest } from './http/tenant.js';
 import { authRoutes, recoveryRoutes } from './modules/auth/routes.js';
 import { salesRoutes } from './modules/sales/routes.js';
@@ -123,6 +124,8 @@ export function createApp() {
   const v1 = Router();
   v1.get('/health', health);
   v1.use('/public', publicRoutes);
+  // The device bridge for till PCs, from this server (no GitHub or build tools needed on the till).
+  v1.use('/public/bridge', bridgeDownloadRoutes);
   // Neutral path: Safaricom rejects callback URLs containing words such as "mpesa".
   v1.use('/hooks/pay', mpesaCallbackRoutes, gatewayCallbackRoutes);
   v1.use('/hooks/terminal', terminalHookRoutes);

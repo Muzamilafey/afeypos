@@ -161,6 +161,12 @@ export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
       res.end(JSON.stringify(body));
     };
     if (!allowed) return send(403, { error: 'Origin not allowed' });
+    // Pairing without copying the token: only an Afey POS page (an allowed origin, checked above) may ask for it.
+    // Other websites are refused by the origin check, and a request without an Origin header gets nothing here.
+    if (req.method === 'GET' && (req.url ?? '').split('?')[0] === '/pair') {
+      if (!origin) return send(403, { error: 'Pair from Afey POS in the browser' });
+      return send(200, { ok: true, token: cfg.pairingToken, port: cfg.port });
+    }
     const token = String(req.headers['x-afey-bridge-token'] ?? '');
     if (!safeEqual(token, cfg.pairingToken)) return send(401, { error: 'Invalid pairing token' });
     const handler = routes[`${req.method} ${(req.url ?? '').split('?')[0]}`];

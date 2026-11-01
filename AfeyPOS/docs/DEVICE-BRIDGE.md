@@ -50,7 +50,26 @@ Other ways to see it:
 
 ---
 
-## 3. Install the bridge on the till PC (Windows)
+## 3. The easy way: download it from Afey POS (Windows)
+
+On **the till PC the printer is plugged into**:
+
+1. Install the printer in Windows (its own driver, or "Generic / Text Only") and print a Windows test page.
+2. Open Afey POS in Chrome or Edge (the same address the till always uses) and go to **Administration → Hardware →
+   This computer: device bridge**.
+3. Press **1 · Download the bridge installer**. You get `Install Afey bridge.cmd`, already set for your Afey POS.
+4. Open it from *Downloads* and press **Yes** when Windows asks for permission.
+   - Browser says the file may be harmful: choose **Keep**.
+   - "Windows protected your PC": choose **More info → Run anyway**.
+   - Wait until the window says **Done** (a few minutes the first time: it installs Node.js if needed).
+5. Back in Afey POS, press **3 · Connect**. It shows **Bridge connected**: there is no token to copy.
+6. In the card **This computer: receipt printer**, choose **Straight to the receipt printer (device bridge)**,
+   pick the USB printer, press **Print test**, then **Use this printer**. Then **Cash drawer → Open drawer now**.
+
+The bridge comes from your own Afey POS server, so the till needs neither GitHub nor any build tools, and it starts
+with Windows from then on. To update it later, download and run the installer again (the printer choice is kept).
+
+## 3b. Or install it with a command (Windows)
 
 On **the till PC the printer is plugged into**, first install the printer in Windows (its own driver, or
 "Generic / Text Only") and print a Windows test page.
@@ -105,9 +124,10 @@ Keep this window open for the next step.
 On **the same till PC**, in Afey POS:
 
 1. Go to **Administration → Hardware**.
-2. In the card **This computer: device bridge**:
+2. In the card **This computer: device bridge**, press **3 · Connect** (it pairs by itself). Only if that fails,
+   open **Set up by hand**:
    - **Bridge address:** `http://127.0.0.1:9123`. It is always `127.0.0.1`, the PC itself, never the server's IP.
-   - **Pairing token:** paste the token from step 3.
+   - **Pairing token:** paste the token from step 3b.
    - Press **Test connection**. You should see **Bridge connected**.
 3. In the card **This computer: receipt printer**:
    - Choose **Straight to the receipt printer (device bridge)**.
@@ -147,8 +167,9 @@ The settings are in `C:\AfeyBridge\app\bridge\config.json`. After editing it by 
 
 | What you see | What to do |
 |---|---|
+| **Connect**: "not running on this computer yet" | Run the installer (step 3) and wait for *Done*. Then press Connect again. |
 | **Test connection**: "Failed to fetch" / cannot reach | The bridge is not running: check the log (step 5). Is the address exactly `http://127.0.0.1:9123`? |
-| **Origin not allowed** | Afey POS was opened on an address the bridge does not know (e.g. `http://localhost:9999` vs `http://192.168.1.50:9999`). Run the install line again with `-ExtraOrigins <that address>`. |
+| **Origin not allowed** / *"installed for another address"* | Afey POS was opened on an address the bridge does not know (e.g. `http://localhost:9999` vs `http://192.168.1.50:9999`). Download the installer again **from the address you use now** and run it (or run the install line with `-ExtraOrigins <that address>`). |
 | **Invalid pairing token** | Paste the token again (step 5, "Show the pairing token"). |
 | The printer is not in the list | Install it in Windows first and print a Windows test page, then press **Look again** / reopen Hardware. |
 | It prints strange characters | Choose a thermal (ESC/POS) printer. If needed, set its Windows driver to **Generic / Text Only**. |

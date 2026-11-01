@@ -21,7 +21,9 @@ param(
   [int]$Port = 9123,
   [string]$Root = 'C:\AfeyBridge',
   [string]$Repo = 'Muzamilafey/afeypos',
-  [string]$Ref = $(if ($env:AFEY_REF) { $env:AFEY_REF } else { 'HEAD' })
+  [string]$Ref = $(if ($env:AFEY_REF) { $env:AFEY_REF } else { 'HEAD' }),
+  # Take the bridge, already built, from this Afey POS server (.../api/v1/public/bridge/files): no GitHub, no build.
+  [string]$SourceUrl = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,28 +79,46 @@ if ($nodeOk) { Write-Host "Node.js $(node -v) found" } else {
 $nodeExe = (Get-Command node).Source
 
 # ---------- the bridge ----------
-Step "Downloading the device bridge ($Repo, $Ref)"
-Get-File "https://codeload.github.com/$Repo/zip/$Ref" "$tmp\afeypos.zip"
-Expand-Archive -Path "$tmp\afeypos.zip" -DestinationPath "$tmp\src" -Force
-$top = (Get-ChildItem "$tmp\src" -Directory | Select-Object -First 1).FullName
-$src = if (Test-Path "$top\AfeyPOS\bridge\package.json") { "$top\AfeyPOS" } elseif (Test-Path "$top\bridge\package.json") { $top } else { Fail "The download does not contain the device bridge ($Repo, $Ref)" }
-
-# Stop the running bridge while its files are replaced.
-Stop-ScheduledTask -TaskName 'AfeyBridge' -ErrorAction SilentlyContinue
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*AfeyBridge*dist\index.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+function Stop-Bridge {
+  Stop-ScheduledTask -TaskName 'AfeyBridge' -ErrorAction SilentlyContinue
+  Get-CimInstance Win32_Process -Filter "Name='cmd.exe' OR Name='node.exe'" | Where-Object { $_.CommandLine -like '*AfeyBridge*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 New-Item -ItemType Directory -Force -Path (Join-Path $app 'bridge') | Out-Null
-Copy-Item "$src\tsconfig.base.json" (Join-Path $app 'tsconfig.base.json') -Force
-robocopy "$src\bridge" (Join-Path $app 'bridge') /MIR /XD node_modules dist /XF config.json /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -ge 8) { Fail "Copying the bridge failed (robocopy code $LASTEXITCODE)" }
-$global:LASTEXITCODE = 0
+if ($SourceUrl) {
+  # The Afey POS server hands out the bridge it built itself.
+  Step "Getting the device bridge from $origin"
+  try { $pack = Invoke-RestMethod -Uri $SourceUrl -UseBasicParsing -TimeoutSec 60 } catch { Fail "Could not get the bridge from $SourceUrl ($($_.Exception.Message)). Is Afey POS reachable from this PC?" }
+  if (-not $pack.files) { Fail "The server did not send the bridge files ($SourceUrl)" }
+  Stop-Bridge
+  $dist = Join-Path $app 'bridge\dist'
+  if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
+  foreach ($f in $pack.files.PSObject.Properties) {
+    if ($f.Name -match '\.\.' -or $f.Name -match '^[\\/]' -or $f.Name -match ':') { continue }
+    $target = Join-Path (Join-Path $app 'bridge') ($f.Name -replace '/', '\')
+    New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+    [IO.File]::WriteAllText($target, [string]$f.Value, (New-Object Text.UTF8Encoding $false))
+  }
+} else {
+  Step "Downloading the device bridge ($Repo, $Ref)"
+  Get-File "https://codeload.github.com/$Repo/zip/$Ref" "$tmp\afeypos.zip"
+  Expand-Archive -Path "$tmp\afeypos.zip" -DestinationPath "$tmp\src" -Force
+  $top = (Get-ChildItem "$tmp\src" -Directory | Select-Object -First 1).FullName
+  $src = if (Test-Path "$top\AfeyPOS\bridge\package.json") { "$top\AfeyPOS" } elseif (Test-Path "$top\bridge\package.json") { $top } else { Fail "The download does not contain the device bridge ($Repo, $Ref)" }
+  Stop-Bridge
+  Copy-Item "$src\tsconfig.base.json" (Join-Path $app 'tsconfig.base.json') -Force
+  robocopy "$src\bridge" (Join-Path $app 'bridge') /MIR /XD node_modules dist /XF config.json /NFL /NDL /NJH /NJS /NP | Out-Null
+  if ($LASTEXITCODE -ge 8) { Fail "Copying the bridge failed (robocopy code $LASTEXITCODE)" }
+  $global:LASTEXITCODE = 0
 
-Step 'Building the bridge'
-Push-Location (Join-Path $app 'bridge')
-& npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.9.3 '@types/node@22.18.8' | Out-Host
-if ($LASTEXITCODE -ne 0) { Pop-Location; Fail 'Installing the build tools failed (see above). Check the internet connection and run the command again.' }
-& npx tsc -p tsconfig.json | Out-Host
-if ($LASTEXITCODE -ne 0) { Pop-Location; Fail 'Building the bridge failed (see above).' }
-Pop-Location
+  Step 'Building the bridge'
+  Push-Location (Join-Path $app 'bridge')
+  & npm install --no-save --no-package-lock --no-audit --no-fund typescript@5.9.3 '@types/node@22.18.8' | Out-Host
+  if ($LASTEXITCODE -ne 0) { Pop-Location; Fail 'Installing the build tools failed (see above). Check the internet connection and run the command again.' }
+  & npx tsc -p tsconfig.json | Out-Host
+  if ($LASTEXITCODE -ne 0) { Pop-Location; Fail 'Building the bridge failed (see above).' }
+  Pop-Location
+}
+if (-not (Test-Path (Join-Path $app 'bridge\dist\index.js'))) { Fail 'The bridge files are incomplete. Run the installer again.' }
 
 # ---------- config.json (kept on updates) ----------
 Step 'Configuration'
@@ -131,7 +151,7 @@ $runner = Join-Path $Root 'run-bridge.cmd'
 rem Keeps the Afey device bridge running: started at boot by the AfeyBridge task, restarted if it stops.
 cd /d "$app\bridge"
 :loop
-"$nodeExe" dist\index.js >> "$Root\logs\bridge.log" 2>&1
+"$nodeExe" "$app\bridge\dist\index.js" >> "$Root\logs\bridge.log" 2>&1
 timeout /t 5 /nobreak > nul
 goto loop
 "@ | Set-Content -Path $runner -Encoding ASCII

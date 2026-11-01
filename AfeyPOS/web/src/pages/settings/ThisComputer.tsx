@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useLocations } from '../../lib/hooks';
-import { bridge, bridgeConfigured, bridgeStatus, type BridgeStatus } from '../../lib/bridge';
+import { bridge, bridgeConfigured, bridgeInstallerCmd, bridgeStatus, pairBridge, type BridgeStatus } from '../../lib/bridge';
 import { drawerRoute, openCashDrawer, PRINT_MODES, printMode, type PrintMode } from '../../lib/printing';
 import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { dateTime } from '../../lib/format';
@@ -184,9 +184,48 @@ export function BridgePairingCard() {
       setBusy(false);
     }
   };
+  const download = () => {
+    const blob = new Blob([bridgeInstallerCmd()], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'Install Afey bridge.cmd';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  };
+  const connect = async () => {
+    setBusy(true);
+    setError(null);
+    setStatus(null);
+    try {
+      setStatus(await pairBridge());
+      const now = getWorkstation();
+      setUrl(now.bridgeUrl ?? url);
+      setToken(now.bridgeToken ?? '');
+      toast.success('Connected to the device bridge on this computer');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Card className="mb-4" title="This computer: device bridge">
-      <p className="mb-3 text-sm text-ink-600 dark:text-ink-300">USB printers, scales, displays and fingerprint readers on this till are reached through the Afey device bridge. Install it on this PC, then enter its address and the <code>pairingToken</code> from its <code>config.json</code>. These settings stay on this computer only.</p>
+      <p className="mb-3 text-sm text-ink-600 dark:text-ink-300">For a receipt printer (and cash drawer), scale, display or fingerprint reader plugged into <b>this</b> PC by USB. Do this on the till PC itself, in Windows.</p>
+      <ol className="mb-3 space-y-2 text-sm" data-testid="bridge-steps">
+        <li className="flex flex-wrap items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-500 text-xs font-bold text-white">1</span>
+          <Button size="sm" onClick={download}><Icon name="download" className="h-4 w-4" />Download the bridge installer</Button>
+          <span className="text-xs text-ink-500">Made for this Afey POS ({window.location.origin}).</span></li>
+        <li className="flex items-start gap-2"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-500 text-xs font-bold text-white">2</span>
+          <span>Open <b>Install Afey bridge.cmd</b> from Downloads and answer <b>Yes</b> when Windows asks. If the browser warns about the file, choose <i>Keep</i>; if Windows shows "Windows protected your PC", choose <i>More info → Run anyway</i>. Wait until it says <i>Done</i> (a few minutes the first time).</span></li>
+        <li className="flex flex-wrap items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-500 text-xs font-bold text-white">3</span>
+          <Button size="sm" loading={busy} onClick={connect}><Icon name="plug" className="h-4 w-4" />Connect</Button>
+          <span className="text-xs text-ink-500">Then choose the printer in the card above: "Straight to the receipt printer (device bridge)".</span></li>
+      </ol>
+      <details className="rounded-lg border border-ink-100 p-3 text-sm dark:border-ink-800">
+        <summary className="cursor-pointer font-semibold">Set up by hand (address and pairing token)</summary>
+        <p className="mb-3 mt-2 text-xs text-ink-500">Only if Connect does not work: the token is in <code>C:\AfeyBridge\app\bridge\config.json</code>. These settings stay on this computer only.</p>
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Bridge address"><Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:9123" /></Field>
         <Field label="Pairing token" className="sm:col-span-2"><Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} /></Field>
@@ -196,6 +235,7 @@ export function BridgePairingCard() {
         <Button loading={busy} onClick={test}>Test connection</Button>
         {(w.bridgeUrl || w.bridgeToken) && <Button variant="ghost" onClick={() => { setWorkstation({ bridgeUrl: undefined, bridgeToken: undefined }); setToken(''); toast.success('Unpaired'); }}>Unpair</Button>}
       </div>
+      </details>
       {status && (
         <div className="mt-3 flex flex-wrap gap-2 text-sm" data-testid="bridge-status">
           <Badge tone="green">Bridge connected</Badge>

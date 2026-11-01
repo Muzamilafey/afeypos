@@ -49,6 +49,15 @@ describe('device bridge', () => {
     expect((await fetch(`${base}/status`, { headers: { ...H, Origin: 'http://pos.local' } })).status).toBe(200);
   });
 
+  it('pairs Afey POS without copying the token, but only for its own pages', async () => {
+    const ok = await fetch(`${base}/pair`, { headers: { Origin: 'http://pos.local' } });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ ok: true, token: 'x'.repeat(32) });
+    // Another website, or a request without an Origin, gets nothing.
+    expect((await fetch(`${base}/pair`, { headers: { Origin: 'http://evil.example' } })).status).toBe(403);
+    expect((await fetch(`${base}/pair`)).status).toBe(403);
+  });
+
   it('lists printers, saves the receipt printer chosen in Afey POS and prints a test page', async () => {
     const list = await (await fetch(`${base}/printers`, { headers: H })).json();
     expect(Object.keys(list.configured)).toContain('receipt');

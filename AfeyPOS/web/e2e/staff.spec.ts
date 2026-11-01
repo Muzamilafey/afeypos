@@ -69,6 +69,9 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   await expect.poll(async () => fetch(`http://127.0.0.1:${BRIDGE_PORT}/status`).then((r) => r.status).catch(() => 0)).toBe(401);
 
   // Pair this browser with the bridge.
+  // The simple setup (download the installer, Connect) is shown first; this bridge runs on a test port, so pair by hand.
+  await expect(page.getByTestId('bridge-steps')).toContainText('Download the bridge installer');
+  await page.getByText('Set up by hand (address and pairing token)').click();
   await page.getByLabel('Bridge address').fill(`http://127.0.0.1:${BRIDGE_PORT}`);
   await page.getByLabel('Pairing token').fill(TOKEN);
   await page.getByRole('button', { name: 'Test connection' }).click();
