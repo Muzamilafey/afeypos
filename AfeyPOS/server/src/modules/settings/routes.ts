@@ -21,7 +21,7 @@ import { openSecrets, presentConfig, sealSecrets } from '../integrations/configs
 import { gatewayCallbackUrl, paymentGatewayFor } from '../payments/gateways.js';
 import { createSmsProvider } from '../../integrations/sms/index.js';
 import { createEmailProvider } from '../../integrations/email/index.js';
-import { callbackUrlProblems, callbackUrls, gatewayFor, handleC2B } from '../payments/mpesa.js';
+import { c2bShortCodeOf, callbackUrlProblems, callbackUrls, gatewayFor, handleC2B, mpesaParts } from '../payments/mpesa.js';
 import { explainC2BError } from '../../integrations/mpesa/daraja.js';
 import { notify } from '../notifications/service.js';
 import { DEFAULT_TEMPLATES } from '../notifications/templates.js';
@@ -409,8 +409,13 @@ router.post('/settings/integrations/:id/test', requirePermission('integrations.m
   let message = '';
   try {
     if (cfg.kind === 'mpesa') {
-      await gatewayFor(cfg).testCredentials();
-      message = 'Daraja OAuth token obtained';
+      const parts = mpesaParts(cfg);
+      const own = openSecrets(cfg);
+      const done: string[] = [];
+      // Each part is tested with its own Daraja app when it has one.
+      if (parts.stk || !own.c2bConsumerKey) { await gatewayFor(cfg, 'stk').testCredentials(); done.push(parts.stk ? 'prompt (STK) keys' : 'keys'); }
+      if (parts.c2b && own.c2bConsumerKey) { await gatewayFor(cfg, 'c2b').testCredentials(); done.push('C2B keys'); }
+      message = `Daraja OAuth token obtained (${done.join(' and ')})`;
     } else if (cfg.kind === 'payment') {
       message = await paymentGatewayFor(cfg).testCredentials();
     } else if (cfg.kind === 'etims') {
@@ -442,7 +447,7 @@ async function c2bPlan(req: any, cfg: InstanceType<typeof IntegrationConfig>, sh
   const t = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
   const urls = callbackUrls(t!._id, t!.callbackToken);
   // Paybill: the Paybill number. Buy Goods: Safaricom registers URLs on the store (head office) number.
-  const shortCode = String(shortCodeOverride || cfg.settings?.shortCode || cfg.settings?.tillNumber || '').trim();
+  const shortCode = String(shortCodeOverride || c2bShortCodeOf(cfg)).trim();
   const environment = cfg.environment as 'sandbox' | 'production';
   const problems = cfg.provider === 'mock' ? [] : callbackUrlProblems(urls.c2bConfirmation, environment);
   // Plain http is only a warning in the sandbox; everything else stops the registration.
@@ -464,13 +469,14 @@ router.post('/settings/integrations/:id/register-c2b', requirePermission('integr
   const cfg = await IntegrationConfig.findOne({ _id: idParam(req.params.id), kind: 'mpesa' });
   if (!cfg) throw notFound('Integration');
   if (!cfg.enabled) throw badRequest('Enable this M-Pesa configuration first');
+  if (!mpesaParts(cfg).c2b) throw badRequest('Turn on "Customer pays the Paybill/Till (C2B)" for this account first');
   const plan = await c2bPlan(req, cfg, body.shortCode);
   if (plan.blocking.length) throw new AppError(422, 'C2B_URL_INVALID', plan.blocking[0], { problems: plan.blocking });
   let ok = false;
   let message: string;
   let response: unknown;
   try {
-    response = await gatewayFor(cfg).registerC2BUrls(plan.confirmationUrl, plan.validationUrl, plan.shortCode);
+    response = await gatewayFor(cfg, 'c2b').registerC2BUrls(plan.confirmationUrl, plan.validationUrl, plan.shortCode);
     ok = true;
     message = `Registered for short code ${plan.shortCode}${(response as any)?.ResponseDescription ? `: ${(response as any).ResponseDescription}` : ''}`;
   } catch (err) {
@@ -505,7 +511,7 @@ router.post('/settings/integrations/:id/test-c2b', requirePermission('integratio
     return;
   }
   try {
-    const r = await gatewayFor(cfg).simulateC2B({ shortCode, amount: body.amount, phone: body.phone, billRef: 'TEST', buyGoods });
+    const r = await gatewayFor(cfg, 'c2b').simulateC2B({ shortCode, amount: body.amount, phone: body.phone, billRef: 'TEST', buyGoods });
     res.json({ data: { ok: true, message: `Safaricom accepted the test payment (${r.ResponseDescription ?? 'accepted'}). When it reaches this server, "Last payment received" updates within a minute.` } });
   } catch (err) {
     throw new AppError(422, 'C2B_TEST_FAILED', explainC2BError(err, 'sandbox'));

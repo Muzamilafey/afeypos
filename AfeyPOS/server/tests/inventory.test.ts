@@ -146,6 +146,10 @@ describe('adjustments, transfers and stocktake', () => {
   it('posts stocktake variances against the snapshot', async () => {
     const p = await createProduct(t.client, { sku: 'CNT1', openingStock: [{ warehouseId: wh, qty: 30 }] });
     const st = await t.client.post('/inventory/stocktakes', { warehouseId: wh });
+    // The count sheet names every product (not just its id).
+    const sheet = (await t.client.get(`/inventory/stocktakes/${st.body.data._id}`)).body.data;
+    const line = sheet.lines.find((l: any) => String(l.productId?._id) === String(p._id));
+    expect(line?.productId).toMatchObject({ name: p.name, sku: p.sku });
     expect(st.status).toBe(201);
     expect((await t.client.post('/inventory/stocktakes', { warehouseId: wh })).status).toBe(409);
     await t.client.patch(`/inventory/stocktakes/${st.body.data._id}/counts`, { counts: [{ productId: p._id, countedQty: 27 }] });

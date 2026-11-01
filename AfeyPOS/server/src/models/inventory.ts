@@ -124,7 +124,7 @@ const stocktakeSchema = new Schema(
     warehouseId: { type: ObjectId, required: true },
     status: { type: String, enum: ['counting', 'posted', 'cancelled'], default: 'counting' },
     categoryId: ObjectId,
-    lines: [{ productId: { type: ObjectId, required: true }, expectedQty: Number, countedQty: Number, unitCostCents: Number, countedBy: ObjectId, _id: false }],
+    lines: [{ productId: { type: ObjectId, ref: 'Product', required: true }, expectedQty: Number, countedQty: Number, unitCostCents: Number, countedBy: ObjectId, _id: false }],
     startedBy: ObjectId,
     postedBy: ObjectId,
     postedAt: Date,

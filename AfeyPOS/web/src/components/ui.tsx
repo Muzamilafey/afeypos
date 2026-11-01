@@ -25,7 +25,7 @@ export function Spinner({ className = 'h-5 w-5' }: { className?: string }) {
   return <svg className={cx('animate-spin', className)} viewBox="0 0 24 24" fill="none" aria-label="Loading"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity=".25" strokeWidth="4" /><path d="M22 12a10 10 0 00-10-10" stroke="currentColor" strokeWidth="4" /></svg>;
 }
 
-export function Field({ label, hint, error, children, className }: { label: string; hint?: string; error?: string; children: ReactNode; className?: string }) {
+export function Field({ label, hint, error, children, className }: { label: ReactNode; hint?: string; error?: string; children: ReactNode; className?: string }) {
   return (
     <label className={cx('block', className)}>
       <span className="label">{label}</span>

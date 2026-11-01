@@ -21,7 +21,7 @@ const MODES: { key: Mode; label: string; hint: string; icon: string }[] = [
  * Payments that reached the Paybill/Till without a sale are not listed at the till (anyone could pick a
  * stranger's payment): the cashier finds one only by its M-Pesa code, checks the name and amount, then uses it.
  */
-export interface MpesaAccount { id: string; name: string; environment: string; isDefault: boolean; payTo: { type: 'paybill' | 'till'; number: string }; stk: boolean }
+export interface MpesaAccount { id: string; name: string; environment: string; isDefault: boolean; payTo: { type: 'paybill' | 'till'; number: string }; stk: boolean; c2b?: boolean }
 
 export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, intent, setIntent, usedIds, onUse }: {
   amount: number | null;
@@ -35,9 +35,13 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   usedIds: string[];
   onUse: (i: any) => void;
 }) {
-  const [mode, setMode] = useState<Mode>('stk');
+  const [chosenMode, setMode] = useState<Mode>('stk');
   const [accountId, setAccountId] = useState('');
   const account = accounts.find((a) => a.id === accountId) ?? accounts[0];
+  // Prompts and payments to the Paybill/Till are set up separately: offer only what this account does.
+  const c2bOn = account?.c2b !== false;
+  const modes = MODES.filter((m) => (m.key === 'stk' ? account?.stk !== false : m.key === 'paybill' ? c2bOn : true));
+  const mode: Mode = modes.some((m) => m.key === chosenMode) ? chosenMode : modes[0]!.key;
   const configId = accounts.length > 1 ? account?.id : undefined;
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
@@ -104,7 +108,7 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
    * so the customer can simply pay the Till and the sale finishes by itself. Changing the amount starts again.
    */
   useEffect(() => {
-    if (!watchTill || pending || mine?.status === 'succeeded' || !amount || amount % 100 !== 0) return;
+    if (!watchTill || !c2bOn || pending || mine?.status === 'succeeded' || !amount || amount % 100 !== 0) return;
     if (watching.current?.amount === amount) return;
     const started = watching.current;
     watching.current = { amount, id: '' };
@@ -120,16 +124,16 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
         watching.current = null;
       }
     })();
-  }, [watchTill, amount, tillId, configId, pending, mine?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [watchTill, c2bOn, amount, tillId, configId, pending, mine?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const current = MODES.find((m) => m.key === mode)!;
+  const current = modes.find((m) => m.key === mode)!;
   const field = 'h-12 text-base';
 
   return (
     <div className="overflow-hidden rounded-xl border border-ink-200 bg-white dark:border-ink-700 dark:bg-ink-900">
       {!pending && (
-        <div className="grid grid-cols-3 border-b border-ink-200 bg-ink-50 dark:border-ink-700 dark:bg-ink-800/60" role="radiogroup" aria-label="How the customer pays with M-Pesa">
-          {MODES.map((m) => (
+        <div className={cx('grid border-b border-ink-200 bg-ink-50 dark:border-ink-700 dark:bg-ink-800/60', modes.length === 3 ? 'grid-cols-3' : 'grid-cols-2')} role="radiogroup" aria-label="How the customer pays with M-Pesa">
+          {modes.map((m) => (
             <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} onClick={() => { setMode(m.key); setError(null); setFound(null); }}
               className={cx('flex flex-col items-center gap-1 border-b-2 px-2 py-2.5 text-center text-[13px] font-semibold leading-tight transition-colors',
                 mode === m.key ? 'border-emerald-600 bg-white text-emerald-700 dark:bg-ink-900 dark:text-emerald-300' : 'border-transparent text-ink-500 hover:bg-white/60 hover:text-ink-800 dark:text-ink-400 dark:hover:bg-ink-900/50')}>
@@ -186,8 +190,8 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
           </div>
         )}
 
-        {!pending && mode === 'stk' && account && !account.stk && (
-          <p className="text-xs text-amber-600">{account.name} has no Lipa Na M-Pesa passkey, so it cannot send a prompt. Use “Customer pays Paybill/Till”, or add the passkey in Settings → Integrations.</p>
+        {!pending && account && !account.stk && (
+          <p className="text-xs text-ink-500">Prompts are not set up for {account.name} (Settings → Integrations → M-Pesa → Prompt on the customer's phone).</p>
         )}
         {!pending && mode === 'stk' && (
           <div className="flex gap-2">

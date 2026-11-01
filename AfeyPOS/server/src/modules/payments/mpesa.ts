@@ -28,16 +28,52 @@ import { handleB2CResult } from './payouts.js';
 import { finalizeIntent, presentIntent } from './intents.js';
 import { verifyGatewayIntent } from './gateways.js';
 
-export function gatewayFor(cfg: InstanceType<typeof IntegrationConfig>): MpesaGateway {
+/**
+ * One M-Pesa account has two separate parts, each with its own Daraja app if Safaricom gave two:
+ *  - "stk": prompts on the customer's phone (Lipa Na M-Pesa Online), signed with the store/Paybill number and passkey;
+ *  - "c2b": the customer pays the Paybill/Till themselves; confirmations come to the URLs registered on the C2B number.
+ * Either part can be turned off; a till then uses the other part, or another account for the same Paybill/Till.
+ */
+export type MpesaPart = 'stk' | 'c2b';
+type CfgLike = { provider?: string | null; settings?: any; secretsEnc?: unknown };
+
+export function mpesaParts(cfg: CfgLike): { stk: boolean; c2b: boolean } {
+  const s = cfg.settings ?? {};
+  return { stk: s.stkEnabled !== false && s.stkEnabled !== 'false', c2b: s.c2bEnabled !== false && s.c2bEnabled !== 'false' };
+}
+
+/** Whether this account can do that part now (prompts also need the passkey, except on the simulator). */
+export function canDo(cfg: CfgLike, part: MpesaPart): boolean {
+  if (!mpesaParts(cfg)[part]) return false;
+  if (part === 'stk' && cfg.provider !== 'mock') return Boolean(openSecrets(cfg as any).passkey);
+  return true;
+}
+
+/** The number customers pay (and that confirmations name): the till for Buy Goods, else the Paybill. */
+export function payNumber(cfg: { settings?: any }): string {
+  const s = cfg.settings ?? {};
+  return String(s.type === 'till' ? (s.tillNumber || s.c2bShortCode || s.shortCode) : (s.c2bShortCode || s.shortCode) ?? '');
+}
+
+/** The number C2B URLs are registered on (Buy Goods: usually the store number; some tills register their own). */
+export function c2bShortCodeOf(cfg: { settings?: any }): string {
+  const s = cfg.settings ?? {};
+  return String(s.c2bShortCode || s.shortCode || s.tillNumber || '').trim();
+}
+
+export function gatewayFor(cfg: InstanceType<typeof IntegrationConfig>, part: MpesaPart = 'stk'): MpesaGateway {
   if (cfg.provider === 'mock') {
     if (env().NODE_ENV === 'production' && cfg.environment === 'production') throw badRequest('The M-Pesa simulator cannot be used in production');
     return new MockMpesaGateway();
   }
   const s = cfg.settings ?? {};
   const secrets = openSecrets(cfg);
+  // The C2B part may have its own Daraja app (keys); without them it uses the prompt's.
+  const c2b = part === 'c2b';
   return new DarajaClient({
-    environment: cfg.environment as 'sandbox' | 'production', consumerKey: secrets.consumerKey, consumerSecret: secrets.consumerSecret, passkey: secrets.passkey,
-    shortCode: s.shortCode, type: s.type === 'till' ? 'till' : 'paybill', tillNumber: s.tillNumber,
+    environment: cfg.environment as 'sandbox' | 'production',
+    consumerKey: (c2b && secrets.c2bConsumerKey) || secrets.consumerKey, consumerSecret: (c2b && secrets.c2bConsumerSecret) || secrets.consumerSecret, passkey: secrets.passkey,
+    shortCode: c2b ? c2bShortCodeOf(cfg) : s.shortCode, type: s.type === 'till' ? 'till' : 'paybill', tillNumber: s.tillNumber,
     initiatorName: s.initiatorName, securityCredential: secrets.securityCredential, b2cShortCode: s.b2cShortCode,
   });
 }
@@ -123,8 +159,15 @@ export async function startStk(opts: { tenant: any; clientRequestId: string; amo
   const till = opts.tillId ? await Till.findById(opts.tillId).lean() : null;
   const branchId = till?.branchId ?? (opts.branchId as any);
   // The online shop may use its own Paybill / Till instead of the branch's.
-  const cfg = opts.configId ? await IntegrationConfig.findOne({ _id: opts.configId, kind: 'mpesa', enabled: true }) : await findActiveConfig('mpesa', branchId, till?._id);
-  if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+  const chosen = opts.configId ? await IntegrationConfig.findOne({ _id: opts.configId, kind: 'mpesa', enabled: true }) : null;
+  const cfg = chosen
+    ? (canDo(chosen, 'stk') ? chosen : await partner(chosen, 'stk', await configsForTill('mpesa', branchId, till?._id)))
+    : (await configsForTill('mpesa', branchId, till?._id)).find((c) => canDo(c, 'stk')) ?? null;
+  if (!cfg) {
+    const any = chosen ?? (await findActiveConfig('mpesa', branchId, till?._id));
+    if (!any) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+    throw new AppError(409, 'MPESA_STK_OFF', `Prompts are not set up for ${any.name}: turn on "Prompt on the customer's phone (STK)" and enter its passkey in Settings → Integrations, or let the customer pay the ${any.settings?.type === 'till' ? 'Till' : 'Paybill'} (the till finds the payment by itself).`);
+  }
   const tenant = opts.tenant;
   const callbackUrl = callbackUrls(tenant._id, tenant.callbackToken).stk;
   // Safaricom only calls public HTTPS addresses: a prompt with any other callback is always refused.
@@ -165,7 +208,7 @@ router.post('/payments/mpesa/stk', requirePermission('sales.create'), async (req
   const body = parse(stkSchema.extend({ configId: objectId.optional() }), req.body);
   // With more than one M-Pesa account the cashier picks which one the prompt is for.
   const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
-  const cfg = body.configId ? await tillConfig(till ?? { _id: null }, body.configId) : null;
+  const cfg = body.configId ? await tillConfig(till ?? { _id: null }, body.configId, 'stk') : null;
   const { intent, replay } = await startStk({ tenant: req.tenant!, clientRequestId: body.clientRequestId, amountCents: body.amountCents, phone: body.phone, accountReference: body.accountReference, tillId: body.tillId, configId: cfg?._id, initiatedBy: req.auth!.userId });
   if (replay) {
     res.json({ data: presentIntent(intent), replay: true });
@@ -273,25 +316,38 @@ export function buildStkCallback(checkoutRequestId: string, merchantRequestId: s
  * a till's waiting payment must not depend on which config was picked.
  */
 export async function siblingConfigIds(cfg: { _id: unknown; settings?: any }): Promise<Types.ObjectId[]> {
-  const number = String(cfg.settings?.type === 'till' ? (cfg.settings?.tillNumber ?? cfg.settings?.shortCode) : cfg.settings?.shortCode);
+  const number = payNumber(cfg);
   const all = await IntegrationConfig.find({ kind: 'mpesa' }, { settings: 1 }).lean();
-  const ids = all.filter((c) => String(c.settings?.type === 'till' ? (c.settings?.tillNumber ?? c.settings?.shortCode) : c.settings?.shortCode) === number).map((c) => c._id);
+  const ids = all.filter((c) => payNumber(c) === number).map((c) => c._id);
   return ids.length ? ids : [cfg._id as Types.ObjectId];
 }
 
-function payTo(cfg: InstanceType<typeof IntegrationConfig>) {
-  const till = cfg.settings?.type === 'till';
-  return { type: till ? 'till' : 'paybill', number: String(till ? (cfg.settings?.tillNumber ?? cfg.settings?.shortCode) : cfg.settings?.shortCode) };
+function payTo(cfg: { settings?: any }) {
+  return { type: cfg.settings?.type === 'till' ? 'till' : 'paybill', number: payNumber(cfg) };
 }
 
-/** The M-Pesa account this till uses: the one the cashier chose (it must be one of the till's), else its default. */
-async function tillConfig(till: { _id: unknown; branchId?: unknown }, configId?: unknown) {
+/** Another of the till's accounts for the same Paybill/Till that does the part this one has turned off. */
+async function partner<T extends InstanceType<typeof IntegrationConfig>>(cfg: T, part: MpesaPart, allowed: T[]): Promise<T | null> {
+  const number = payNumber(cfg);
+  return allowed.find((c) => String(c._id) !== String(cfg._id) && payNumber(c) === number && canDo(c, part)) ?? null;
+}
+
+/**
+ * The M-Pesa account this till uses for a prompt ("stk") or a payment to the Paybill/Till ("c2b"): the one the
+ * cashier chose (it must be one of the till's), else its default. When the chosen one has that part turned off,
+ * its partner for the same Paybill/Till is used, so the cashier sees one M-Pesa however it is configured.
+ */
+async function tillConfig(till: { _id: unknown; branchId?: unknown }, configId: unknown, part: MpesaPart) {
   const allowed = await configsForTill('mpesa', till.branchId as Types.ObjectId, till._id as Types.ObjectId);
   if (!allowed.length) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
-  if (!configId) return allowed[0]!;
-  const chosen = allowed.find((c) => String(c._id) === String(configId));
+  const chosen = configId ? allowed.find((c) => String(c._id) === String(configId)) : allowed.find((c) => canDo(c, part)) ?? allowed[0];
   if (!chosen) throw badRequest('That M-Pesa account cannot be used at this till');
-  return chosen;
+  if (canDo(chosen, part)) return chosen;
+  const other = await partner(chosen, part, allowed);
+  if (other) return other;
+  throw new AppError(409, part === 'stk' ? 'MPESA_STK_OFF' : 'MPESA_C2B_OFF', part === 'stk'
+    ? `Prompts are not set up for ${chosen.name}: turn on "Prompt on the customer's phone (STK)" and enter its passkey in Settings → Integrations.`
+    : `Payments to the ${chosen.settings?.type === 'till' ? 'Till' : 'Paybill'} are turned off for ${chosen.name}: turn on "Customer pays the Paybill/Till (C2B)" in Settings → Integrations.`);
 }
 
 /** The M-Pesa accounts a till may take money with (so the cashier can choose when there is more than one). */
@@ -299,8 +355,15 @@ router.get('/payments/mpesa/accounts', requirePermission('sales.create'), async 
   const q = parse(z.object({ tillId: objectId.optional() }), req.query);
   const till = q.tillId ? await Till.findById(q.tillId).lean() : null;
   const configs = await configsForTill('mpesa', till?.branchId, till?._id);
+  // Accounts for the same Paybill/Till are one M-Pesa to the cashier (e.g. a prompt-only and a C2B-only setup):
+  // the till picks the right one for a prompt or for a payment to the Till, and every payment lands on the sale.
+  const groups = new Map<string, typeof configs>();
+  for (const c of configs) groups.set(payNumber(c), [...(groups.get(payNumber(c)) ?? []), c]);
   res.json({
-    data: configs.map((c, i) => ({ id: c._id, name: c.name, environment: c.environment, isDefault: i === 0, payTo: payTo(c), stk: c.provider === 'mock' || Boolean(openSecrets(c).passkey) })),
+    data: [...groups.values()].map((g, i) => {
+      const main = g.find((c) => canDo(c, 'c2b')) ?? g[0]!;
+      return { id: main._id, name: main.name, environment: main.environment, isDefault: i === 0, payTo: payTo(main), stk: g.some((c) => canDo(c, 'stk')), c2b: g.some((c) => canDo(c, 'c2b')) };
+    }),
   });
 });
 
@@ -317,7 +380,7 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   }
   const till = await Till.findById(body.tillId).lean();
   if (!till) throw notFound('Till');
-  const cfg = await tillConfig(till, body.configId);
+  const cfg = await tillConfig(till, body.configId, 'c2b');
   const to = payTo(cfg);
   // Short and easy to type on a phone: till code + 4 digits, unique among waiting payments.
   let account = '';
@@ -375,7 +438,8 @@ router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (
     return;
   }
   const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
-  const cfg = await findActiveConfig('mpesa', till?.branchId, till?._id);
+  const mine = await configsForTill('mpesa', till?.branchId, till?._id);
+  const cfg = mine.find((c) => canDo(c, 'c2b')) ?? mine[0];
   if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
   if (cfg.provider !== 'mock' && (!cfg.settings?.initiatorName || !openSecrets(cfg).securityCredential)) {
     throw new AppError(404, 'MPESA_RECEIPT_NOT_FOUND', `${body.receipt} has not reached the system yet. Check the code, wait a minute, or set up the M-Pesa initiator to verify codes with Safaricom.`);
@@ -388,7 +452,7 @@ router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (
     originatorConversationId, branchId: till?.branchId, tillId: till?._id, configId: cfg._id, initiatedBy: req.auth!.userId,
   }]);
   try {
-    const r = await gatewayFor(cfg).transactionStatus({ transactionId: body.receipt, originatorConversationId, resultUrl: urls.statusResult, timeoutUrl: urls.timeout });
+    const r = await gatewayFor(cfg, 'c2b').transactionStatus({ transactionId: body.receipt, originatorConversationId, resultUrl: urls.statusResult, timeoutUrl: urls.timeout });
     if (r.ResponseCode !== '0') throw new Error(r.ResponseDescription ?? r.errorMessage ?? 'rejected');
     await PaymentIntent.updateOne({ _id: intent._id }, { $set: { conversationId: r.ConversationID } });
   } catch (err: any) {
@@ -405,7 +469,8 @@ router.post('/payments/mpesa/simulate-c2b', requirePermission('sales.create'), a
   if (env().NODE_ENV === 'production') throw forbidden('Simulation is disabled in production');
   const body = parse(z.object({ amountCents: positiveCents, account: z.string().max(20).optional(), phone: z.string().default('254712345678'), receipt: z.string().optional(), tillId: objectId.optional() }), req.body);
   const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
-  const cfg = await findActiveConfig('mpesa', till?.branchId, till?._id);
+  const mine = await configsForTill('mpesa', till?.branchId, till?._id);
+  const cfg = mine.find((c) => canDo(c, 'c2b')) ?? mine[0];
   if (cfg?.provider !== 'mock') throw forbidden('Only the M-Pesa simulator can simulate payments');
   const to = payTo(cfg);
   const receipt = body.receipt ?? `SIM${Date.now().toString(36).toUpperCase()}`.slice(0, 10);
@@ -537,7 +602,10 @@ export async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: stri
       return;
     }
     const cfgs = await IntegrationConfig.find({ kind: 'mpesa', enabled: true }).lean();
-    const cfg = cfgs.find((c) => String(c.settings?.shortCode) === String(payload.BusinessShortCode) || String(c.settings?.tillNumber) === String(payload.BusinessShortCode));
+    // The account for the number paid: one with C2B turned on first (a prompt-only one for the same number is its partner).
+    const paidTo = String(payload.BusinessShortCode ?? '');
+    const forNumber = cfgs.filter((c) => [c.settings?.shortCode, c.settings?.tillNumber, c.settings?.c2bShortCode].some((n) => n && String(n) === paidTo));
+    const cfg = forNumber.find((c) => mpesaParts(c).c2b) ?? forNumber[0];
     if (!cfg) {
       event.outcome = 'unknown_shortcode';
       await event.save();

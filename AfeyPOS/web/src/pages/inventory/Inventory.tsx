@@ -232,11 +232,12 @@ function StocktakeModal({ id, onClose }: { id: string; onClose: () => void }) {
       <Input className="mb-2 max-w-xs" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
       <table className="min-w-full text-sm"><thead><tr><th className="th">Product</th><th className="th num">Expected</th><th className="th num">Counted</th><th className="th num">Variance</th></tr></thead>
         <tbody>{st.lines.filter((l: any) => !filter || l.productId?.name?.toLowerCase().includes(filter.toLowerCase()) || l.productId?.sku === filter).map((l: any) => {
-          const pid = l.productId?._id;
+          // Each line is keyed by its own product, so a count goes to that product only.
+          const pid = String(l.productId?._id ?? l.productId);
           const counted = counts[pid] ?? (l.countedQty ?? '');
           const v = counted === '' ? null : Number(counted) - l.expectedQty;
-          return <tr key={pid}><td className="td">{l.productId?.name} <span className="text-ink-500">{l.productId?.sku}</span></td><td className="td num">{qty(l.expectedQty)}</td>
-            <td className="td num">{st.status === 'counting' ? <Input className="ml-auto w-24 text-right" inputMode="decimal" value={counted} onChange={(e) => setCounts({ ...counts, [pid]: e.target.value })} /> : qty(l.countedQty)}</td>
+          return <tr key={pid}><td className="td">{l.productId?.name ? <>{l.productId.name} <span className="text-ink-500">{l.productId.sku}</span></> : <span className="text-ink-500">Product no longer exists</span>}</td><td className="td num">{qty(l.expectedQty)}</td>
+            <td className="td num">{st.status === 'counting' ? <Input className="ml-auto w-24 text-right" inputMode="decimal" aria-label={`Counted ${l.productId?.name ?? ''}`.trim()} value={counted} onChange={(e) => setCounts({ ...counts, [pid]: e.target.value })} /> : qty(l.countedQty)}</td>
             <td className={`td num ${v && v < 0 ? 'text-red-600' : v ? 'text-amber-600' : ''}`}>{v === null ? '' : qty(v)}</td></tr>;
         })}</tbody></table>
     </Modal>

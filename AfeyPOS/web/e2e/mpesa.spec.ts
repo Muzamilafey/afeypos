@@ -13,9 +13,15 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await expect(page.getByLabel('Provider')).toHaveValue('mock');
   await page.getByLabel('Name', { exact: true }).fill('Till simulator');
   // Typed key by key: the field must keep focus while the dialog re-renders.
-  await page.getByLabel('Short code').pressSequentially('174379');
-  await expect(page.getByLabel('Short code')).toHaveValue('174379');
-  await expect(page.getByLabel('Short code')).toBeFocused();
+  await page.getByLabel('Paybill number').pressSequentially('174379');
+  await expect(page.getByLabel('Paybill number')).toHaveValue('174379');
+  await expect(page.getByLabel('Paybill number')).toBeFocused();
+  // Prompts (STK) and payments to the Paybill/Till (C2B) are separate parts, both on by default.
+  await expect(page.getByTestId('mpesa-part-stk')).toContainText("Prompt on the customer's phone (STK)");
+  await expect(page.getByTestId('mpesa-part-c2b')).toContainText('Customer pays the Paybill (C2B)');
+  await expect(page.getByTestId('mpesa-part-stk').getByLabel('On')).toBeChecked();
+  await expect(page.getByTestId('mpesa-part-c2b').getByLabel('On')).toBeChecked();
+  await page.screenshot({ path: 'test-results/mpesa-parts.png', fullPage: true });
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('article', { name: 'Till simulator' })).toBeVisible();
 

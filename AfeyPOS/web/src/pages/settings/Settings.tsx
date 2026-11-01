@@ -283,6 +283,86 @@ export function LocationsPage() {
   );
 }
 
+/**
+ * M-Pesa account form. Prompts (STK) and payments straight to the Paybill/Till (C2B) are separate parts, each
+ * with its own switch and, if Safaricom gave two Daraja apps, its own keys. Whichever way the customer pays,
+ * the payment lands on the same sale.
+ */
+function MpesaFields({ edit, setEdit, c2bPanel }: { edit: any; setEdit: (e: any) => void; c2bPanel: ReactNode }) {
+  const daraja = edit.provider === 'daraja';
+  const st = edit.settings ?? {};
+  const till = (st.type ?? 'paybill') === 'till';
+  const stkOn = st.stkEnabled !== false;
+  const c2bOn = st.c2bEnabled !== false;
+  const set = (k: string, v: unknown) => setEdit({ ...edit, settings: { ...edit.settings, [k]: v } });
+  const text = (k: string, label: string, hint?: string, placeholder?: string) => (
+    <Field key={k} label={label} hint={hint}><Input value={st[k] ?? ''} placeholder={placeholder} onChange={(e) => set(k, e.target.value)} /></Field>
+  );
+  const secret = (k: string, label: string, hint?: string) => (
+    <Field key={k} label={<span className="inline-flex items-center gap-1"><Icon name="shield" className="h-3.5 w-3.5 text-amber-600" />{label}</span>} hint={edit.secretsSet?.includes(k) ? 'Saved. Leave blank to keep.' : hint}>
+      <Input type="password" autoComplete="new-password" value={edit.secrets?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, secrets: { ...edit.secrets, [k]: e.target.value } })} />
+    </Field>
+  );
+  const part = (on: boolean, key: string, title: string, blurb: string, body: ReactNode, testId: string) => (
+    <section data-testid={testId} className={cx('rounded-lg border p-4 transition', on ? 'border-brand-200 bg-white dark:border-brand-900 dark:bg-ink-900' : 'border-ink-200 bg-ink-50/60 dark:border-ink-800 dark:bg-ink-900/40')}>
+      <div className="flex items-start justify-between gap-3">
+        <div><h3 className="text-sm font-bold">{title}</h3><p className="text-xs text-ink-500">{blurb}</p></div>
+        <Checkbox label={on ? 'On' : 'Off'} checked={on} onChange={(v) => set(key, v)} />
+      </div>
+      {on && <div className="mt-3 space-y-3">{body}</div>}
+    </section>
+  );
+  return (
+    <div className="space-y-4">
+      <fieldset className="space-y-3">
+        <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">The account</legend>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Account type"><Select value={st.type ?? 'paybill'} onChange={(e) => set('type', e.target.value)} options={[{ value: 'paybill', label: 'Paybill (customers enter an account number)' }, { value: 'till', label: 'Buy Goods / Till number' }]} /></Field>
+          {text('shortCode', till ? 'Store (head office) number' : 'Paybill number', till ? 'From Safaricom; prompts are signed with it' : undefined)}
+          {till && text('tillNumber', 'Till number customers pay', 'The number on the till sticker')}
+        </div>
+        <p className="text-xs text-ink-500">Prompts and payments to the {till ? 'Till' : 'Paybill'} are set up separately below. Either way, the payment goes to the same sale and the same M-Pesa total in the reports.</p>
+      </fieldset>
+
+      {part(stkOn, 'stkEnabled', "Prompt on the customer's phone (STK)", 'The cashier sends a prompt; the customer enters the M-Pesa PIN.', (
+        <>
+          {daraja && <div className="grid gap-3 sm:grid-cols-2">
+            {secret('consumerKey', 'Consumer key', 'From the Daraja app with Lipa Na M-Pesa Online')}
+            {secret('consumerSecret', 'Consumer secret')}
+            {secret('passkey', 'Lipa Na M-Pesa Online passkey', `Belongs to ${st.shortCode || 'the store/Paybill number'}`)}
+          </div>}
+          {daraja && <Checkbox label="Double-check every callback with an STK status query" checked={Boolean(st.verifyCallbacksWithQuery)} onChange={(v) => set('verifyCallbacksWithQuery', v)} />}
+          {!daraja && <p className="text-xs text-ink-500">The simulator confirms prompts by itself.</p>}
+        </>
+      ), 'mpesa-part-stk')}
+
+      {part(c2bOn, 'c2bEnabled', `Customer pays the ${till ? 'Till' : 'Paybill'} (C2B)`, `The customer pays ${till ? `Till ${st.tillNumber || '…'}` : `Paybill ${st.shortCode || '…'}`} from their phone; the till finds the payment by itself.`, (
+        <>
+          {daraja && <div className="grid gap-3 sm:grid-cols-2">
+            {text('c2bShortCode', 'Number the C2B URLs are registered on', `Leave empty to use ${st.shortCode || 'the number above'}${till ? '. Some tills are registered on the till number itself.' : '.'}`, st.shortCode || undefined)}
+            <div className="hidden sm:block" />
+            {secret('c2bConsumerKey', 'C2B consumer key (separate Daraja app only)', stkOn ? 'Leave empty to use the prompt\'s keys' : 'From the Daraja app with C2B')}
+            {secret('c2bConsumerSecret', 'C2B consumer secret (separate Daraja app only)', stkOn ? 'Leave empty to use the prompt\'s keys' : undefined)}
+          </div>}
+          {c2bPanel}
+        </>
+      ), 'mpesa-part-c2b')}
+
+      {daraja && (
+        <fieldset className="space-y-3">
+          <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">More (optional)</legend>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {text('initiatorName', 'Initiator name', 'For checking M-Pesa codes with Safaricom and for payouts')}
+            {secret('securityCredential', 'Initiator security credential')}
+            {text('b2cShortCode', 'B2C short code', 'For salary payouts')}
+          </div>
+        </fieldset>
+      )}
+      {!stkOn && !c2bOn && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Both parts are off: this account cannot take payments.</p>}
+    </div>
+  );
+}
+
 const PROVIDER_FIELDS: Record<string, { settings: [string, string][]; secrets: [string, string][] }> = {
   daraja: {
     settings: [['type', 'Account type'], ['shortCode', 'Paybill number, or store (head office) number for Buy Goods'], ['tillNumber', 'Till number (Buy Goods only)'], ['initiatorName', 'Initiator name (optional: code checks and payouts)'], ['b2cShortCode', 'B2C short code (optional: salary payouts)']],
@@ -624,6 +704,11 @@ export function IntegrationsPage() {
             </fieldset>
             {(edit.kind === 'mpesa' || edit.kind === 'etims') && locs.data && (locs.data.branches.length > 1 || locs.data.tills.length > 1) && <MpesaUsedBy edit={edit} setEdit={setEdit} locs={locs.data} kind={edit.kind} />}
             {edit.kind === 'payment' && locs.data && locs.data.branches.length > 1 && <MpesaUsedBy edit={edit} setEdit={setEdit} locs={locs.data} branchesOnly />}
+            {edit.kind === 'mpesa' ? (
+              <MpesaFields edit={edit} setEdit={setEdit} c2bPanel={edit.id
+                ? <C2BPanel config={rows.find((r) => r.id === edit.id) ?? edit} onChanged={() => q.refetch()} />
+                : <p className="rounded-lg border border-dashed border-ink-200 p-3 text-xs text-ink-500 dark:border-ink-700">Save first, then register the C2B URLs here so payments made straight to your Paybill/Till reach Afey POS.</p>} />
+            ) : (<>
             <fieldset className="space-y-3">
               <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Account details</legend>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -652,9 +737,7 @@ export function IntegrationsPage() {
                 </div>
               </fieldset>
             )}
-            {edit.kind === 'mpesa' && (edit.id
-              ? <C2BPanel config={rows.find((r) => r.id === edit.id) ?? edit} onChanged={() => q.refetch()} />
-              : <p className="rounded-lg border border-dashed border-ink-200 p-3 text-xs text-ink-500 dark:border-ink-700">Save first, then register the C2B URLs here so payments made straight to your Paybill/Till reach Afey POS.</p>)}
+            </>)}
             {edit.kind === 'payment' && edit.webhookUrl && (
               <div><CopyField label="Webhook / callback URL" value={edit.webhookUrl} /><p className="mt-1 text-xs text-ink-500">Set this in the provider dashboard if asked. It contains a secret token.</p></div>
             )}
