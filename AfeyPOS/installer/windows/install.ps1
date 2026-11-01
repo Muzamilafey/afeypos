@@ -16,8 +16,9 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('standalone', 'hq', 'branch')][string]$Mode = 'standalone',
-  [int]$Port = 9999,
+  # Empty / 0 = keep what this computer already uses (an upgrade), else standalone on 9999.
+  [ValidateSet('', 'standalone', 'hq', 'branch')][string]$Mode = '',
+  [int]$Port = 0,
   [string]$PublicUrl = '',
   [string]$ShopHost = '',
   [string]$HqUrl = '',
@@ -121,7 +122,15 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.Comm
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 # scripts\setup.mjs writes server\.env (new secrets the first time, existing values kept afterwards),
 # runs npm ci and the build, and initialises the database replica set.
-$setupArgs = @('scripts\setup.mjs', '--mode', $Mode, '--port', "$Port", '--data-dir', $DataDir, '--mongo-uri', $mongoUri)
+# An upgrade keeps the mode and port in server\.env unless new ones are given: a branch server stays a branch.
+$envFile = Join-Path $InstallDir 'server\.env'
+$existing = if (Test-Path $envFile) { Get-Content $envFile } else { @() }
+function Get-EnvValue($name) { $l = $existing | Where-Object { $_ -match "^$name=" } | Select-Object -First 1; if ($l) { ($l -split '=', 2)[1].Trim() } else { '' } }
+$useMode = if ($Mode) { $Mode } else { Get-EnvValue 'DEPLOYMENT_MODE' }
+if ($useMode -notin @('standalone', 'hq', 'branch')) { $useMode = 'standalone' }
+$envPort = Get-EnvValue 'PORT'
+$usePort = if ($Port) { $Port } elseif ($envPort -match '^\d+$') { [int]$envPort } else { 9999 }
+$setupArgs = @('scripts\setup.mjs', '--mode', $useMode, '--port', "$usePort", '--data-dir', $DataDir, '--mongo-uri', $mongoUri)
 if ($PublicUrl) { $setupArgs += @('--public-url', $PublicUrl) }
 if ($ShopHost) { $setupArgs += @('--shop-host', $ShopHost) }
 if ($HqUrl) { $setupArgs += @('--hq-url', $HqUrl) }
@@ -162,22 +171,22 @@ $bTrigger = New-ScheduledTaskTrigger -Daily -At '22:30'
 Register-ScheduledTask -TaskName 'AfeyPOS Backup' -Action $bAction -Trigger $bTrigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
 
 if (-not $SkipFirewall) {
-  Step "Allowing tills on the local network to reach port $Port"
+  Step "Allowing tills on the local network to reach port $usePort"
   # Recreated each run so the rule follows the port (it was 4000 before 9999 became the default).
   Get-NetFirewallRule -DisplayName 'Afey POS' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-  New-NetFirewallRule -DisplayName 'Afey POS' -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
+  New-NetFirewallRule -DisplayName 'Afey POS' -Direction Inbound -Protocol TCP -LocalPort $usePort -Action Allow -Profile Private,Domain | Out-Null
 }
 
 Step 'Waiting for the server to start'
 $ok = $false
 for ($i = 0; $i -lt 30; $i++) {
-  try { $h = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 2; if ($h.status -eq 'ok') { $ok = $true; break } } catch { Start-Sleep -Seconds 2 }
+  try { $h = Invoke-RestMethod "http://127.0.0.1:$usePort/health" -TimeoutSec 2; if ($h.status -eq 'ok') { $ok = $true; break } } catch { Start-Sleep -Seconds 2 }
 }
 if ($ok) {
   Write-Host "`nAfey POS is running." -ForegroundColor Green
   $url = ((Get-Content (Join-Path $InstallDir 'server\.env')) -match '^PUBLIC_APP_URL=' | Select-Object -First 1) -replace '^PUBLIC_APP_URL=', ''
-  if ($Mode -eq 'branch') { Write-Host "Open http://localhost:$Port on this computer, or $url on other tills. Within a minute the business, staff and products arrive from head office: sign in with your head-office accounts." }
-  else { Write-Host "Open http://localhost:$Port on this computer, or $url on other tills, and create the owner account." }
+  if ($useMode -eq 'branch') { Write-Host "Open http://localhost:$usePort on this computer, or $url on other tills. Within a minute the business, staff and products arrive from head office: sign in with your head-office accounts." }
+  else { Write-Host "Open http://localhost:$usePort on this computer, or $url on other tills, and create the owner account." }
 } else {
   Write-Warning "The server did not answer yet. Check: Get-ScheduledTaskInfo AfeyPOS, and docs/TROUBLESHOOTING.md"
 }

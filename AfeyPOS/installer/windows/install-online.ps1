@@ -18,8 +18,9 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('standalone', 'hq', 'branch')][string]$Mode = $(if ($env:AFEY_MODE) { $env:AFEY_MODE } else { 'standalone' }),
-  [int]$Port = $(if ($env:AFEY_PORT) { [int]$env:AFEY_PORT } else { 9999 }),
+  # Left out on an upgrade: the computer keeps its mode (branch stays branch) and port.
+  [ValidateSet('', 'standalone', 'hq', 'branch')][string]$Mode = $(if ($env:AFEY_MODE) { $env:AFEY_MODE } else { '' }),
+  [int]$Port = $(if ($env:AFEY_PORT) { [int]$env:AFEY_PORT } else { 0 }),
   [string]$PublicUrl = $env:AFEY_PUBLIC_URL,
   [string]$HqUrl = '',
   [string]$SyncToken = '',
@@ -121,7 +122,9 @@ if ($LASTEXITCODE -ge 8) { Fail "Copying the files to $app failed (robocopy code
 $global:LASTEXITCODE = 0
 
 # ---------- install / upgrade ----------
-$installArgs = @{ Mode = $Mode; Port = $Port; InstallDir = $app; DataDir = (Join-Path $Root 'data'); MongoDataDir = (Join-Path $Root 'mongodb') }
+$installArgs = @{ InstallDir = $app; DataDir = (Join-Path $Root 'data'); MongoDataDir = (Join-Path $Root 'mongodb') }
+if ($Mode) { $installArgs.Mode = $Mode }
+if ($Port) { $installArgs.Port = $Port }
 if ($PublicUrl) { $installArgs.PublicUrl = $PublicUrl }
 if ($HqUrl) { $installArgs.HqUrl = $HqUrl }
 if ($SyncToken) { $installArgs.SyncToken = $SyncToken }
