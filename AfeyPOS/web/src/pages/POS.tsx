@@ -11,7 +11,7 @@ import { bridgeConfigured, fingerprint } from '../lib/bridge';
 import { money, mpesaPayer, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
 import { connectRealtime, useRealtime } from '../lib/realtime';
 import { TxnStatus, type TerminalTxn } from './settings/CardTerminals';
-import { printHtml, printReceipt } from '../lib/printing';
+import { openCashDrawer, printHtml, printReceipt } from '../lib/printing';
 import { CashCount, cashCountTotal, type CashCounts } from '../components/CashCount';
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
@@ -460,6 +460,12 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     { key: 'resume', label: 'Resume held', icon: 'play', tone: 'text-orange-600 bg-orange-50', onClick: () => setPanel({ kind: 'resume' }), disabled: !held.length, count: held.length },
     { key: 'browse', label: 'Browse products', icon: 'grid', tone: 'text-teal-600 bg-teal-50', onClick: openBrowse },
     ...(shift ? [{ key: 'endshift', label: 'End shift', icon: 'clock', tone: 'text-amber-700 bg-amber-50', onClick: () => { setPanel(null); setEndingShift(true); } }] : []),
+    { key: 'drawer', label: 'Open drawer', icon: 'wallet', tone: 'text-emerald-700 bg-emerald-50', onClick: () => {
+      setPanel(null);
+      openCashDrawer({ tillId: till._id, reason: 'Opened from the till (no sale)' })
+        .then((ok) => (ok ? toast.success('Cash drawer opened') : toast.error('This computer has no route to the cash drawer: choose its printer in Hardware → This computer.')))
+        .catch(toast.error);
+    } },
     { key: 'clear', label: 'Clear sale', icon: 'x', tone: 'text-ink-600 bg-ink-100', onClick: () => { setPanel(null); clearCart(active); }, disabled: !cart.lines.length, lock: needsApproval('clear') },
   ];
 
@@ -1295,9 +1301,21 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
     }, 700);
     return () => clearInterval(t);
   }, [initial._id, waited]);
+  // Cash sale: the drawer opens at once, not after the receipt (which may wait a few seconds for KRA).
+  const cashSale = (initial.payments ?? []).some((p: any) => p.method === 'cash');
+  const drawerOpened = useRef(false);
+  useEffect(() => {
+    if (!cashSale || drawerOpened.current || getWorkstation().openDrawerOnCash === false) return;
+    drawerOpened.current = true;
+    openCashDrawer({ tillId, saleId: initial._id })
+      .then((ok) => { if (!ok) drawerOpened.current = false; })
+      .catch((e: any) => { drawerOpened.current = false; toast.error(`The cash drawer did not open (${e?.message ?? 'printer not reached'}). Open it with More → Open drawer.`); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const print = async () => {
     try {
-      const how = await printReceipt(sale._id, { tillId });
+      // The drawer already opened with the sale: the receipt must not kick it again.
+      const how = await printReceipt(sale._id, { tillId, openDrawer: !drawerOpened.current && cashSale });
       if (how === 'printer') toast.success('Receipt printed');
     } catch (e: any) {
       toast.error(`Printer not reached (${e?.message ?? 'error'}): used the print window instead`);

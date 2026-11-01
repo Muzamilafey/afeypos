@@ -112,7 +112,7 @@ router.post('/hardware/devices/:id/test', requirePermission('hardware.manage'), 
 
 /** Receipt in text, HTML (browser printing) or ESC/POS (base64, for the bridge) formats. */
 router.get('/sales/:id/receipt', requirePermission('sales.read'), async (req, res) => {
-  const { format, width } = parse(z.object({ format: z.enum(['html', 'text', 'escpos']).default('html'), width: z.coerce.number().int().min(24).max(64).optional() }), req.query);
+  const { format, width, drawer } = parse(z.object({ format: z.enum(['html', 'text', 'escpos']).default('html'), width: z.coerce.number().int().min(24).max(64).optional(), drawer: z.enum(['0', '1']).optional() }), req.query);
   const sale = await Sale.findById(idParam(req.params.id)).lean();
   if (!sale) throw notFound('Sale');
   const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
@@ -122,7 +122,8 @@ router.get('/sales/:id/receipt', requirePermission('sales.read'), async (req, re
   } else if (format === 'text') {
     res.type('text').send(renderReceiptText(tenant as any, sale as any, { ...ctx, width }));
   } else {
-    const openDrawer = sale.payments.some((p) => p.method === 'cash');
+    // drawer=0: the till already opened the drawer when the sale completed.
+    const openDrawer = drawer !== '0' && sale.payments.some((p) => p.method === 'cash');
     res.json({ data: { base64: renderReceiptEscPos(tenant as any, sale as any, { ...ctx, width, openDrawer }).toString('base64') } });
   }
 });
@@ -144,13 +145,48 @@ router.post('/sales/:id/print', requirePermission('sales.read'), async (req, res
     return;
   }
   if (!body.tillId) throw badRequest('Choose the till, or a printer on this computer');
-  const till = await Till.findById(body.tillId).lean();
-  const printer = till?.receiptPrinterId ? await HardwareDevice.findById(till.receiptPrinterId).lean() : await HardwareDevice.findOne({ kind: 'receipt_printer', tillId: body.tillId, active: true }).lean();
-  if (!printer || printer.connection !== 'network' || !printer.settings?.host) throw new AppError(409, 'NO_NETWORK_PRINTER', 'No network receipt printer is configured for this till; use browser printing');
-  assertNetworkPrintingAllowed(printer.settings.host);
-  const bytes = renderReceiptEscPos(tenant as any, sale as any, { ...ctx, reprint: body.reprint, width: printer.settings.width ?? undefined, openDrawer: !body.reprint && printer.settings.openDrawerOnCash !== false && cash });
+  const printer = await tillNetworkPrinter(body.tillId);
+  const bytes = renderReceiptEscPos(tenant as any, sale as any, { ...ctx, reprint: body.reprint, width: printer.settings!.width ?? undefined, openDrawer: !body.reprint && body.openDrawer !== false && printer.settings!.openDrawerOnCash !== false && cash });
   await sendRaw(printer.settings.host, printer.settings.port ?? 9100, bytes);
   if (body.reprint) await audit(req, { action: 'sale.receipt_reprinted', entity: 'Sale', entityId: sale._id });
+  res.json({ ok: true });
+});
+
+/** The till's network receipt printer (the cash drawer hangs off its DK port). */
+async function tillNetworkPrinter(tillId: unknown) {
+  const till = await Till.findById(tillId).lean();
+  const printer = till?.receiptPrinterId ? await HardwareDevice.findById(till.receiptPrinterId).lean() : await HardwareDevice.findOne({ kind: 'receipt_printer', tillId, active: true }).lean();
+  if (!printer || printer.connection !== 'network' || !printer.settings?.host) throw new AppError(409, 'NO_NETWORK_PRINTER', 'No network receipt printer is configured for this till; use browser printing');
+  assertNetworkPrintingAllowed(printer.settings.host);
+  return printer;
+}
+
+/**
+ * Opens the cash drawer on the receipt printer's DK port: by itself when a cash sale completes (before the
+ * receipt, which may wait for KRA), or on purpose from the till ("Open drawer", recorded with the reason).
+ */
+router.post('/hardware/drawer/open', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({ tillId: objectId.optional(), localPrinter: z.string().trim().max(120).optional(), saleId: objectId.optional(), reason: z.string().trim().max(200).optional() }), req.body ?? {});
+  const kick = new EscPosBuilder(32).openDrawer(0).build();
+  let where: string;
+  if (body.localPrinter) {
+    await printToLocalPrinter(body.localPrinter, kick);
+    where = body.localPrinter;
+  } else {
+    if (!body.tillId) throw badRequest('Choose the till, or a printer on this computer');
+    const printer = await tillNetworkPrinter(body.tillId);
+    await sendRaw(printer.settings!.host!, printer.settings!.port ?? 9100, kick);
+    where = printer.name;
+  }
+  // Opening the drawer without a sale is recorded, like on any cash register.
+  if (!body.saleId) await audit(req, { action: 'till.drawer_opened', entity: 'Till', entityId: body.tillId, details: { printer: where, reason: body.reason ?? 'No sale' } });
+  res.json({ ok: true, printer: where });
+});
+
+/** The device bridge opened the drawer on the till PC without a sale: recorded like the server's own opening. */
+router.post('/hardware/drawer/opened', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({ tillId: objectId.optional(), reason: z.string().trim().max(200).optional() }), req.body ?? {});
+  await audit(req, { action: 'till.drawer_opened', entity: 'Till', entityId: body.tillId, details: { printer: 'device bridge', reason: body.reason ?? 'No sale' } });
   res.json({ ok: true });
 });
 

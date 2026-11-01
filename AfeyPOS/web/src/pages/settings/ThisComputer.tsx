@@ -4,7 +4,7 @@ import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useLocations } from '../../lib/hooks';
 import { bridge, bridgeConfigured, bridgeStatus, type BridgeStatus } from '../../lib/bridge';
-import { PRINT_MODES, printMode, type PrintMode } from '../../lib/printing';
+import { drawerRoute, openCashDrawer, PRINT_MODES, printMode, type PrintMode } from '../../lib/printing';
 import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { dateTime } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
@@ -26,10 +26,13 @@ export function ReceiptPrinterCard() {
   // Printers installed on the computer Afey POS runs on: a shop install can print to them with nothing else to set up.
   const [serverPrinter, setServerPrinter] = useState(getWorkstation().serverPrinter ?? '');
   const [drawer, setDrawer] = useState(getWorkstation().openDrawerOnCash !== false);
+  const [drawerPrinter, setDrawerPrinter] = useState(getWorkstation().drawerPrinter ?? '');
+  // Browser printing cannot reach the drawer: it is opened through a printer on the Afey POS computer instead.
+  const browserMode = mode === 'dialog' || mode === 'silent';
   const local = useQuery({
     queryKey: ['local-printers'],
     queryFn: () => api<{ data: { available: boolean; reason?: string; printers: { name: string; isDefault: boolean; port?: string }[] } }>('/hardware/printers/local').then((r) => r.data),
-    enabled: mode === 'server', retry: false,
+    enabled: mode === 'server' || browserMode, retry: false,
   });
   const printers = useQuery({ queryKey: ['bridge-printers'], queryFn: () => bridge<{ configured: Record<string, BridgePrinter>; system: { name: string; default?: boolean; port?: string }[]; devices: string[] }>('/printers', undefined, 15_000), enabled: mode === 'bridge' && paired, retry: false });
   const current = printers.data?.configured?.receipt;
@@ -112,7 +115,6 @@ export function ReceiptPrinterCard() {
                       }}>Print test</Button>
                     </div>
                     {!local.data.printers.length && <p className="mt-2 text-sm text-amber-700">{local.data.reason}</p>}
-                    <div className="mt-3"><Checkbox label="Open the cash drawer on cash sales" checked={drawer} onChange={(v) => { setDrawer(v); save({ openDrawerOnCash: v }); }} /></div>
                     <p className="mt-2 text-xs text-ink-500">The printer is remembered on this device only, so each till can use its own. Receipts are sent as a raw ESC/POS job: they print at once, with no print window, and the paper is cut.</p>
                   </>
                 )}
@@ -126,6 +128,26 @@ export function ReceiptPrinterCard() {
         </div>
       )}
       {mode === 'network' && <p className="mt-3 text-xs text-ink-500">Add the printer under <b>Hardware devices</b> below (type Receipt printer, connection Network, the till) or set it on the till under Branches &amp; tills.</p>}
+
+      <div className="mt-4 rounded-lg border border-ink-100 p-3 dark:border-ink-800" data-testid="cash-drawer-settings">
+        <h3 className="text-sm font-bold">Cash drawer</h3>
+        <p className="mb-2 text-xs text-ink-500">The drawer is plugged into the receipt printer (its DK / drawer port). It opens as soon as a cash sale is completed, before the receipt prints.</p>
+        <Checkbox label="Open the cash drawer on cash sales" checked={drawer} onChange={(v) => { setDrawer(v); save({ openDrawerOnCash: v }); }} />
+        {browserMode && (
+          local.data?.available ? (
+            <Field label="Printer the drawer is plugged into" className="mt-2" hint="Receipts print through the browser, which cannot open a drawer: Afey POS opens it through this printer instead.">
+              <Select value={drawerPrinter} onChange={(e) => { setDrawerPrinter(e.target.value); save({ drawerPrinter: e.target.value || undefined }); }} placeholder="Choose the receipt printer"
+                options={[{ value: '', label: 'None' }, ...(local.data.printers ?? []).map((p) => ({ value: p.name, label: `${p.name}${p.isDefault ? ' (default)' : ''}` }))]} />
+            </Field>
+          ) : <p className="mt-2 text-xs text-amber-700">With browser printing the drawer can only open if the printer driver does it (e.g. the Epson or Xprinter driver setting "Open cash drawer"). For Afey POS to open it, choose "Printer on the Afey POS computer" or the device bridge above.</p>
+        )}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="secondary" disabled={!drawerRoute()} onClick={() => openCashDrawer({ reason: 'Test from Hardware → This computer' }).then((ok) => (ok ? toast.success('Drawer command sent: the drawer should open') : toast.error('Choose how this computer reaches the drawer first'))).catch(toast.error)}>
+            <Icon name="wallet" className="h-4 w-4" />Open drawer now
+          </Button>
+          {!drawerRoute() && <span className="text-xs text-ink-500">No route to the drawer on this computer yet.</span>}
+        </div>
+      </div>
     </Card>
   );
 }

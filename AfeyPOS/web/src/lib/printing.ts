@@ -43,23 +43,25 @@ export async function printHtml(path: string) {
  * Prints a sale receipt (kind "sale") or credit note (kind "return") the way this computer is set up.
  * Falls back to the print window if the direct route fails, so a receipt is never silently lost.
  */
-export async function printReceipt(id: string, opts: { kind?: 'sale' | 'return'; tillId?: string; reprint?: boolean } = {}): Promise<'printer' | 'browser'> {
+export async function printReceipt(id: string, opts: { kind?: 'sale' | 'return'; tillId?: string; reprint?: boolean; openDrawer?: boolean } = {}): Promise<'printer' | 'browser'> {
   const base = opts.kind === 'return' ? `/returns/${id}/receipt` : `/sales/${id}/receipt`;
   const w = getWorkstation();
   const mode = printMode();
   const width = w.receiptWidth ? `&width=${w.receiptWidth}` : '';
+  // openDrawer false: the drawer was already opened when the sale completed (openCashDrawer), so no second kick.
+  const drawer = opts.openDrawer === false ? '&drawer=0' : '';
   try {
     if (mode === 'bridge') {
-      const r = await api<{ data: { base64: string } }>(`${base}?format=escpos${width}`);
+      const r = await api<{ data: { base64: string } }>(`${base}?format=escpos${width}${drawer}`);
       await bridge('/print/raw', { printer: 'receipt', base64: r.data.base64 }, 20_000);
       return 'printer';
     }
     if (mode === 'server' && w.serverPrinter && opts.kind !== 'return') {
-      await api(`/sales/${id}/print`, { body: { tillId: opts.tillId ?? w.tillId, reprint: Boolean(opts.reprint), localPrinter: w.serverPrinter, width: w.receiptWidth, openDrawer: w.openDrawerOnCash !== false } });
+      await api(`/sales/${id}/print`, { body: { tillId: opts.tillId ?? w.tillId, reprint: Boolean(opts.reprint), localPrinter: w.serverPrinter, width: w.receiptWidth, openDrawer: opts.openDrawer !== false && w.openDrawerOnCash !== false } });
       return 'printer';
     }
     if (mode === 'network' && opts.kind !== 'return' && (opts.tillId ?? w.tillId)) {
-      await api(`/sales/${id}/print`, { body: { tillId: opts.tillId ?? w.tillId, reprint: Boolean(opts.reprint) } });
+      await api(`/sales/${id}/print`, { body: { tillId: opts.tillId ?? w.tillId, reprint: Boolean(opts.reprint), openDrawer: opts.openDrawer !== false } });
       return 'printer';
     }
   } catch (e) {
@@ -68,4 +70,34 @@ export async function printReceipt(id: string, opts: { kind?: 'sale' | 'return';
   }
   await printHtml(`${base}?format=html`);
   return 'browser';
+}
+
+/** How this computer reaches the cash drawer (on the receipt printer's DK port), or null when it cannot. */
+export function drawerRoute(tillId?: string): { via: 'bridge' } | { via: 'server'; printer: string } | { via: 'network'; tillId: string } | null {
+  const w = getWorkstation();
+  const mode = printMode();
+  if (mode === 'bridge') return { via: 'bridge' };
+  if (mode === 'server' && w.serverPrinter) return { via: 'server', printer: w.serverPrinter };
+  if (mode === 'network' && (tillId ?? w.tillId)) return { via: 'network', tillId: (tillId ?? w.tillId)! };
+  // Browser printing cannot send the drawer command: use the drawer's printer on the Afey POS computer, or the bridge.
+  if (w.drawerPrinter) return { via: 'server', printer: w.drawerPrinter };
+  if (w.bridgeUrl) return { via: 'bridge' };
+  return null;
+}
+
+/**
+ * Opens the cash drawer now. Used when a cash sale completes (before the receipt, which may wait for KRA) and by
+ * the till's "Open drawer" button (saleId left out: recorded with the reason). Returns false when there is no route.
+ */
+export async function openCashDrawer(opts: { tillId?: string; saleId?: string; reason?: string } = {}): Promise<boolean> {
+  const route = drawerRoute(opts.tillId);
+  if (!route) return false;
+  if (route.via === 'bridge') {
+    await bridge('/drawer/open', { printer: 'receipt' }, 10_000);
+    // The bridge opens it locally: still record a drawer opened without a sale.
+    if (!opts.saleId) await api('/hardware/drawer/opened', { body: { tillId: opts.tillId, reason: opts.reason } }).catch(() => undefined);
+  } else {
+    await api('/hardware/drawer/open', { body: { ...(route.via === 'server' ? { localPrinter: route.printer } : { tillId: route.tillId }), tillId: opts.tillId ?? (route.via === 'network' ? route.tillId : undefined), saleId: opts.saleId, reason: opts.reason } });
+  }
+  return true;
 }

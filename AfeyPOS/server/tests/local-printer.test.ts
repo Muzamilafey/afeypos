@@ -79,3 +79,44 @@ describe('printers on the Afey POS computer', () => {
     }
   });
 });
+
+describe('cash drawer', () => {
+  const KICK = Buffer.from([0x1b, 0x70, 0x00]);
+  it('opens by itself for a cash sale, and the receipt then prints without a second kick', async () => {
+    const sent: { name: string; data: Buffer }[] = [];
+    const spy = vi.spyOn(localPrinter, 'printToLocalPrinter').mockImplementation(async (name, data) => { sent.push({ name, data }); });
+    try {
+      const open = await t.client.post('/hardware/drawer/open', { localPrinter: 'EPSON TM-T20', tillId: till, saleId: sale._id });
+      expect(open.status).toBe(200);
+      expect(sent[0]).toMatchObject({ name: 'EPSON TM-T20' });
+      expect(sent[0]!.data.includes(Buffer.concat([KICK, Buffer.from([0x19, 0xfa])]))).toBe(true);
+      expect(sent[0]!.data.includes(Buffer.from([0x1d, 0x56]))).toBe(false); // no paper cut, nothing printed
+      const printed = await t.client.post(`/sales/${sale._id}/print`, { localPrinter: 'EPSON TM-T20', openDrawer: false });
+      expect(printed.status).toBe(200);
+      expect(sent[1]!.data.includes(KICK)).toBe(false);
+      // The bridge's receipt can leave the kick out the same way.
+      const esc = await t.client.get(`/sales/${sale._id}/receipt?format=escpos&drawer=0`);
+      expect(Buffer.from(esc.body.data.base64, 'base64').includes(KICK)).toBe(false);
+      const withKick = await t.client.get(`/sales/${sale._id}/receipt?format=escpos`);
+      expect(Buffer.from(withKick.body.data.base64, 'base64').includes(KICK)).toBe(true);
+      // Opening it with a sale is part of that sale: not recorded as a "no sale" opening.
+      expect((await t.client.get('/audit?action=till.drawer_opened')).body.data).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('opening it without a sale is recorded with the reason', async () => {
+    const spy = vi.spyOn(localPrinter, 'printToLocalPrinter').mockImplementation(async () => undefined);
+    try {
+      expect((await t.client.post('/hardware/drawer/open', { localPrinter: 'EPSON TM-T20', tillId: till, reason: 'Change for a customer' })).status).toBe(200);
+      expect((await t.client.post('/hardware/drawer/opened', { tillId: till, reason: 'Bridge test' })).status).toBe(200);
+      const log = (await t.client.get('/audit?action=till.drawer_opened')).body.data;
+      expect(log.map((l: any) => l.details.reason).sort()).toEqual(['Bridge test', 'Change for a customer']);
+      // Without a printer or a till there is nowhere to send it.
+      expect((await t.client.post('/hardware/drawer/open', {})).status).toBe(400);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
