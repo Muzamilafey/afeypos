@@ -8,7 +8,7 @@ Afey POS uses standard protocols and does **not** claim universal compatibility.
 | Network barcode scanner | Same as above via its keyboard-wedge driver | Not verified |
 | Receipt printer, network (port 9100) | Server sends ESC/POS (local installation only) or via bridge | Implemented; tested against a TCP test server |
 | Receipt printer, USB | Browser printing (80 mm HTML receipt) or bridge (`windows-share` raw printing or `/dev/usb/lp0`) | Implemented; not verified on physical printers |
-| Cash drawer | Printer DK port, ESC/POS kick `ESC p 0 25 250` on cash sales | Implemented; not verified on hardware |
+| Cash drawer | Printer DK port, ESC/POS kick `ESC p 0 25 250`: opens as soon as a cash sale completes (bridge, printer on the Afey POS computer, network printer), and from More → Open drawer (audited) | Implemented; not verified on hardware |
 | A4 printer | Browser printing of invoices, quotations, delivery notes | Implemented |
 | Label printer | Browser labels (50×30 mm, Code 128) or ZPL/TSPL output (`POST /hardware/labels`) | Implemented; not verified on Zebra/TSC hardware |
 | Customer pole display | Bridge, serial (`\\.\COMx`), 2×20 characters | Implemented; not verified |
@@ -21,6 +21,8 @@ Afey POS uses standard protocols and does **not** claim universal compatibility.
 *Settings → Hardware* stores device definitions per till (type, connection, IP/port, bridge URL, drawer option) with a **Test** button and status. *Settings → This device* chooses the till, receipt width and auto-print.
 
 ## The device bridge
+
+**Setting it up step by step (install, IP address, pairing, cash drawer): [DEVICE-BRIDGE.md](DEVICE-BRIDGE.md).**
 
 `bridge/` runs on the till PC and exposes an authenticated API on `http://127.0.0.1:9123`:
 

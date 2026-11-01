@@ -104,10 +104,12 @@ In this order:
   computer. Press **Print test**, then receipts print by themselves after each sale, with the drawer opening on
   cash sales. Nothing else to install.
 - **"Network printer of this till"** — a printer with its own IP address; add it under **Hardware devices**.
-- **"Device bridge"** — for a USB printer, scale or fingerprint reader plugged into *that* till.
+- **"Device bridge"** — for a USB printer, scale or fingerprint reader plugged into *that* till. Setup, step by
+  step: [DEVICE-BRIDGE.md](DEVICE-BRIDGE.md).
 - **"Browser print window"** — works with any printer, but someone must press Print.
 
-The choice is remembered per device, so each till can use its own printer.
+The choice is remembered per device, so each till can use its own printer. A **cash sale opens the cash drawer**
+straight away (the drawer is plugged into the receipt printer), and **More → Open drawer** opens it without a sale.
 
 ---
 
