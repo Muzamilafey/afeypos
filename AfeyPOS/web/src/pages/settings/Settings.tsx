@@ -283,6 +283,71 @@ export function LocationsPage() {
   );
 }
 
+type EtrCandidate = { kind: 'http' | 'folder' | 'program' | 'device'; name: string; url?: string; inbox?: string; outbox?: string; port?: number; answers?: boolean; detail?: string };
+
+/**
+ * "Find ETR on this computer": the ETR programs, the addresses they answer on, inbox/outbox folders and the device
+ * among USB / COM ports on the Afey POS computer. Picking one fills the form; Test then confirms it signs.
+ */
+function EtrFinder({ edit, setEdit }: { edit: any; setEdit: (e: any) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [found, setFound] = useState<{ candidates: EtrCandidate[]; programs: string[] } | null>(null);
+  const look = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setFound((await api<{ data: { candidates: EtrCandidate[]; programs: string[] } }>('/etims/etr/detect')).data);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const use = (c: EtrCandidate) => {
+    if (c.kind === 'http') setEdit({ ...edit, settings: { ...edit.settings, connection: 'http', url: c.url } });
+    if (c.kind === 'folder') setEdit({ ...edit, settings: { ...edit.settings, connection: 'folder', inbox: c.inbox, outbox: c.outbox } });
+  };
+  const usable = found?.candidates.filter((c) => c.kind === 'http' || c.kind === 'folder') ?? [];
+  const info = found?.candidates.filter((c) => c.kind === 'program' || c.kind === 'device') ?? [];
+  const chosen = (c: EtrCandidate) => (c.kind === 'http' ? edit.settings?.url === c.url : edit.settings?.inbox === c.inbox && edit.settings?.outbox === c.outbox);
+  return (
+    <section className="rounded-lg border border-brand-200 bg-brand-50/40 p-4 dark:border-brand-900 dark:bg-brand-500/5" data-testid="etr-finder">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><h3 className="text-sm font-bold">Find the ETR on this computer</h3><p className="text-xs text-ink-500">Looks for ETR programs, the address they answer on, their folders, and the device on USB / COM ports.</p></div>
+        <Button size="sm" loading={busy} onClick={look}><Icon name="search" className="h-4 w-4" />{found ? 'Look again' : 'Find ETR'}</Button>
+      </div>
+      <ErrorBox error={error} />
+      {found && (
+        <div className="mt-3 space-y-3">
+          {usable.length > 0 ? (
+            <ul className="space-y-1.5">
+              {usable.map((c) => (
+                <li key={`${c.kind}:${c.url ?? c.inbox}`} className={cx('flex flex-wrap items-center gap-2 rounded-md border bg-white p-2 text-sm dark:bg-ink-900', chosen(c) ? 'border-brand-500 ring-1 ring-brand-500' : 'border-ink-100 dark:border-ink-800')}>
+                  <Icon name={c.kind === 'http' ? 'plug' : 'file'} className="h-4 w-4 text-ink-500" />
+                  <span className="min-w-0 flex-1">
+                    <b>{c.name}</b>{' '}
+                    {c.kind === 'http' ? <span className="font-mono text-xs">{c.url}</span> : <span className="font-mono text-xs">{c.inbox} → {c.outbox}</span>}
+                    {c.kind === 'http' && <Badge tone={c.answers ? 'green' : 'amber'}>{c.answers ? 'answers' : 'no answer'}</Badge>}
+                  </span>
+                  <Button size="sm" variant={chosen(c) ? 'primary' : 'secondary'} onClick={() => use(c)}>{chosen(c) ? 'Selected' : 'Use this'}</Button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-sm text-amber-700">No ETR program address or folders found. Start the ETR program (or ask the supplier how it takes invoices), then press Look again.</p>}
+          {info.length > 0 && (
+            <div className="text-xs text-ink-600 dark:text-ink-300">
+              <div className="font-semibold">Also seen on this computer</div>
+              <ul className="mt-1 list-disc pl-5">{info.map((c) => <li key={`${c.kind}:${c.name}`}>{c.kind === 'device' ? 'Device: ' : 'Program: '}{c.name}{c.detail ? ` (${c.detail})` : ''}</li>)}</ul>
+              <p className="mt-1 text-ink-500">The device is used by its program; Afey POS talks to the program. Press <b>Save</b>, then <b>Test</b> on the device's card.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /**
  * M-Pesa account form. Prompts (STK) and payments straight to the Paybill/Till (C2B) are separate parts, each
  * with its own switch and, if Safaricom gave two Daraja apps, its own keys. Whichever way the customer pays,
@@ -718,6 +783,7 @@ export function IntegrationsPage() {
                 ? <C2BPanel config={rows.find((r) => r.id === edit.id) ?? edit} onChanged={() => q.refetch()} />
                 : <p className="rounded-lg border border-dashed border-ink-200 p-3 text-xs text-ink-500 dark:border-ink-700">Save first, then register the C2B URLs here so payments made straight to your Paybill/Till reach Afey POS.</p>} />
             ) : (<>
+            {edit.provider === 'etr' && <EtrFinder edit={edit} setEdit={setEdit} />}
             <fieldset className="space-y-3">
               <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Account details</legend>
               <div className="grid gap-3 sm:grid-cols-2">

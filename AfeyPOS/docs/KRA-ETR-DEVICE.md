@@ -58,7 +58,15 @@ On the **shop computer's** Afey POS (e.g. `http://localhost:9999`):
 
 1. **Administration → Settings → Modules**: turn on **KRA eTIMS** and save.
 2. **Administration → Integrations**: in the **KRA eTIMS** section choose **ETR device on the Afey POS computer**.
-3. Fill in:
+3. Press **Find ETR** at the top of the form. Afey POS looks on this computer for:
+   - ETR programs that are installed or running (Tremol / ZFPLab, Datecs, Daisy, "fiscal", ETR, TIMS, ESD…), and
+     the local address each one listens on, marked **answers** when it replied just now;
+   - ETR inbox / outbox folders (e.g. `C:\ETR\IN` and `C:\ETR\OUT`);
+   - the device itself among the USB / COM-port devices (shown so you know Windows sees it).
+
+   Press **Use this** next to the program address (or the folders): it fills in the connection for you. If nothing
+   is found, start the ETR program, or ask the supplier how it takes invoices, then press **Look again**.
+4. Check or fill in the rest:
 
    | Field | What to enter |
    |---|---|
@@ -74,11 +82,11 @@ On the **shop computer's** Afey POS (e.g. `http://localhost:9999`):
    | Answer fields | leave empty; fill in only if the test says the CU invoice number was not found |
    | Key header | only if the program asks for one, e.g. `X-Api-Key: abc123` |
 
-4. **Used by**: the whole business, chosen branches, or chosen tills (for example, one ETR per counter).
-5. **Live** for real receipts (**Test mode** while trying).
-6. **Save**, then press **Test** on the device's card. You should see *"ETR program answers at…"* (web address) or
+5. **Used by**: the whole business, chosen branches, or chosen tills (for example, one ETR per counter).
+6. **Live** for real receipts (**Test mode** while trying).
+7. **Save**, then press **Test** on the device's card. You should see *"ETR program answers at…"* (web address) or
    *"Folders ready"* (folder exchange).
-7. Make a small sale. The *Sale complete* window shows **"Signed by the KRA ETR · CU invoice 0040…"**, and the
+8. Make a small sale. The *Sale complete* window shows **"Signed by the KRA ETR · CU invoice 0040…"**, and the
    receipt prints:
 
    ```

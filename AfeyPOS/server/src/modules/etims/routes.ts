@@ -3,7 +3,9 @@ import { z } from 'zod';
 import { IntegrationConfig, Product, Sale, SaleReturn, Till } from '../../models/index.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
-import { notFound } from '../../lib/errors.js';
+import { AppError, notFound } from '../../lib/errors.js';
+import { env } from '../../config/env.js';
+import { detectEtr } from './detect.js';
 import { audit } from '../../lib/audit.js';
 import { enqueue } from '../../jobs/queue.js';
 import { etimsDevicesForTill } from './service.js';
@@ -24,6 +26,15 @@ router.post('/settings/integrations/:id/etims/initialize', requirePermission('in
   await cfg.save();
   await audit(req, { action: 'etims.initialized', entity: 'IntegrationConfig', entityId: cfg._id, details: { sdcId: info.sdcId, mrcNo: info.mrcNo } });
   res.json({ data: { sdcId: info.sdcId, mrcNo: info.mrcNo, taxpayer: info.taxprNm, branch: info.bhfNm } });
+});
+
+/**
+ * "Find ETR on this computer": ETR programs, the local addresses they answer on, inbox/outbox folders and the
+ * device among USB / COM ports, for the owner to pick. Only on the computer the device can be plugged into.
+ */
+router.get('/etims/etr/detect', requirePermission('integrations.manage'), async (_req, res) => {
+  if (env().DEPLOYMENT_MODE === 'hq') throw new AppError(409, 'ETR_ON_SHOP_COMPUTER', 'This is the online head office: an ETR device is plugged into the shop computer. Open Afey POS on the shop computer (the branch server) to find it.');
+  res.json({ data: await detectEtr() });
 });
 
 /** The KRA ETR devices this till may sign with, so it can be chosen when a shop has more than one. */
