@@ -20,6 +20,7 @@ import { MpesaPaid, MpesaPanel, type MpesaAccount } from '../components/MpesaPay
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
+  type?: 'stock' | 'service' | 'non_stock'; trackStock?: boolean;
   taxRateBp: number | null; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>;
 }
 interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean }
@@ -219,6 +220,30 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     enabled: search.length >= 2 || Boolean(category),
   });
 
+  // Browse products: everything on sale, a page at a time, searchable and filtered by category.
+  const [browseQ, setBrowseQ] = useState('');
+  const [browsePage, setBrowsePage] = useState(1);
+  const BROWSE_PER_PAGE = 48;
+  const browse = useQuery({
+    queryKey: ['pos-browse', browseQ, category, browsePage],
+    queryFn: () => api<{ data: Product[]; total: number }>('/products', {
+      query: { q: browseQ || undefined, categoryId: category ?? undefined, active: 'true', page: browsePage, limit: BROWSE_PER_PAGE, warehouseId: till.warehouseId },
+    }),
+    enabled: panel?.kind === 'browse',
+    placeholderData: (prev) => prev,
+  });
+  const browseRef = useRef<HTMLInputElement>(null);
+  const openBrowse = useCallback(() => {
+    setBrowseQ('');
+    setBrowsePage(1);
+    setPanel({ kind: 'browse' });
+    setTimeout(() => browseRef.current?.focus(), 30);
+  }, []);
+  const closeBrowse = useCallback(() => {
+    setPanel(null);
+    setTimeout(() => searchRef.current?.focus(), 30);
+  }, []);
+
   const quote = useCallback(async (product: Product, unitCode: string, q: number, c: Cart) => {
     const r = await api<{ data: { unitPriceCents: number; source: string } }>(`/products/${product._id}/quote`, { body: { unitCode, qty: q, priceList: c.priceList, customerId: c.customer?._id, branchId: till.branchId, couponCode: c.couponCode || undefined } });
     return r.data;
@@ -373,6 +398,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       if (key === 'F2') { e.preventDefault(); searchRef.current?.focus(); return; }
       if (key === 'F3') { e.preventDefault(); if (has('mpesa') && allowed('mpesa')) pay('mpesa'); return; }
       if (key === 'F4') { e.preventDefault(); setCustomerOpen(true); return; }
+      if (key === 'F5') { e.preventDefault(); openBrowse(); return; }
       if (key === 'F6') { e.preventDefault(); if (allowed('card')) pay('card'); return; }
       if (key === 'F7') { e.preventDefault(); if (!cantPay && allowed('voucher')) setVoucherOpen(true); return; }
       if (key === 'F8') { e.preventDefault(); suspend(); return; }
@@ -432,7 +458,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     { key: 'del', label: 'Delete item', icon: 'trash', tone: 'text-red-600 bg-red-50', onClick: () => { setPanel(null); if (selected) removeLine(selected.key); }, disabled: !selected, lock: needsApproval('remove') },
     { key: 'gdisc', label: 'Sale discount', icon: 'tag', tone: 'text-violet-600 bg-violet-50', onClick: () => setPanel({ kind: 'cart' }), disabled: !cart.lines.length || !can('sales.discount') },
     { key: 'resume', label: 'Resume held', icon: 'play', tone: 'text-orange-600 bg-orange-50', onClick: () => setPanel({ kind: 'resume' }), disabled: !held.length, count: held.length },
-    { key: 'browse', label: 'Browse products', icon: 'grid', tone: 'text-teal-600 bg-teal-50', onClick: () => setPanel({ kind: 'browse' }) },
+    { key: 'browse', label: 'Browse products', icon: 'grid', tone: 'text-teal-600 bg-teal-50', onClick: openBrowse },
     ...(shift ? [{ key: 'endshift', label: 'End shift', icon: 'clock', tone: 'text-amber-700 bg-amber-50', onClick: () => { setPanel(null); setEndingShift(true); } }] : []),
     { key: 'clear', label: 'Clear sale', icon: 'x', tone: 'text-ink-600 bg-ink-100', onClick: () => { setPanel(null); clearCart(active); }, disabled: !cart.lines.length, lock: needsApproval('clear') },
   ];
@@ -463,7 +489,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
               </div>
             )}
           </div>
-          <Button variant="secondary" onClick={() => setPanel({ kind: 'browse' })}><Icon name="grid" className="h-4 w-4" />Browse</Button>
+          <Button variant="secondary" onClick={openBrowse} title="Every product and its price (F5)"><Icon name="grid" className="h-4 w-4" />Browse<kbd className="ml-1.5 hidden rounded border border-ink-200 bg-ink-50 px-1 py-0.5 text-[10px] font-semibold text-ink-500 sm:inline dark:border-ink-700 dark:bg-ink-800">F5</kbd></Button>
           <Badge tone="green">{till.name}</Badge>
           {!shift && (
             <button type="button" onClick={() => setStartingShift(true)} className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
@@ -510,7 +536,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
             <div className="flex h-[60%] flex-col items-center justify-center px-6 text-center text-ink-400">
               <Icon name="barcode" className="mb-3 h-14 w-14" />
               <p className="font-semibold text-ink-500">Scan an item to start the sale</p>
-              <p className="mt-1 text-xs">Enter pay cash · F3 M-Pesa · F6 card · F7 voucher · F4 customer · F8 hold · F10 more</p>
+              <p className="mt-1 text-xs">Enter pay cash · F3 M-Pesa · F5 browse · F6 card · F7 voucher · F4 customer · F8 hold · F10 more</p>
               <p className="mt-0.5 text-xs">↑ ↓ pick a line · + − quantity · Delete remove · F2 scan box</p>
             </div>
           )}
@@ -581,23 +607,53 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
         </Modal>
       )}
       {panel?.kind === 'browse' && (
-        <Modal open onClose={() => { setPanel(null); setCategory(null); }} title="Browse products" icon="grid" size="xl">
-          {categories.data && categories.data.length > 0 && (
-            <div className="mb-3 flex flex-wrap gap-2">
-              {categories.data.filter((c) => c.active !== false).map((c) => <button key={c._id} onClick={() => setCategory(c._id === category ? null : c._id)} className={cx('rounded-full px-3.5 py-1.5 text-sm font-semibold', category === c._id ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>{c.name}</button>)}
+        <Modal open onClose={closeBrowse} title="Browse products" icon="grid" size="xl"
+          subtitle={browse.data ? `${browse.data.total} product${browse.data.total === 1 ? '' : 's'} on sale · click one to add it` : 'Every product and its price'}>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[220px] flex-1">
+              <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400" />
+              <input ref={browseRef} className="input pl-9" placeholder="Search by name or code" value={browseQ} aria-label="Search products"
+                onChange={(e) => { setBrowseQ(e.target.value); setBrowsePage(1); }} />
             </div>
-          )}
-          {!category ? <p className="text-sm text-ink-500">Choose a category.</p> : results.isFetching ? <Spinner /> : (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              {results.data?.map((p) => (
-                <button key={p._id} onClick={() => addProduct(p)} className="card p-3 text-left transition hover:border-brand-500">
-                  <div className="line-clamp-2 font-semibold">{p.name}</div>
-                  <div className="mt-1 flex items-center justify-between text-sm"><span className="text-ink-500">{p.sku}</span><span className="font-semibold">{money(p.prices?.[cart.priceList] ?? p.prices?.retail)}</span></div>
-                  <div className={cx('mt-1 text-xs', (p.stock?.qty ?? 0) <= 0 ? 'text-red-600' : 'text-ink-500')}>In stock: {fmtQty(p.stock?.qty)} {p.baseUnit}</div>
-                </button>
-              ))}
-              {results.data && !results.data.length && <p className="text-sm text-ink-500">No products in this category.</p>}
-            </div>
+            {categories.data && categories.data.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                <button onClick={() => { setCategory(null); setBrowsePage(1); }}
+                  className={cx('rounded-full px-3.5 py-1.5 text-sm font-semibold', !category ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>All</button>
+                {categories.data.filter((c) => c.active !== false).map((c) => (
+                  <button key={c._id} onClick={() => { setCategory(c._id === category ? null : c._id); setBrowsePage(1); }}
+                    className={cx('rounded-full px-3.5 py-1.5 text-sm font-semibold', category === c._id ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>{c.name}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          {browse.isLoading ? <Spinner /> : (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4" data-testid="browse-products">
+                {browse.data?.data.map((p) => {
+                  const out = (p.stock?.qty ?? 0) <= 0 && p.trackStock !== false && p.type === 'stock';
+                  return (
+                    <button key={p._id} onClick={() => addProduct(p)} className="card p-3 text-left transition hover:border-brand-500 hover:shadow-md">
+                      <div className="line-clamp-2 font-semibold">{p.name}</div>
+                      <div className="mt-1 flex items-center justify-between gap-2 text-sm">
+                        <span className="truncate text-ink-500">{p.sku}</span>
+                        <span className="shrink-0 font-bold text-brand-700 dark:text-brand-300">{money(p.prices?.[cart.priceList] ?? p.prices?.retail)}</span>
+                      </div>
+                      <div className={cx('mt-1 text-xs', out ? 'text-red-600' : 'text-ink-500')}>{p.type === 'stock' ? `In stock: ${fmtQty(p.stock?.qty)} ${p.baseUnit}` : p.type === 'service' ? 'Service' : 'Not counted'}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              {browse.data && !browse.data.data.length && <p className="py-8 text-center text-sm text-ink-500">{browseQ ? `Nothing matches “${browseQ}”.` : 'No products in this category.'}</p>}
+              {browse.data && browse.data.total > BROWSE_PER_PAGE && (
+                <div className="mt-3 flex items-center justify-between border-t border-ink-100 pt-3 text-sm dark:border-ink-800">
+                  <span className="text-ink-500">Page {browsePage} of {Math.ceil(browse.data.total / BROWSE_PER_PAGE)}</span>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="secondary" disabled={browsePage <= 1} onClick={() => setBrowsePage((n) => n - 1)}>Previous</Button>
+                    <Button size="sm" variant="secondary" disabled={browsePage >= Math.ceil(browse.data.total / BROWSE_PER_PAGE)} onClick={() => setBrowsePage((n) => n + 1)}>Next</Button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </Modal>
       )}

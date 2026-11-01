@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Types } from 'mongoose';
-import { setupApp, teardown, registerTenant, openShift, rid, Client, OWNER_PASSWORD, type Ctx } from './helpers.js';
+import { setupApp, teardown, registerTenant, openShift, rid, Client, type Ctx } from './helpers.js';
 import { handleC2B } from '../src/modules/payments/mpesa.js';
 
 let ctx: Ctx;

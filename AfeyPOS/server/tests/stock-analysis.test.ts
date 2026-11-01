@@ -10,7 +10,6 @@ let bread: any;
 let soap: any;
 // The business day runs in its own timezone, so the window covers yesterday to tomorrow in UTC terms.
 const day = (offset: number) => new Date(Date.now() + offset * 86400_000).toISOString().slice(0, 10);
-const today = () => day(0);
 
 const sell = (lines: { productId: string; qty: number }[], amountCents: number) =>
   t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines, payments: [{ method: 'cash', amountCents }] });
