@@ -613,7 +613,12 @@ export async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: stri
     }
     // Proof that the registered URLs work: shown next to the registration in Settings > Integrations.
     await IntegrationConfig.updateOne({ _id: cfg._id }, { $set: { 'c2bRegistration.lastConfirmationAt': new Date() } });
-    if (await PaymentIntent.exists({ receiptNumber: transId })) {
+    const already = await PaymentIntent.findOne({ receiptNumber: transId }, { _id: 1, payerName: 1 }).lean();
+    if (already) {
+      // Usually the prompt (STK) already recorded this payment: add the payer's name the confirmation carries.
+      const name = [payload.FirstName, payload.MiddleName, payload.LastName].filter(Boolean).join(' ');
+      if (name && !already.payerName) await PaymentIntent.updateOne({ _id: already._id }, { $set: { payerName: name } });
+      event.paymentIntentId = already._id;
       event.outcome = 'duplicate';
       await event.save();
       return;

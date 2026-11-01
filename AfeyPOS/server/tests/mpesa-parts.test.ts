@@ -53,6 +53,31 @@ describe('M-Pesa prompts (STK) and payments to the Till (C2B) set up separately'
     expect(sale.body.data.payments.filter((x: any) => x.method === 'mpesa').reduce((a: number, x: any) => a + x.amountCents, 0)).toBe(50000);
   });
 
+  it('a prompt to a Till is reported twice (C2B first, then the prompt): it counts once and the sale completes', async () => {
+    const accounts = (await t.client.get(`/payments/mpesa/accounts?tillId=${till}`)).body.data;
+    const prompt = await t.client.post('/payments/mpesa/stk', { clientRequestId: rid(), amountCents: 100, phone: '0726151104', tillId: till, configId: accounts[0].id });
+    expect(prompt.status).toBe(201);
+    // Safaricom's C2B confirmation for the same payment arrives before the prompt's callback…
+    await handleC2B(tenantId(), { TransID: 'UK1DY0CRQ8', TransAmount: '1.00', BusinessShortCode: '1731901', BillRefNumber: '', MSISDN: '254726151104', FirstName: 'MUZAMIL', TransTime: '20261101143200' }, '127.0.0.1');
+    // …then the callback with the same receipt: no "Duplicate receipt", the prompt has the payment.
+    await handleStkCallback(tenantId(), buildStkCallback(prompt.body.data.checkoutRequestId, 'm', 0, 1, '254726151104', 'UK1DY0CRQ8'), '127.0.0.1');
+    const after = (await t.client.get(`/payments/intents/${prompt.body.data.id}`)).body.data;
+    expect(after).toMatchObject({ status: 'succeeded', receiptNumber: 'UK1DY0CRQ8', paidAmountCents: 100, payerName: 'MUZAMIL' });
+    // The receipt is on one payment only, so it cannot be used twice.
+    expect((await t.client.get('/payments/intents?q=UK1DY0CRQ8')).body.data.map((i: any) => i.id)).toEqual([prompt.body.data.id]);
+    const p = await createProduct(t.client, { prices: { retail: 100 }, openingStock: [{ warehouseId: wh, qty: 5 }] });
+    const sale = await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: p._id, qty: 1 }], payments: [{ method: 'mpesa', amountCents: 100, paymentIntentId: prompt.body.data.id }] });
+    expect(sale.status).toBe(201);
+    const reuse = await t.client.post('/payments/mpesa/lookup', { receipt: 'UK1DY0CRQ8', tillId: till, clientRequestId: rid() });
+    expect(reuse.body.error.code).toBe('MPESA_ALREADY_USED');
+
+    // The other order (prompt first, then C2B) is ignored as a repeat, and adds the payer's name.
+    const second = await t.client.post('/payments/mpesa/stk', { clientRequestId: rid(), amountCents: 200, phone: '0726151104', tillId: till, configId: accounts[0].id });
+    await handleStkCallback(tenantId(), buildStkCallback(second.body.data.checkoutRequestId, 'm', 0, 2, '254726151104', 'UK1DY0CRQ9'), '127.0.0.1');
+    await handleC2B(tenantId(), { TransID: 'UK1DY0CRQ9', TransAmount: '2.00', BusinessShortCode: '1731901', BillRefNumber: '', MSISDN: '254726151104', FirstName: 'ASHA', TransTime: '20261101143300' }, '127.0.0.1');
+    expect((await t.client.get('/payments/intents?q=UK1DY0CRQ9')).body.data).toHaveLength(1);
+  });
+
   it('with prompts turned off the till says so, and C2B registration uses its own number', async () => {
     const t2 = await addMpesa('Paybill payments only', { type: 'paybill', shortCode: '400500', stkEnabled: false, c2bShortCode: '400501' });
     expect(t2.status).toBe(201);

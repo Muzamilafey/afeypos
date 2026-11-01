@@ -39,10 +39,48 @@ export async function finalizeIntent(intent: PaymentIntentDoc, update: FinalUpda
     return r;
   } catch (err: any) {
     if (err?.code === 11000) {
+      // A prompt (STK) to a Till with C2B URLs is reported twice by Safaricom: the prompt's callback and a C2B
+      // confirmation. When the confirmation came first it was recorded on its own; that record hands its receipt
+      // to this payment, so the money counts once and the sale that sent the prompt completes.
+      const taken = update.status === 'succeeded' && update.receiptNumber ? await takeOverReceipt(intent, update) : null;
+      if (taken) return taken;
       // Same receipt already recorded on another intent: never double count.
       await PaymentIntent.updateOne({ _id: intent._id, status: 'pending' }, { $set: { status: 'failed', resultDesc: `Duplicate receipt ${update.receiptNumber}` } });
       return null;
     }
     throw err;
   }
+}
+
+/** Moves a receipt from an unused, stand-alone C2B record of the same amount to this pending payment. */
+async function takeOverReceipt(intent: PaymentIntentDoc, update: FinalUpdate) {
+  if ((intent.provider ?? 'mpesa') !== 'mpesa') return null;
+  const receipt = update.receiptNumber!;
+  const paid = update.paidAmountCents ?? intent.amountCents;
+  const other = await PaymentIntent.findOneAndUpdate(
+    {
+      receiptNumber: receipt, _id: { $ne: intent._id }, provider: 'mpesa', source: 'c2b', awaiting: { $exists: false }, status: 'succeeded',
+      allocatedCents: 0, allocatedTo: { $exists: false }, onlineOrderId: { $exists: false }, paidAmountCents: paid,
+    },
+    { $set: { status: 'cancelled', resultDesc: `Receipt ${receipt} belongs to the prompt payment ${intent._id}` }, $unset: { receiptNumber: 1 } },
+    { new: false },
+  );
+  if (!other) return null;
+  const r = await PaymentIntent.findOneAndUpdate(
+    { _id: intent._id, status: 'pending' },
+    { $set: {
+      status: 'succeeded', resultCode: update.resultCode, resultDesc: update.resultDesc, completedAt: new Date(), receiptNumber: receipt, paidAmountCents: paid,
+      transactionDate: update.transactionDate ?? other.transactionDate, payerName: update.payerName || other.payerName || undefined, ...(!intent.phone && other.phone ? { phone: other.phone } : {}),
+    } },
+    { new: true },
+  ).catch(() => null);
+  if (!r) {
+    // This payment was no longer pending: give the receipt back so the money is still there to use.
+    await PaymentIntent.updateOne({ _id: other._id }, { $set: { status: 'succeeded', receiptNumber: receipt, resultDesc: other.resultDesc } });
+    return null;
+  }
+  emitToTenant(r.tenantId, 'payment.updated', presentIntent(r));
+  const cancelled = await PaymentIntent.findById(other._id).lean();
+  if (cancelled) emitToTenant(cancelled.tenantId, 'payment.updated', presentIntent(cancelled));
+  return r;
 }
