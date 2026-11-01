@@ -20,7 +20,10 @@
 #   --encryption-key KEY           branch servers: head office's ENCRYPTION_KEY (from its server/.env)
 #   --mongo-uri URI                use an existing MongoDB replica set (e.g. Atlas) instead of installing one
 #   --mongo-user U --mongo-password P   login for that MongoDB (kept as MONGODB_USERNAME/PASSWORD in server/.env)
-#   --dir /opt/afeypos             install location
+#   --dir /opt/afeypos             install location (default /opt/afeypos-NAME with --instance NAME)
+#   --instance NAME                a second (third...) business on the same server: its own services
+#                                  (afeypos-NAME, afeypos-NAME-mongodb), user, database, settings, web site and
+#                                  helper command (afeypos-NAME). Give it its own --port and --domain.
 #   --ref HEAD                     branch, tag or commit to install (HEAD = the default branch);   --repo owner/name (default Muzamilafey/afeypos)
 #   --source DIR                   install from a local copy of the AfeyPOS folder instead of downloading
 #   --mongod PATH                  use this mongod binary instead of downloading MongoDB
@@ -38,8 +41,21 @@ say() { printf '\033[32m==>\033[0m %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\033[31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Which installation: the default one, or a named instance (--instance NAME) beside it on the same server.
+INSTANCE=""
+prev=""; for a in "$@"; do [ "$prev" = --instance ] && INSTANCE="$a"; prev="$a"; done
+[ -z "$INSTANCE" ] || [[ "$INSTANCE" =~ ^[a-z][a-z0-9-]{0,30}$ ]] || die "--instance must be lowercase letters, digits or '-', starting with a letter (e.g. walalaha)"
+if [ -n "$INSTANCE" ]; then
+  AFEY_NAME="afeypos-$INSTANCE" CONF_DIR="/etc/afeypos/$INSTANCE" DIR="/opt/afeypos-$INSTANCE"
+else
+  AFEY_NAME="afeypos" CONF_DIR="/etc/afeypos"
+fi
+SVC="$AFEY_NAME" DB_SVC="$AFEY_NAME-mongodb" APP_USER="$AFEY_NAME" CONF="$CONF_DIR/install.conf"
+# The nginx site's own variable and the marker that tells our site apart from the other instances'.
+NGX_VAR="${AFEY_NAME//-/_}_connection" MARK="# Afey POS${INSTANCE:+ $INSTANCE} (written by the Afey POS installer)"
+
 # Re-runs (upgrades) reuse the options of the first install unless given again.
-[ -f /etc/afeypos/install.conf ] && . /etc/afeypos/install.conf
+[ -f "$CONF" ] && . "$CONF"
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode) MODE="$2"; shift ;; --port) PORT="$2"; shift ;; --public-url) PUBLIC_URL="$2"; shift ;;
@@ -48,7 +64,7 @@ while [ $# -gt 0 ]; do
     --sync-token) SYNC_TOKEN="$2"; shift ;; --branch-code) BRANCH_CODE="$2"; shift ;; --mongo-uri) MONGO_URI="$2"; shift ;;
     --mongo-user) MONGO_USER="$2"; shift ;; --mongo-password) MONGO_PASSWORD="$2"; shift ;;
     --dir) DIR="$2"; shift ;; --ref) REF="$2"; shift ;; --repo) REPO="$2"; shift ;; --source) SOURCE="$2"; shift ;;
-    --mongod) MONGOD_BIN="$2"; shift ;; --no-service) NO_SERVICE=1 ;;
+    --mongod) MONGOD_BIN="$2"; shift ;; --no-service) NO_SERVICE=1 ;; --instance) shift ;;
     -h|--help) sed -n '2,32p' "$0" 2>/dev/null || echo "See installer/install.sh"; exit 0 ;;
     *) die "Unknown option $1 (see --help)" ;;
   esac
@@ -58,6 +74,10 @@ case "$MODE" in standalone|hq|branch) ;; *) die "--mode must be standalone, hq o
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "--port must be a number"
 [ -n "$DOMAIN" ] && [ -z "$PUBLIC_URL" ] && PUBLIC_URL="https://$DOMAIN"
 [ "$MODE" = hq ] && [ -z "$PUBLIC_URL" ] && die "Head office needs --public-url https://... (or --domain NAME)"
+# The port must be free, or already be this installation's own (an upgrade).
+if [ "$NO_SERVICE" = 0 ] && (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && ! systemctl is-active --quiet "$SVC" 2>/dev/null; then
+  die "Port $PORT is already used by another program$( [ -n "$INSTANCE" ] && echo " (another Afey POS?)"). Choose a free one with --port, e.g. --port 9998"
+fi
 
 [ "$(id -u)" -eq 0 ] || [ "$NO_SERVICE" = 1 ] || die "Run as root: curl ... | sudo bash"
 [ "$(uname -s)" = Linux ] || die "This installer is for Linux. On Windows use installer/windows/install-online.ps1; on a Mac use 'npm run local'."
@@ -160,12 +180,12 @@ fi
 # $DIR/server/.env. Losing it would mean new secrets and an ENCRYPTION_KEY that cannot read saved credentials.
 if [ -f "$DIR/app/server/.env" ]; then cp -p "$DIR/app/server/.env" "$rel/server/.env"
 elif [ -f "$DIR/server/.env" ]; then cp -p "$DIR/server/.env" "$rel/server/.env"; fi
-mkdir -p /etc/afeypos
+mkdir -p "$CONF_DIR"
 
 # ---------- service user and database ----------
 if [ "$NO_SERVICE" = 0 ]; then
-  id afeypos >/dev/null 2>&1 || useradd --system --home-dir "$DIR" --shell /usr/sbin/nologin afeypos
-  RUN_AS=(runuser -u afeypos --)
+  id "$APP_USER" >/dev/null 2>&1 || useradd --system --home-dir "$DIR" --shell /usr/sbin/nologin "$APP_USER"
+  RUN_AS=(runuser -u "$APP_USER" --)
 else
   RUN_AS=()
 fi
@@ -176,7 +196,7 @@ if [ "$LOCAL_DB" = 1 ]; then
   # Afey POS runs its own MongoDB. Another MongoDB already on this server (often on 27017 with a password)
   # must never be used by mistake: stop ours, keep its remembered port if free, else take the first free
   # port from 27018. To use an existing MongoDB instead, pass --mongo-uri (see docs/VPS.md).
-  if [ "$NO_SERVICE" = 0 ]; then systemctl stop afeypos-mongodb 2>/dev/null || true; sleep 1; fi
+  if [ "$NO_SERVICE" = 0 ]; then systemctl stop "$DB_SVC" 2>/dev/null || true; sleep 1; fi
   if [ -z "${MONGO_PORT:-}" ] && [ -f "$DIR/mongodb/mongod.conf" ]; then MONGO_PORT="$(sed -n 's/^ *port: *\([0-9]*\).*/\1/p' "$DIR/mongodb/mongod.conf" | head -n1)"; fi
   MONGO_PORT="${MONGO_PORT:-27018}"
   if port_busy "$MONGO_PORT"; then
@@ -200,14 +220,14 @@ replication:
   replSetName: rs0
 EOF
   if [ "$NO_SERVICE" = 0 ]; then
-    chown -R afeypos:afeypos "$DIR/mongodb"
-    cat > /etc/systemd/system/afeypos-mongodb.service <<EOF
+    chown -R "$APP_USER:$APP_USER" "$DIR/mongodb"
+    cat > "/etc/systemd/system/$DB_SVC.service" <<EOF
 [Unit]
-Description=Afey POS database (MongoDB)
+Description=Afey POS${INSTANCE:+ $INSTANCE} database (MongoDB)
 After=network.target
 
 [Service]
-User=afeypos
+User=$APP_USER
 ExecStart=$MONGOD_BIN --config $DIR/mongodb/mongod.conf
 Restart=always
 RestartSec=5
@@ -217,24 +237,24 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload && systemctl enable afeypos-mongodb >/dev/null
-    systemctl restart afeypos-mongodb
+    systemctl daemon-reload && systemctl enable "$DB_SVC" >/dev/null
+    systemctl restart "$DB_SVC"
   else
     "$MONGOD_BIN" --config "$DIR/mongodb/mongod.conf" --fork >/dev/null
   fi
   # Our own database must be the one answering before going on.
   up=0
   for _ in $(seq 1 30); do if port_busy "$MONGO_PORT"; then up=1; break; fi; sleep 1; done
-  if [ "$up" = 0 ] || { [ "$NO_SERVICE" = 0 ] && ! systemctl is-active --quiet afeypos-mongodb; }; then
+  if [ "$up" = 0 ] || { [ "$NO_SERVICE" = 0 ] && ! systemctl is-active --quiet "$DB_SVC"; }; then
     tail -n 20 "$DIR/mongodb/log/mongod.log" 2>/dev/null || true
-    [ "$NO_SERVICE" = 0 ] && journalctl -u afeypos-mongodb -n 20 --no-pager 2>/dev/null || true
+    [ "$NO_SERVICE" = 0 ] && journalctl -u "$DB_SVC" -n 20 --no-pager 2>/dev/null || true
     die "The Afey POS database did not start on port $MONGO_PORT (see the log above)"
   fi
 fi
 
 # ---------- configure and build ----------
 say "Configuring and building (a few minutes the first time)"
-[ "$NO_SERVICE" = 0 ] && chown -R afeypos:afeypos "$rel" "$DATA"
+[ "$NO_SERVICE" = 0 ] && chown -R "$APP_USER:$APP_USER" "$rel" "$DATA"
 setup=(--mode "$MODE" --port "$PORT" --mongo-uri "$MONGO_URI" --data-dir "$DATA" --app-dir "$DIR/app")
 [ -n "${MONGO_USER:-}" ] && setup+=(--mongo-user "$MONGO_USER" --mongo-password "${MONGO_PASSWORD:-}")
 [ -n "$PUBLIC_URL" ] && setup+=(--public-url "$PUBLIC_URL")
@@ -243,7 +263,7 @@ setup=(--mode "$MODE" --port "$PORT" --mongo-uri "$MONGO_URI" --data-dir "$DATA"
 [ -n "$SYNC_TOKEN" ] && setup+=(--sync-token "$SYNC_TOKEN")
 [ -n "$BRANCH_CODE" ] && setup+=(--branch-code "$BRANCH_CODE")
 [ -n "$ENC_KEY" ] && setup+=(--encryption-key "$ENC_KEY")
-mkdir -p "$DIR/.npm"; [ "$NO_SERVICE" = 0 ] && chown afeypos:afeypos "$DIR/.npm" "$DIR"
+mkdir -p "$DIR/.npm"; [ "$NO_SERVICE" = 0 ] && chown "$APP_USER:$APP_USER" "$DIR/.npm" "$DIR"
 (cd "$rel" && "${RUN_AS[@]}" env PATH="$PATH" HOME="$DIR" npm_config_cache="$DIR/.npm" "$NODE" scripts/setup.mjs "${setup[@]}") || die "Setup failed (the previous version, if any, is still running)"
 
 # Switch to the new version; keep the last three.
@@ -253,15 +273,15 @@ ls -1dt "$RELEASES"/* 2>/dev/null | tail -n +4 | xargs -r rm -rf
 # ---------- app service ----------
 if [ "$NO_SERVICE" = 0 ]; then
   say "Starting the Afey POS service"
-  cat > /etc/systemd/system/afeypos.service <<EOF
+  cat > "/etc/systemd/system/$SVC.service" <<EOF
 [Unit]
-Description=Afey POS
-After=network-online.target$([ "$LOCAL_DB" = 1 ] && echo " afeypos-mongodb.service")
+Description=Afey POS${INSTANCE:+ $INSTANCE}
+After=network-online.target$([ "$LOCAL_DB" = 1 ] && echo " $DB_SVC.service")
 Wants=network-online.target
-$([ "$LOCAL_DB" = 1 ] && echo "Requires=afeypos-mongodb.service")
+$([ "$LOCAL_DB" = 1 ] && echo "Requires=$DB_SVC.service")
 
 [Service]
-User=afeypos
+User=$APP_USER
 WorkingDirectory=$DIR/app/server
 ExecStart=$NODE --env-file-if-exists=.env dist/server.js
 Restart=always
@@ -275,7 +295,7 @@ ReadWritePaths=$DIR
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload && systemctl enable afeypos >/dev/null && systemctl restart afeypos
+  systemctl daemon-reload && systemctl enable "$SVC" >/dev/null && systemctl restart "$SVC"
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
     if [ -n "$DOMAIN" ]; then ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; else ufw allow "$PORT/tcp" >/dev/null; fi
     note "Firewall (ufw) opened"
@@ -310,14 +330,14 @@ nginx_site() {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$afeypos_connection;
+        proxy_set_header Connection \$$NGX_VAR;
         proxy_read_timeout 120s;
     }
 EOF
 )
   {
-    echo "# Afey POS (written by the Afey POS installer)"
-    echo "map \$http_upgrade \$afeypos_connection { default upgrade; '' close; }"
+    echo "$MARK"
+    echo "map \$http_upgrade \$$NGX_VAR { default upgrade; '' close; }"
     echo "server {"
     echo "    listen 80;"; [ "$v6" = 1 ] && echo "    listen [::]:80;"
     echo "    server_name $names;"
@@ -338,14 +358,14 @@ EOF
 }
 https_with_nginx() {
   say "nginx already serves ports 80/443: adding $DOMAIN to nginx"
-  local site=/etc/nginx/sites-available/afeypos.conf
-  [ -d /etc/nginx/sites-available ] || site=/etc/nginx/conf.d/afeypos.conf
+  local site="/etc/nginx/sites-available/$AFEY_NAME.conf"
+  [ -d /etc/nginx/sites-available ] || site="/etc/nginx/conf.d/$AFEY_NAME.conf"
   nginx_site "$site" 0
-  [ -d /etc/nginx/sites-enabled ] && [ "$site" != /etc/nginx/conf.d/afeypos.conf ] && ln -sf "$site" /etc/nginx/sites-enabled/afeypos.conf
+  [ -d /etc/nginx/sites-enabled ] && [ "$site" != "/etc/nginx/conf.d/$AFEY_NAME.conf" ] && ln -sf "$site" "/etc/nginx/sites-enabled/$AFEY_NAME.conf"
   if ! nginx -t >/dev/null 2>&1; then nginx -t || true; note "nginx rejected the configuration above; fix it, then: sudo systemctl reload nginx"; return 1; fi
   # Some nginx.conf files do not include sites-enabled: then the site goes in conf.d, which nginx reads.
-  if ! nginx -T 2>/dev/null | grep -q '# Afey POS (written by'; then
-    rm -f /etc/nginx/sites-enabled/afeypos.conf; site=/etc/nginx/conf.d/afeypos.conf; nginx_site "$site" 0
+  if ! nginx -T 2>/dev/null | grep -qxF "$MARK"; then
+    rm -f "/etc/nginx/sites-enabled/$AFEY_NAME.conf"; site="/etc/nginx/conf.d/$AFEY_NAME.conf"; nginx_site "$site" 0
     nginx -t >/dev/null 2>&1 || { nginx -t || true; return 1; }
   fi
   systemctl reload nginx
@@ -375,8 +395,8 @@ https_with_nginx() {
 https_with_apache() {
   say "Apache already serves ports 80/443: adding $DOMAIN to Apache"
   a2enmod proxy proxy_http proxy_wstunnel headers rewrite >/dev/null
-  cat > /etc/apache2/sites-available/afeypos.conf <<EOF
-# Afey POS (written by the Afey POS installer)
+  cat > "/etc/apache2/sites-available/$AFEY_NAME.conf" <<EOF
+$MARK
 <VirtualHost *:80>
     ServerName $DOMAIN
 $([ -n "$SHOP_HOST" ] && echo "    ServerAlias $SHOP_HOST")
@@ -390,7 +410,7 @@ $([ -n "$SHOP_HOST" ] && echo "    ServerAlias $SHOP_HOST")
     LimitRequestBody 20971520
 </VirtualHost>
 EOF
-  a2ensite afeypos >/dev/null
+  a2ensite "$AFEY_NAME" >/dev/null
   if ! apache2ctl configtest >/dev/null 2>&1; then apache2ctl configtest || true; note "Apache rejected the configuration; fix it, then: sudo systemctl reload apache2"; return 1; fi
   systemctl reload apache2
   command -v certbot >/dev/null || apt-get install -y -qq certbot python3-certbot-apache >/dev/null 2>&1 || true
@@ -420,7 +440,7 @@ https_with_caddy() {
   local hosts="$DOMAIN${SHOP_HOST:+, $SHOP_HOST}"
   mkdir -p /etc/caddy/sites
   # Live updates (websockets) pass through reverse_proxy as they are; uploads up to 20 MB.
-  printf '# Afey POS (written by the Afey POS installer)\n%s {\n\tencode gzip\n\trequest_body {\n\t\tmax_size 20MB\n\t}\n\treverse_proxy 127.0.0.1:%s\n}\n' "$hosts" "$PORT" > /etc/caddy/sites/afeypos.caddy
+  printf '%s\n%s {\n\tencode gzip\n\trequest_body {\n\t\tmax_size 20MB\n\t}\n\treverse_proxy 127.0.0.1:%s\n}\n' "$MARK" "$hosts" "$PORT" > "/etc/caddy/sites/$AFEY_NAME.caddy"
   # Also replaced: the whole-file Caddyfile older Afey POS installers wrote (it would define the site twice).
   local old_afey='^[^{\n]+ \{\n\tencode gzip\n\trequest_body \{\n\t\tmax_size 20MB\n\t\}\n\treverse_proxy 127\.0\.0\.1:[0-9]+\n\}\n?$'
   if [ ! -s /etc/caddy/Caddyfile ] || grep -q '^# Afey POS' /etc/caddy/Caddyfile || grep -q 'root \* /usr/share/caddy' /etc/caddy/Caddyfile || grep -Pzq "$old_afey" /etc/caddy/Caddyfile; then
@@ -452,14 +472,15 @@ if [ -n "$DOMAIN" ] && [ "$NO_SERVICE" = 0 ]; then
 fi
 
 # ---------- remember options, helper command ----------
-cat > /etc/afeypos/install.conf <<EOF 2>/dev/null || true
+cat > "$CONF" <<EOF 2>/dev/null || true
+INSTANCE=$(printf %q "$INSTANCE")
 MODE=$(printf %q "$MODE") PORT=$(printf %q "$PORT") PUBLIC_URL=$(printf %q "$PUBLIC_URL") DOMAIN=$(printf %q "$DOMAIN") SHOP_HOST=$(printf %q "$SHOP_HOST")
 HQ_URL=$(printf %q "$HQ_URL") BRANCH_CODE=$(printf %q "$BRANCH_CODE") DIR=$(printf %q "$DIR") REF=$(printf %q "$REF") REPO=$(printf %q "$REPO")
 $([ "$LOCAL_DB" = 0 ] && echo "MONGO_URI=$(printf %q "$MONGO_URI")")
 $([ "$LOCAL_DB" = 1 ] && echo "MONGO_PORT=$(printf %q "$MONGO_PORT")")
 EOF
-[ -f /etc/afeypos/install.conf ] && chmod 600 /etc/afeypos/install.conf
-cp "$rel/installer/afeypos-cli.sh" /usr/local/bin/afeypos 2>/dev/null && chmod 755 /usr/local/bin/afeypos || true
+[ -f "$CONF" ] && chmod 600 "$CONF"
+cp "$rel/installer/afeypos-cli.sh" "/usr/local/bin/$AFEY_NAME" 2>/dev/null && chmod 755 "/usr/local/bin/$AFEY_NAME" || true
 
 say "Waiting for Afey POS to answer"
 ok=0
@@ -474,8 +495,8 @@ if [ "$ok" = 1 ]; then
   note "Open $url (or http://localhost:$PORT here) and create the owner account."
   [ "$HTTPS_OK" = 1 ] || printf '\033[33mHTTPS for %s is not ready yet:\033[0m see the note under "HTTPS" above.\n' "$DOMAIN"
 else
-  printf '\033[33mAfey POS did not answer yet.\033[0m Check: afeypos status   and   afeypos logs\n'
+  printf '\033[33mAfey POS did not answer yet.\033[0m Check: %s status   and   %s logs\n' "$AFEY_NAME" "$AFEY_NAME"
 fi
 note "Configuration: $DIR/app/server/.env  (back it up: it holds the encryption key)"
-note "Data: $DATA   Database: $DIR/mongodb   Manage: afeypos status|logs|restart|upgrade|backup"
+note "Data: $DATA   Database: $DIR/mongodb   Manage: $AFEY_NAME status|logs|restart|upgrade|backup"
 [ "$ok" = 1 ] || exit 1

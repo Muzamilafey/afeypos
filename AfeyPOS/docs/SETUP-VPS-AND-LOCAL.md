@@ -135,6 +135,32 @@ owner account.
 If the server already runs nginx or Apache, the installer notices and writes its own site file instead of
 taking the ports. See [VPS.md](VPS.md) for that case, including a shared wildcard certificate.
 
+### 1.8b A second business on the same server
+
+One VPS can run several businesses, each fully separate (its own database, port, settings, domain and backups).
+Give each extra one a short name with `--instance`, its own `--port` and its own domain:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/installer/install.sh \
+  | sudo bash -s -- \
+      --instance walalaha \
+      --mode hq \
+      --port 9998 \
+      --domain walalaha.example.co.ke \
+      --dir /opt/walalaha/AfeyPOS
+```
+
+| The first business | A business installed with `--instance walalaha` |
+|---|---|
+| services `afeypos`, `afeypos-mongodb` | `afeypos-walalaha`, `afeypos-walalaha-mongodb` |
+| helper `afeypos status` | `afeypos-walalaha status` |
+| settings `/etc/afeypos/install.conf` | `/etc/afeypos/walalaha/install.conf` |
+| files `/opt/afeypos` | `/opt/afeypos-walalaha`, or the `--dir` you chose |
+
+The installer refuses a port that is already taken, picks a free database port by itself, and adds its own
+site to nginx, Apache or Caddy without touching the other business's site. The first business keeps running
+the whole time. To update the second one later: `sudo afeypos-walalaha upgrade`.
+
 ### 1.9 Back up the encryption key
 
 ```bash

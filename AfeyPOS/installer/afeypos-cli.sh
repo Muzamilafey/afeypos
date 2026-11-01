@@ -1,49 +1,55 @@
 #!/usr/bin/env bash
-# Afey POS server helper, installed as /usr/local/bin/afeypos by installer/install.sh.
+# Afey POS server helper, installed as /usr/local/bin/afeypos by installer/install.sh
+# (as /usr/local/bin/afeypos-NAME for an installation made with --instance NAME).
 #   afeypos status | logs | start | stop | restart | upgrade [--ref TAG] | rollback | backup | restore FILE
 #   afeypos reset-password EMAIL NEWPASSWORD | config | doctor [DOMAIN] | uninstall [--remove-data]
 set -euo pipefail
-[ -f /etc/afeypos/install.conf ] && . /etc/afeypos/install.conf
-DIR="${DIR:-/opt/afeypos}" PORT="${PORT:-9999}" REPO="${REPO:-Muzamilafey/afeypos}" REF="${REF:-HEAD}"
+# Which installation: taken from this command's own name (afeypos-walalaha -> instance "walalaha").
+AFEY_NAME="$(basename "$0")"; case "$AFEY_NAME" in afeypos-*) INSTANCE="${AFEY_NAME#afeypos-}" ;; *) AFEY_NAME=afeypos INSTANCE="" ;; esac
+CONF="/etc/afeypos${INSTANCE:+/$INSTANCE}/install.conf"
+[ -f "$CONF" ] && . "$CONF"
+SVC="$AFEY_NAME" DB_SVC="$AFEY_NAME-mongodb" APP_USER="$AFEY_NAME"
+MARK="# Afey POS${INSTANCE:+ $INSTANCE} (written by the Afey POS installer)"
+DIR="${DIR:-/opt/$AFEY_NAME}" PORT="${PORT:-9999}" REPO="${REPO:-Muzamilafey/afeypos}" REF="${REF:-HEAD}"
 NODE="$DIR/runtime/node/bin/node"; [ -x "$NODE" ] || NODE="$(command -v node)"
 APP="$DIR/app/server"
-as_app() { if id afeypos >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then runuser -u afeypos -- "$@"; else "$@"; fi; }
+as_app() { if id "$APP_USER" >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then runuser -u "$APP_USER" -- "$@"; else "$@"; fi; }
 script() { (cd "$APP" && as_app "$NODE" --env-file-if-exists=.env "dist/scripts/$1.js" "${@:2}"); }
-need_root() { [ "$(id -u)" -eq 0 ] || { echo "Run with sudo: sudo afeypos $*"; exit 1; }; }
+need_root() { [ "$(id -u)" -eq 0 ] || { echo "Run with sudo: sudo $AFEY_NAME $*"; exit 1; }; }
 
 case "${1:-status}" in
   status)
-    systemctl --no-pager --lines=0 status afeypos-mongodb afeypos 2>/dev/null || true
+    systemctl --no-pager --lines=0 status "$DB_SVC" "$SVC" 2>/dev/null || true
     printf '\nHealth: '; curl -fsS "http://127.0.0.1:$PORT/health" || echo "not answering"
     echo; echo "Version: $(readlink -f "$DIR/app")" ;;
-  logs) journalctl -u afeypos -u afeypos-mongodb -n "${2:-200}" -f ;;
-  start|stop|restart) need_root "$1"; systemctl "$1" afeypos-mongodb afeypos 2>/dev/null || systemctl "$1" afeypos ;;
+  logs) journalctl -u "$SVC" -u "$DB_SVC" -n "${2:-200}" -f ;;
+  start|stop|restart) need_root "$1"; systemctl "$1" "$DB_SVC" "$SVC" 2>/dev/null || systemctl "$1" "$SVC" ;;
   upgrade)
     need_root upgrade; shift
     # Take a backup, then re-run the installer of the chosen version (data and configuration are kept).
     script backup || echo "Backup failed; continuing with the upgrade"
-    curl -fsSL "https://raw.githubusercontent.com/$REPO/${REF}/AfeyPOS/installer/install.sh" | bash -s -- "$@" ;;
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/${REF}/AfeyPOS/installer/install.sh" | bash -s -- ${INSTANCE:+--instance "$INSTANCE"} "$@" ;;
   rollback)
     need_root rollback
     prev=$(ls -1dt "$DIR"/releases/* | sed -n 2p); [ -n "$prev" ] || { echo "No earlier version kept"; exit 1; }
-    ln -sfn "$prev" "$DIR/app" && systemctl restart afeypos && echo "Now running $prev" ;;
+    ln -sfn "$prev" "$DIR/app" && systemctl restart "$SVC" && echo "Now running $prev" ;;
   backup) script backup "${@:2}" ;;
   restore)
-    need_root restore; [ -n "${2:-}" ] || { echo "Usage: afeypos restore FILE.ndjson.gz [--drop-existing]"; exit 1; }
-    systemctl stop afeypos; script restore "${@:2}"; systemctl start afeypos ;;
+    need_root restore; [ -n "${2:-}" ] || { echo "Usage: $AFEY_NAME restore FILE.ndjson.gz [--drop-existing]"; exit 1; }
+    systemctl stop "$SVC"; script restore "${@:2}"; systemctl start "$SVC" ;;
   reset-password) script resetPassword "${@:2}" ;;
-  config) need_root config; ${EDITOR:-nano} "$APP/.env" && systemctl restart afeypos ;;
+  config) need_root config; ${EDITOR:-nano} "$APP/.env" && systemctl restart "$SVC" ;;
   doctor)
     # Why does the domain open something else? Checks the app, DNS (Cloudflare aware), which web server holds
     # 80/443 and whether it loads the Afey POS site, and what it answers for the domain over HTTP and HTTPS
     # (asked on this server directly), printing what came back and the command that fixes each problem.
-    d="${2:-${DOMAIN:-}}"; [ -n "$d" ] || { echo "Usage: afeypos doctor pos.example.com"; exit 1; }
+    d="${2:-${DOMAIN:-}}"; [ -n "$d" ] || { echo "Usage: $AFEY_NAME doctor pos.example.com"; exit 1; }
     ok() { printf '  \033[32mOK\033[0m   %s\n' "$*"; }; bad() { printf '  \033[31mFIX\033[0m  %s\n' "$*"; }; tip() { printf '       %s\n' "$*"; }; info() { printf '  ..   %s\n' "$*"; }
     is_cloudflare() { case "$1" in 104.1[6-9].*|104.2[0-9].*|104.3[01].*|172.6[4-9].*|172.7[01].*|188.114.9[6-9].*|188.114.10[0-9].*|188.114.11[01].*|162.158.*|141.101.*|108.162.*|190.93.*|197.234.*|198.41.*|173.245.*|103.21.*|103.22.*|103.31.*|131.0.7[2-5].*) return 0 ;; esac; return 1; }
     # What a request answered: code, redirect target or page title.
     answer() { local f; f=$(mktemp); local r; r=$(curl -s -m 8 -o "$f" -w '%{http_code} %{redirect_url}' "$@" 2>/dev/null) || r="no answer"; local t; t=$(grep -o -i '<title>[^<]*' "$f" 2>/dev/null | head -n1 | sed 's/<title>//I' || true); [ -n "$t" ] || t=$(head -c 80 "$f" | tr -d '\r\n' || true); rm -f "$f"; echo "$r | $t"; }
     echo "Afey POS check for $d"
-    if curl -fsS "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -q '"service":"afeypos"'; then ok "Afey POS answers on 127.0.0.1:$PORT"; else bad "Afey POS does not answer on port $PORT"; tip "sudo afeypos restart; afeypos logs"; fi
+    if curl -fsS "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -q '"service":"afeypos"'; then ok "Afey POS answers on 127.0.0.1:$PORT"; else bad "Afey POS does not answer on port $PORT"; tip "sudo $AFEY_NAME restart; $AFEY_NAME logs"; fi
     ips=$(getent ahostsv4 "$d" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)
     mine=$(hostname -I 2>/dev/null || true)
     if [ -z "$ips" ]; then bad "DNS: $d does not resolve"; tip "Add an A record: pos -> this server's public IP"
@@ -60,8 +66,8 @@ case "${1:-status}" in
     info "Ports 80/443 are served by: ${owner:-nothing}"
     case "$owner" in *nginx*)
       conf=$(nginx -T 2>/dev/null || true)
-      if printf '%s' "$conf" | grep -q '# Afey POS (written by'; then ok "nginx loads the Afey POS site"
-      else bad "nginx does not load the Afey POS site (its nginx.conf does not include that folder)"; tip "Run the install command again (it now puts the site where nginx reads it), or: sudo cp /etc/nginx/sites-available/afeypos.conf /etc/nginx/conf.d/ && sudo nginx -t && sudo systemctl reload nginx"; fi
+      if printf '%s' "$conf" | grep -qxF "$MARK"; then ok "nginx loads the Afey POS site"
+      else bad "nginx does not load the Afey POS site (its nginx.conf does not include that folder)"; tip "Run the install command again (it now puts the site where nginx reads it), or: sudo cp /etc/nginx/sites-available/$AFEY_NAME.conf /etc/nginx/conf.d/ && sudo nginx -t && sudo systemctl reload nginx"; fi
       clash=$(printf '%s' "$conf" | awk -v d="$d" '/^# configuration file /{f=$4; sub(/:$/,"",f)} f !~ /afeypos/ && match($0,/server_name[[:space:]][^;]*/) {n=split(substr($0,RSTART,RLENGTH),t,/[[:space:]]+/); for(i=2;i<=n;i++) if (t[i]==d) print f}' | sort -u | tr '\n' ' ' || true)
       if [ -n "$clash" ]; then bad "Another nginx site also uses $d: $clash"; tip "Remove $d from the server_name lines in that file (keep its other names), then: sudo nginx -t && sudo systemctl reload nginx"; fi
       wild=$(printf '%s' "$conf" | awk -v w="*.${d#*.}" '/^# configuration file /{f=$4; sub(/:$/,"",f)} f !~ /afeypos/ && match($0,/server_name[[:space:]][^;]*/) {n=split(substr($0,RSTART,RLENGTH),t,/[[:space:]]+/); for(i=2;i<=n;i++) if (t[i]==w) print f}' | sort -u | tr '\n' ' ' || true)
@@ -97,14 +103,14 @@ case "${1:-status}" in
     fi ;;
   uninstall)
     need_root uninstall
-    systemctl disable --now afeypos afeypos-mongodb 2>/dev/null || true
-    rm -f /etc/systemd/system/afeypos.service /etc/systemd/system/afeypos-mongodb.service && systemctl daemon-reload
+    systemctl disable --now "$SVC" "$DB_SVC" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$SVC.service" "/etc/systemd/system/$DB_SVC.service" && systemctl daemon-reload
     if [ "${2:-}" = "--remove-data" ]; then
       read -r -p "Delete ALL Afey POS data in $DIR (sales, stock, customers)? Type DELETE: " a
-      [ "$a" = DELETE ] && rm -rf "$DIR" /etc/afeypos && userdel afeypos 2>/dev/null; echo "Removed."
+      [ "$a" = DELETE ] && rm -rf "$DIR" && rm -f "$CONF" && { [ -z "$INSTANCE" ] || rmdir "$(dirname "$CONF")" 2>/dev/null || true; } && userdel "$APP_USER" 2>/dev/null; echo "Removed."
     else
-      echo "Services removed. Data and configuration kept in $DIR (delete with: afeypos uninstall --remove-data)."
+      echo "Services removed. Data and configuration kept in $DIR (delete with: $AFEY_NAME uninstall --remove-data)."
     fi
-    rm -f /usr/local/bin/afeypos ;;
+    rm -f "/usr/local/bin/$AFEY_NAME" ;;
   *) sed -n '2,4p' "$0" ;;
 esac
