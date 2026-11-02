@@ -108,6 +108,12 @@ const hardwareDeviceSchema = new Schema(
     connection: { type: String, enum: ['network', 'usb', 'serial', 'bluetooth', 'bridge', 'browser', 'keyboard_wedge'], required: true },
     settings: { type: Schema.Types.Mixed, default: {} },
     status: { lastCheckAt: Date, ok: Boolean, message: String },
+    /** Hardware Compatibility Centre: which catalogue entry this is, and the exact unit. */
+    catalogId: String,
+    manufacturer: String,
+    model: String,
+    lastSuccessAt: Date,
+    lastError: { at: Date, message: String },
     active: { type: Boolean, default: true },
   },
   { timestamps: true },

@@ -59,3 +59,30 @@ test('till: switch a line to cartons, the customer display follows, and the till
   await page.getByRole('button', { name: 'Save rules' }).click();
   await expect(page.getByText('Checkout rules saved')).toBeVisible();
 });
+
+test('device compatibility: honest statuses, guided set-up and a real scan test', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('link', { name: 'Device compatibility', exact: true }).click();
+  await page.getByRole('tab', { name: 'Compatibility list' }).click();
+  const list = page.getByTestId('compat-list');
+  await expect(list).toContainText('Voyager 1250g');
+  await expect(list.getByRole('button', { name: /Voyager 1250g/ })).toContainText('Not yet verified');
+
+  await page.getByRole('tab', { name: 'Add a device' }).click();
+  await page.getByLabel('Device type').selectOption('barcode_scanner');
+  await page.getByLabel('Model').selectOption('honeywell-1250g');
+  await page.getByLabel('Connection').selectOption('keyboard_wedge');
+  await page.getByRole('button', { name: 'Save and test' }).click();
+  const dlg = page.getByRole('dialog');
+  await dlg.getByLabel('Scan here').fill('5901234123457');
+  await dlg.getByLabel('Scan here').press('Enter');
+  await expect(dlg.getByTestId('test-outcome')).toContainText('Scanned 5901234123457');
+  await dlg.getByRole('button', { name: 'Close' }).first().click();
+  const health = page.getByTestId('hardware-health');
+  await expect(health).toContainText('Honeywell');
+  await expect(health.getByRole('row', { name: /Honeywell/ })).toContainText('Working');
+  await page.screenshot({ path: 'test-results/device-compatibility.png', fullPage: true });
+});

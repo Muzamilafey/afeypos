@@ -14,3 +14,4 @@ export * from './terminals.js';
 export * from './barcodeEngine.js';
 export * from './pricing.js';
 export * from './scales.js';
+export * from './hardwareCatalog.js';

@@ -30,6 +30,7 @@ import { ReceiptSettingsPage } from './pages/settings/Receipts';
 import { CheckoutRulesPage } from './pages/settings/CheckoutRules';
 import { CardTerminalsPage } from './pages/settings/CardTerminals';
 import { ScalesPage } from './pages/settings/Scales';
+import { HardwareCentrePage } from './pages/settings/HardwareCentre';
 import { CustomerDisplayPage } from './pages/CustomerDisplay';
 import { CashPaymentsPage, MpesaLogsPage, MpesaReceivedPage } from './pages/PaymentLedgers';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
@@ -137,6 +138,7 @@ export function App() {
         <Route path="settings/integrations" element={<Gate perm="integrations.manage"><IntegrationsPage /></Gate>} />
         <Route path="settings/hardware" element={<Gate perm="hardware.manage"><HardwarePage /></Gate>} />
         <Route path="settings/hardware/scales" element={<Gate perm="hardware.manage"><ScalesPage /></Gate>} />
+        <Route path="settings/hardware/compatibility" element={<Gate perm="hardware.manage"><HardwareCentrePage /></Gate>} />
         <Route path="account" element={<AccountPage />} />
         <Route path="support" element={<SupportPage />} />
         <Route path="*" element={<EmptyState title="Page not found" />} />

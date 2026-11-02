@@ -63,7 +63,7 @@ function ProfitLoss() {
   const ref = useRef<HTMLDivElement>(null);
   return (
     <div className="max-w-3xl">
-      <Range from={from} to={to} setFrom={setFrom} setTo={setTo}>{q.data && <ReportActions target={ref} title="Profit and loss statement" meta={[['Period', `${date(from)} to ${date(to)}`]]} />}</Range>
+      <Range from={from} to={to} setFrom={setFrom} setTo={setTo}>{q.data && <ReportActions csv={false} target={ref} title="Profit and loss statement" meta={[['Period', `${date(from)} to ${date(to)}`]]} />}</Range>
       {!q.data ? <Loading /> : <div ref={ref}>
         <div className="mb-4 grid grid-cols-3 gap-3">
           <Stat label="Net sales" value={money(q.data.netSalesCents)} />
@@ -89,7 +89,7 @@ function BalanceSheet() {
   const ref = useRef<HTMLDivElement>(null);
   return (
     <div className="max-w-3xl">
-      <div className="mb-4 flex flex-wrap items-end gap-2"><Field label="As at" className="max-w-xs"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>{q.data && <div className="ml-auto flex gap-2"><ReportActions target={ref} title="Balance sheet" meta={[['As at', date(asOf)], ['Status', q.data.balanced ? 'Balanced' : 'OUT OF BALANCE']]} /></div>}</div>
+      <div className="mb-4 flex flex-wrap items-end gap-2"><Field label="As at" className="max-w-xs"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>{q.data && <div className="ml-auto flex gap-2"><ReportActions csv={false} target={ref} title="Balance sheet" meta={[['As at', date(asOf)], ['Status', q.data.balanced ? 'Balanced' : 'OUT OF BALANCE']]} /></div>}</div>
       {!q.data ? <Loading /> : (
         <div ref={ref}><Card actions={<>{q.data.balanced ? <Badge tone="green">Balanced</Badge> : <Badge tone="red">Out of balance</Badge>}<Button size="sm" variant="secondary" onClick={() => download('/accounting/balance-sheet', `balance-sheet-${asOf}.csv`, { asOf, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button></>}>
           <Section title="Assets" rows={q.data.assets} total={q.data.totals.assetsCents} />
@@ -269,7 +269,7 @@ export function LedgerPage() {
   return (
     <div className="max-w-5xl">
       <PageHeader title={q.data ? `${q.data.account.code} ${q.data.account.name}` : 'Ledger'} subtitle="General ledger with running balance" actions={<Button variant="secondary" onClick={() => download(`/accounting/ledger/${code}`, `ledger-${code}.csv`, { from, to, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>} />
-      <Range from={from} to={to} setFrom={setFrom} setTo={setTo}>{q.data && <ReportActions target={ref} title={`Ledger ${q.data.account.code} ${q.data.account.name}`} meta={[['Period', `${date(from)} to ${date(to)}`]]} />}</Range>
+      <Range from={from} to={to} setFrom={setFrom} setTo={setTo}>{q.data && <ReportActions csv={false} target={ref} title={`Ledger ${q.data.account.code} ${q.data.account.name}`} meta={[['Period', `${date(from)} to ${date(to)}`]]} />}</Range>
       {!q.data ? <Loading /> : <div ref={ref}>
         <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Opening balance" value={money(q.data.openingCents)} /><Stat label="Closing balance" value={money(q.data.closingCents)} /></div>
         <div className="card"><DataTable rows={q.data.data.map((r: any, i: number) => ({ ...r, id: `${r.journalId}-${i}` }))} empty="No entries in this period" columns={[

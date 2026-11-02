@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import net from 'node:net';
 import { z } from 'zod';
-import { HardwareDevice, Sale, Till, Tenant } from '../../models/index.js';
+import { BiometricDevice, HardwareDevice, PaymentTerminal, Sale, Till, Tenant, WeighingScale } from '../../models/index.js';
+import { COMPAT_STATUS, CONNECTION_LABELS, HARDWARE_CATALOG, HARDWARE_CATEGORIES } from '@afeypos/shared';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
@@ -34,7 +35,19 @@ const deviceSchema = z.object({
     labelLanguage: z.enum(['zpl', 'tspl', 'browser']).optional(),
   }).passthrough().default({}),
   active: z.boolean().default(true),
+  catalogId: z.string().max(60).refine((id) => HARDWARE_CATALOG.some((e) => e.id === id), 'Unknown device type').optional(),
+  manufacturer: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(80).optional(),
 });
+
+/** Records a test outcome: last success, or last error (never claims success that was not seen). */
+async function recordTest(d: InstanceType<typeof HardwareDevice>, ok: boolean, message: string) {
+  const now = new Date();
+  d.status = { lastCheckAt: now, ok, message } as any;
+  if (ok) d.lastSuccessAt = now;
+  else d.lastError = { at: now, message } as any;
+  await d.save();
+}
 
 /** Sends raw bytes to a network (port 9100 / JetDirect) printer from the server. LAN/local installations only. */
 export function sendRaw(host: string, port: number, data: Buffer, timeoutMs = 5000): Promise<void> {
@@ -102,12 +115,49 @@ router.post('/hardware/devices/:id/test', requirePermission('hardware.manage'), 
       message = e.message;
     }
   } else {
-    message = `${d.connection} devices are tested from the till (browser or Afey device bridge)`;
-    ok = true;
+    // Not tested from here: the till runs the test (bridge print, scan, browser print) and reports the result.
+    return void res.json({ data: { ok: false, needsClientTest: true, message: `${d.connection} devices are tested from the till they are attached to` } });
   }
-  d.status = { lastCheckAt: new Date(), ok, message } as any;
-  await d.save();
+  await recordTest(d, ok, message);
   res.json({ data: { ok, message } });
+});
+
+/** The result of a test run at the till (a scan received, a bridge print done, a print window answered). */
+router.post('/hardware/devices/:id/test-result', requirePermission('hardware.manage'), async (req, res) => {
+  const body = parse(z.object({ ok: z.boolean(), message: z.string().trim().min(1).max(300), method: z.enum(['scan', 'bridge', 'browser', 'manual']) }), req.body);
+  const d = await HardwareDevice.findById(idParam(req.params.id));
+  if (!d) throw notFound('Device');
+  await recordTest(d, body.ok, `${body.message} (${body.method} test)`);
+  await audit(req, { action: 'hardware.device_tested', entity: 'HardwareDevice', entityId: d._id, details: { ok: body.ok, method: body.method, message: body.message } });
+  res.json({ data: d });
+});
+
+router.get('/hardware/catalog', requirePermission('hardware.manage'), (_req, res) => {
+  res.json({ data: { categories: HARDWARE_CATEGORIES, statuses: COMPAT_STATUS, connections: CONNECTION_LABELS, entries: HARDWARE_CATALOG } });
+});
+
+/**
+ * One list of every device the business set up (printers, scanners, drawers, displays, scales, card terminals,
+ * fingerprint readers) with its branch, till, last good contact and last error.
+ */
+router.get('/hardware/health', requirePermission('hardware.manage'), async (_req, res) => {
+  const [devices, scales, terminals, readers] = await Promise.all([
+    HardwareDevice.find({ active: { $ne: false } }).lean(),
+    WeighingScale.find({ active: true }).lean(),
+    PaymentTerminal.find({ removedAt: { $exists: false } }, { name: 1, provider: 1, branchId: 1, tillIds: 1, status: 1, health: 1, device: 1, mode: 1 }).lean(),
+    BiometricDevice.find({}, { name: 1, vendor: 1, model: 1, branchId: 1, lastSeenAt: 1, active: 1 }).lean(),
+  ]);
+  const rows = [
+    ...devices.map((d) => ({ id: d._id, source: 'device', kind: d.kind, name: d.name, model: [d.manufacturer, d.model].filter(Boolean).join(' ') || null, connection: d.connection, branchId: d.branchId ?? null, tillIds: d.tillId ? [d.tillId] : [],
+      state: d.status?.lastCheckAt ? (d.status.ok ? 'ok' : 'error') : 'untested', lastSuccessAt: d.lastSuccessAt ?? (d.status?.ok ? d.status.lastCheckAt : null), lastError: d.lastError?.message ? d.lastError : (d.status && d.status.ok === false ? { at: d.status.lastCheckAt, message: d.status.message } : null), catalogId: d.catalogId ?? null })),
+    ...scales.map((s) => ({ id: s._id, source: 'scale', kind: 'scale', name: s.name, model: [s.brand, s.model].filter(Boolean).join(' '), connection: s.adapter, branchId: s.branchId, tillIds: s.tillIds,
+      state: s.status === 'verified' ? 'ok' : s.status === 'failed' ? 'error' : 'untested', lastSuccessAt: s.lastCheck?.ok ? s.lastCheck.at : s.plu?.confirmedAt ?? null, lastError: s.lastCheck && !s.lastCheck.ok ? { at: s.lastCheck.at, message: s.lastCheck.message } : null, simulated: s.simulated })),
+    ...terminals.map((t) => ({ id: t._id, source: 'terminal', kind: 'card_terminal', name: t.name, model: t.device?.model ?? t.provider, connection: t.provider, branchId: t.branchId, tillIds: t.tillIds,
+      state: t.health?.online === false ? 'error' : t.status === 'enabled' && t.health?.ready ? 'ok' : t.health?.lastCheckAt ? 'error' : 'untested', lastSuccessAt: t.health?.lastSuccessAt ?? null, lastError: t.health?.lastError?.message ? t.health.lastError : null, simulated: t.mode === 'sandbox' })),
+    ...readers.map((b) => ({ id: b._id, source: 'fingerprint', kind: 'fingerprint_reader', name: b.name, model: [b.vendor, b.model].filter(Boolean).join(' '), connection: 'bridge', branchId: b.branchId ?? null, tillIds: [],
+      state: b.lastSeenAt && Date.now() - new Date(b.lastSeenAt).getTime() < 7 * 86400_000 ? 'ok' : 'untested', lastSuccessAt: b.lastSeenAt ?? null, lastError: null, simulated: b.vendor === 'simulator' })),
+  ];
+  res.json({ data: rows, summary: { total: rows.length, ok: rows.filter((r) => r.state === 'ok').length, error: rows.filter((r) => r.state === 'error').length, untested: rows.filter((r) => r.state === 'untested').length } });
 });
 
 /** Receipt in text, HTML (browser printing) or ESC/POS (base64, for the bridge) formats. */

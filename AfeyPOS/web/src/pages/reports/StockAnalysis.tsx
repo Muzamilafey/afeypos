@@ -47,7 +47,7 @@ export function StockAnalysisPage() {
   return (
     <div>
       <PageHeader title="Stock analysis" subtitle={`${info.subtitle}. Predictions are the average of what this shop sold in the period chosen: an estimate, not a promise. Promotions, seasons, holidays and days out of stock make real sales differ, so check before large orders.`} actions={<>
-        {d && <ReportActions target={ref} title={`Stock analysis · ${info.label}`} subtitle={info.subtitle} meta={meta} />}
+        {d && <ReportActions target={ref} title={`Stock analysis · ${info.label}`} subtitle={info.subtitle} meta={meta} csv={!info.csv} />}
         {d && info.csv && <Button variant="secondary" onClick={() => download('/reports/stock-analysis', `stock-${tab}.csv`, { ...query, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>}
       </>} />
       <Tabs tabs={TABS.map((t) => ({ key: t.key, label: t.label }))} value={tab} onChange={(k) => setTab(k as Tab)} />
