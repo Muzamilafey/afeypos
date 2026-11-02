@@ -1328,6 +1328,24 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
       toast.error(`Printer not reached (${e?.message ?? 'error'}): used the print window instead`);
     }
   };
+  // Enter anywhere on this window starts the next sale (capture phase, so a focused button such as Print receipt
+  // does not take it). Only the receipt phone/email box keeps Enter, to send the receipt.
+  const sendReceipt = async () => { await api(`/sales/${sale._id}/send-receipt`, { body: to.includes('@') ? { email: to } : { sms: to } }).then(() => toast.success('Receipt queued')).catch(toast.error); };
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || e.isComposing || e.repeat) return;
+      const el = e.target as HTMLElement | null;
+      if (el?.dataset?.receiptTo !== undefined) return;
+      if (el && /^(TEXTAREA|SELECT)$/.test(el.tagName)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeRef.current();
+    };
+    window.addEventListener('keydown', h, true);
+    return () => window.removeEventListener('keydown', h, true);
+  }, []);
   // The finished animation stays a moment, then makes room.
   useEffect(() => {
     if (!printState || printState.state === 'printing') return;
@@ -1364,7 +1382,7 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
         {receiptHtml !== null && <iframe title="Receipt" srcDoc={receiptHtml} sandbox="allow-same-origin" className="h-[50vh] w-full rounded-md border border-ink-100 bg-[#e9ebee] dark:border-ink-800" />}
         {(has('sms') || has('email')) && (
           <div className="flex gap-2">
-            <Input placeholder="Phone or email for receipt" value={to} onChange={(e) => setTo(e.target.value)} />
+            <Input data-receipt-to="" placeholder="Phone or email for receipt" value={to} onChange={(e) => setTo(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && to.trim()) { e.preventDefault(); void sendReceipt(); } }} />
             <Button variant="secondary" onClick={async () => { await api(`/sales/${sale._id}/send-receipt`, { body: to.includes('@') ? { email: to } : { sms: to } }).then(() => toast.success('Receipt queued')).catch(toast.error); }}>Send</Button>
           </div>
         )}

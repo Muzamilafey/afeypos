@@ -63,7 +63,11 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
   await expect(page.getByText(/Change: .*70\.00/)).toBeVisible();
   await page.screenshot({ path: 'test-results/sale-complete.png' });
-  await page.getByRole('button', { name: 'New sale' }).click();
+  // Enter starts the next sale wherever the focus is (here on Print receipt).
+  await page.getByRole('button', { name: 'Print receipt' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(/Sale RCP-\d+ complete/)).toHaveCount(0);
+  await expect(page.getByTestId('printing')).toHaveCount(0);
 
   // Checkout is full screen: no sidebar; Go back leaves it.
   await expect(page.getByRole('navigation', { name: 'Main' })).toHaveCount(0);
