@@ -4,7 +4,7 @@ import {
   INTERNAL_BARCODE_PREFIX, SCALE_FORMAT_PRESETS, effectiveScaleFormats, internalEan13, nextFreePlu, skuPrefix, validateScaleFormats,
   type ScaleBarcodeFormat, type VariableWeightConfig,
 } from '@afeypos/shared';
-import { Category, Counter, Product, Tenant } from '../../models/index.js';
+import { Category, Counter, Product, StockLevel, Tenant } from '../../models/index.js';
 import { escapeRegex, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { AppError, badRequest } from '../../lib/errors.js';
@@ -150,3 +150,96 @@ router.get('/catalog/similar', requirePermission('products.read'), async (req, r
 });
 
 export const barcodeRoutes = router;
+
+// ---- product management dashboard and bulk actions ----
+
+/** Catalogue health: what needs attention (no barcode, no price, below cost, weighed without PLU, low stock...). */
+router.get('/catalog/stats', requirePermission('products.read'), async (_req, res) => {
+  const [total, active, noBarcode, noPrice, noCategory, weighedNoPlu, belowCost, internal, low] = await Promise.all([
+    Product.countDocuments({}),
+    Product.countDocuments({ active: true }),
+    Product.countDocuments({ active: true, type: 'stock', $or: [{ barcodes: { $size: 0 } }, { barcodes: { $exists: false } }] }),
+    Product.countDocuments({ active: true, $or: [{ 'prices.retail': null }, { 'prices.retail': { $exists: false } }, { 'prices.retail': 0 }] }),
+    Product.countDocuments({ active: true, $or: [{ categoryId: null }, { categoryId: { $exists: false } }] }),
+    Product.countDocuments({ active: true, soldByWeight: true, $or: [{ plu: null }, { plu: { $exists: false } }] }),
+    Product.countDocuments({ active: true, costCents: { $gt: 0 }, $expr: { $gt: ['$costCents', { $ifNull: ['$prices.retail', 0] }] }, 'prices.retail': { $gt: 0 } }),
+    Product.countDocuments({ 'barcodes.code': { $regex: /^(04\d{11}|AFY)/ } }),
+    Product.aggregate([
+      { $match: { active: true, trackStock: true, type: 'stock' } },
+      { $lookup: { from: StockLevel.collection.collectionName, localField: '_id', foreignField: 'productId', as: 'levels' } },
+      { $match: { $expr: { $lte: [{ $sum: '$levels.qty' }, '$reorderLevel'] } } },
+      { $count: 'n' },
+    ]),
+  ]);
+  res.json({ data: { total, active, archived: total - active, noBarcode, noPrice, noCategory, weighedNoPlu, belowCost, internalBarcodes: internal, lowStock: low[0]?.n ?? 0 } });
+});
+
+const bulkSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('generate-barcodes'), productIds: z.array(objectId).min(1).max(500) }),
+  z.object({ action: z.literal('assign-plus'), productIds: z.array(objectId).min(1).max(500) }),
+  z.object({ action: z.literal('update-prices'), productIds: z.array(objectId).min(1).max(500), mode: z.enum(['percent', 'amount']), value: z.number().int().min(-100000000).max(100000000), roundTo: z.number().int().min(1).max(10000).default(1), dryRun: z.boolean().default(true) }),
+  z.object({ action: z.literal('set-category'), productIds: z.array(objectId).min(1).max(500), categoryId: objectId.nullable() }),
+  z.object({ action: z.enum(['archive', 'activate']), productIds: z.array(objectId).min(1).max(500) }),
+]);
+
+/**
+ * Bulk actions on selected products. Price changes are previewed first (dryRun) and only applied when asked,
+ * never below cost or the minimum price; each change is audited.
+ */
+router.post('/catalog/bulk', requirePermission('products.manage'), async (req, res) => {
+  const body = parse(bulkSchema, req.body);
+  const ids = [...new Set(body.productIds.map(String))];
+  const products = await Product.find({ _id: { $in: ids } });
+  const out: { productId: string; name: string; result: string; before?: unknown; after?: unknown }[] = [];
+  if (body.action === 'generate-barcodes') {
+    const prefix = (req.tenant!.settings as { internalBarcodePrefix?: string })?.internalBarcodePrefix ?? INTERNAL_BARCODE_PREFIX;
+    const formats = scaleFormatsFor(req);
+    for (const p of products) {
+      if (p.barcodes.length) { out.push({ productId: String(p._id), name: p.name, result: 'skipped: already has a barcode' }); continue; }
+      let code = '';
+      for (let i = 0; i < 1000 && !code; i++) {
+        const c = await Counter.findOneAndUpdate({ key: 'internal-barcode' }, { $inc: { seq: 1 } }, { upsert: true, new: true });
+        const candidate = internalEan13(c!.seq, prefix, formats);
+        if (!(await barcodeTaken(candidate))) code = candidate;
+      }
+      p.barcodes.push({ code, unitCode: p.baseUnit });
+      await p.save();
+      out.push({ productId: String(p._id), name: p.name, result: 'added', after: code });
+    }
+  } else if (body.action === 'assign-plus') {
+    const used = new Set(((await Product.distinct('plu', { plu: { $type: 'string' } })) as string[]).map((x) => String(Number(x))));
+    for (const p of products) {
+      if (p.plu) { out.push({ productId: String(p._id), name: p.name, result: 'skipped: already has a PLU' }); continue; }
+      const plu = nextFreePlu(used);
+      if (!plu) throw new AppError(409, 'NO_FREE_PLU', 'No free PLU numbers left');
+      used.add(plu);
+      p.plu = plu;
+      await p.save();
+      out.push({ productId: String(p._id), name: p.name, result: 'assigned', after: plu });
+    }
+  } else if (body.action === 'update-prices') {
+    if (!req.auth!.permissions.has('prices.manage')) throw new AppError(403, 'FORBIDDEN', 'You need the prices.manage permission to change prices');
+    for (const p of products) {
+      const before = p.prices?.retail ?? null;
+      if (!before) { out.push({ productId: String(p._id), name: p.name, result: 'skipped: no price' }); continue; }
+      const raw = body.mode === 'percent' ? before * (1 + body.value / 10000) : before + body.value;
+      const after = Math.round(raw / body.roundTo) * body.roundTo;
+      const floor = Math.max(p.costCents ?? 0, p.minPriceCents ?? 0);
+      if (after <= 0 || (floor && after < floor)) { out.push({ productId: String(p._id), name: p.name, result: 'skipped: would go below cost or minimum', before, after }); continue; }
+      if (!body.dryRun) {
+        await Product.updateOne({ _id: p._id }, { $set: { 'prices.retail': after } });
+        await audit(req, { action: 'product.updated', entity: 'Product', entityId: p._id, details: { bulk: true, pricesBefore: { retail: before }, pricesAfter: { retail: after } } });
+      }
+      out.push({ productId: String(p._id), name: p.name, result: body.dryRun ? 'preview' : 'changed', before, after });
+    }
+  } else if (body.action === 'set-category') {
+    if (body.categoryId && !(await Category.exists({ _id: body.categoryId }))) throw badRequest('Unknown category');
+    await Product.updateMany({ _id: { $in: ids } }, { $set: { categoryId: body.categoryId } });
+    for (const p of products) out.push({ productId: String(p._id), name: p.name, result: 'changed' });
+  } else {
+    await Product.updateMany({ _id: { $in: ids } }, { $set: { active: body.action === 'activate' } });
+    for (const p of products) out.push({ productId: String(p._id), name: p.name, result: body.action === 'activate' ? 'activated' : 'archived' });
+  }
+  if (!('dryRun' in body) || !body.dryRun) await audit(req, { action: `products.bulk_${body.action}`, entity: 'Product', details: { count: out.filter((o) => !o.result.startsWith('skipped')).length } });
+  res.json({ data: out });
+});

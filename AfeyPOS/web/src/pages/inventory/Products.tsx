@@ -27,7 +27,18 @@ export function ProductsPage() {
   const [params] = useSearchParams();
   const [q, setQ] = useState(params.get('q') ?? '');
   useEffect(() => setQ(params.get('q') ?? ''), [params]);
-  const list = useList(['products'], '/products', { page, q: q || undefined, limit: 25 });
+  const [filter, setFilter] = useState<string | null>(null);
+  const list = useList(['products'], '/products', { page, q: q || undefined, limit: 25, lowStock: filter === 'lowStock' ? 'true' : undefined });
+  const stats = useQuery({ queryKey: ['catalog-stats'], queryFn: () => api<{ data: Record<string, number> }>('/catalog/stats').then((r) => r.data) });
+  const [selected, setSelected] = useState<string[]>([]);
+  const toggle = (id: string, on: boolean) => setSelected((x) => (on ? [...new Set([...x, id])] : x.filter((y) => y !== id)));
+  const rows = (list.data?.data ?? []) as any[];
+  const shown = rows.filter((r) => !filter || filter === 'lowStock'
+    || (filter === 'noBarcode' && r.type === 'stock' && !r.barcodes?.length)
+    || (filter === 'noPrice' && !r.prices?.retail)
+    || (filter === 'weighedNoPlu' && r.soldByWeight && !r.plu)
+    || (filter === 'belowCost' && r.costCents > 0 && r.prices?.retail > 0 && r.costCents > r.prices.retail));
+  const tiles: [string, string, string?][] = [['active', 'Active products'], ['noBarcode', 'No barcode', 'amber'], ['noPrice', 'No price', 'red'], ['belowCost', 'Price below cost', 'red'], ['weighedNoPlu', 'Weighed, no PLU', 'amber'], ['lowStock', 'Low stock', 'amber']];
   return (
     <div>
       <PageHeader title="Products" actions={<>
@@ -35,10 +46,25 @@ export function ProductsPage() {
         {can('products.manage') && <Button variant="secondary" onClick={() => nav('/products/import')}><Icon name="upload" className="h-4 w-4" />Import products</Button>}
         {can('products.manage') && <Button onClick={() => nav('/products/new')}><Icon name="plus" className="h-4 w-4" />New product</Button>}
       </>} />
+      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" data-testid="product-stats">
+        {tiles.map(([k, label, tone]) => {
+          const n = stats.data?.[k] ?? 0;
+          const on = filter === k;
+          return (
+            <button key={k} type="button" onClick={() => setFilter(on || k === 'active' ? null : k)} aria-pressed={on}
+              className={`card p-3 text-left transition hover:border-brand-400 ${on ? 'ring-2 ring-brand-500' : ''}`}>
+              <div className="text-xs text-ink-500">{label}</div>
+              <div className={`text-xl font-semibold ${n && tone === 'red' ? 'text-red-600' : n && tone === 'amber' ? 'text-amber-600' : ''}`}>{n}</div>
+            </button>
+          );
+        })}
+      </div>
+      {can('products.manage') && selected.length > 0 && <BulkBar ids={selected} onDone={() => { setSelected([]); list.refetch(); stats.refetch(); }} />}
       <div className="card">
-        <div className="border-b border-ink-100 p-3 dark:border-ink-800"><Input className="max-w-sm" placeholder="Search name, SKU, barcode or department" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} /></div>
-        <DataTable rows={list.data?.data} loading={list.isLoading} error={list.error} page={page} total={list.data?.total} limit={25} onPage={setPage} onRowClick={(r: any) => nav(`/products/${r._id}`)} empty="No products yet"
+        <div className="border-b border-ink-100 p-3 dark:border-ink-800"><Input className="max-w-sm" placeholder="Search name, SKU, barcode or department" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />{can('products.manage') && shown.length > 0 && <Button size="sm" variant="ghost" className="ml-2" onClick={() => { const all = shown.every((r) => selected.includes(r._id)); shown.forEach((r) => toggle(r._id, !all)); }}>{shown.every((r) => selected.includes(r._id)) ? 'Clear selection' : 'Select this page'}</Button>}{filter && filter !== 'lowStock' && <span className="ml-3 text-xs text-ink-500">Filter applies to this page of results</span>}</div>
+        <DataTable rows={shown} loading={list.isLoading} error={list.error} page={page} total={list.data?.total} limit={25} onPage={setPage} onRowClick={(r: any) => nav(`/products/${r._id}`)} empty="No products yet"
           columns={[
+            ...(can('products.manage') ? [{ key: 'sel', header: '', render: (r: any) => <input type="checkbox" aria-label={`Select ${r.sku}`} checked={selected.includes(r._id)} onClick={(e) => e.stopPropagation()} onChange={(e) => toggle(r._id, e.target.checked)} /> }] : []),
             { key: 'name', header: 'Product', render: (r: any) => <div><div className="font-medium">{r.name}</div><div className="text-xs text-ink-500">{r.attributes?.author ? `${r.attributes.author} · ` : ''}{r.sku}{r.barcodes?.[0] ? ` · ${r.barcodes[0].code}` : ''}</div></div> },
             { key: 'type', header: 'Type', render: (r: any) => (r.type === 'stock' ? (r.trackSerials ? <Badge tone="blue">serialised</Badge> : r.trackBatches ? <Badge tone="blue">batches</Badge> : 'stock') : r.type) },
             { key: 'price', header: 'Retail', className: 'num', render: (r: any) => money(r.prices?.retail) },
@@ -47,6 +73,50 @@ export function ProductsPage() {
             { key: 'status', header: '', render: (r: any) => (!r.active ? <Badge>archived</Badge> : null) },
           ]} />
       </div>
+    </div>
+  );
+}
+
+/** Bulk actions on the selected products. Price changes show a preview before anything is saved. */
+function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
+  const toast = useToast();
+  const { can } = useAuth();
+  const cats = useQuery({ queryKey: ['categories'], queryFn: () => api<{ data: any[] }>('/categories').then((r) => r.data) });
+  const [pct, setPct] = useState('');
+  const [preview, setPreview] = useState<any[] | null>(null);
+  const run = async (body: Record<string, unknown>, label?: string) => {
+    try {
+      const r = await api<{ data: any[] }>('/catalog/bulk', { body: { productIds: ids, ...body } });
+      if (body.action === 'update-prices' && body.dryRun !== false) { setPreview(r.data); return; }
+      const done = r.data.filter((x) => !String(x.result).startsWith('skipped')).length;
+      toast.success(`${label ?? 'Done'}: ${done} of ${r.data.length}`);
+      setPreview(null);
+      onDone();
+    } catch (e) { toast.error(e); }
+  };
+  const priceBody = { action: 'update-prices', mode: 'percent', value: Math.round(Number(pct) * 100), roundTo: 100 };
+  return (
+    <div className="card mb-3 p-3" data-testid="bulk-bar">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <b>{ids.length} selected</b>
+        <Button size="sm" variant="secondary" onClick={() => run({ action: 'generate-barcodes' }, 'In-store barcodes added')}>Generate barcodes</Button>
+        <Button size="sm" variant="secondary" onClick={() => run({ action: 'assign-plus' }, 'PLUs assigned')}>Assign PLUs</Button>
+        <Select className="w-44" aria-label="Move to category" value="" onChange={(e) => e.target.value && run({ action: 'set-category', categoryId: e.target.value === '-' ? null : e.target.value }, 'Category set')} placeholder="Move to category…" options={[{ value: '-', label: 'No category' }, ...(cats.data ?? []).map((c) => ({ value: c._id, label: c.name }))]} />
+        <Button size="sm" variant="secondary" onClick={() => run({ action: 'archive' }, 'Archived')}>Archive</Button>
+        <Button size="sm" variant="secondary" onClick={() => download('/products-export.csv', 'products.csv')}>Export</Button>
+        {can('prices.manage') && <>
+          <Input className="w-24" aria-label="Price change %" placeholder="+/- %" value={pct} onChange={(e) => setPct(e.target.value)} />
+          <Button size="sm" variant="secondary" disabled={!pct || Number.isNaN(Number(pct))} onClick={() => run(priceBody)}>Preview prices</Button>
+        </>}
+      </div>
+      {preview && (
+        <div className="mt-3">
+          <table className="w-full text-sm" data-testid="price-preview"><tbody>
+            {preview.map((x) => <tr key={x.productId} className="border-t border-ink-100 dark:border-ink-800"><td className="py-1">{x.name}</td><td className="num">{x.before ? money(x.before) : '—'}</td><td className="num">{x.after ? money(x.after) : '—'}</td><td className={x.result.startsWith('skipped') ? 'text-amber-700' : ''}>{x.result}</td></tr>)}
+          </tbody></table>
+          <div className="mt-2 flex gap-2"><Button size="sm" onClick={() => run({ ...priceBody, dryRun: false }, 'Prices changed')}>Apply these prices</Button><Button size="sm" variant="secondary" onClick={() => setPreview(null)}>Cancel</Button></div>
+        </div>
+      )}
     </div>
   );
 }

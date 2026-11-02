@@ -12,7 +12,7 @@ Afey POS uses standard protocols and does **not** claim universal compatibility.
 | A4 printer | Browser printing of invoices, quotations, delivery notes | Implemented |
 | Label printer | Browser labels (50×30 mm, Code 128) or ZPL/TSPL output (`POST /hardware/labels`) | Implemented; not verified on Zebra/TSC hardware |
 | Customer pole display | Bridge, serial (`\\.\COMx`), 2×20 characters | Implemented; not verified |
-| Weighing scale | (a) price/weight-embedded EAN-13 scale labels parsed at checkout (prefixes 20-29, configurable), (b) bridge serial read (CAS/generic frames) | (a) implemented and tested; (b) not verified |
+| Weighing scale | (a) scale label barcodes (configurable weight/price layouts) parsed at checkout, (b) counter scales through the bridge (serial gross/tare/net) or keyboard output, verified per scale with a known test weight, (c) label scales: versioned PLU file for the maker's software, confirmed on import. See [WEIGHING-SCALES.md](WEIGHING-SCALES.md) | (a) and the simulator/keyboard paths are tested; each physical scale must pass its own test |
 | RFID reader | Keyboard-wedge readers work like scanners | Not verified |
 | Fingerprint reader | See BIOMETRICS.md | Protocol implemented; vendor SDKs not integrated |
 | KRA ETR device (TIMS) on the Afey POS computer | Through the device's own program: local web address or inbox/outbox folders. See [KRA-ETR-DEVICE.md](KRA-ETR-DEVICE.md) | Implemented; tested against simulated programs, not a physical device |
@@ -32,7 +32,7 @@ cd bridge && cp config.example.json config.json   # set pairingToken, allowedOri
 npm run build && npm start
 ```
 
-Every request needs the `X-Afey-Bridge-Token` header and must come from an allowed origin, so other websites in the browser cannot use your devices. Endpoints: `GET /status`, `POST /print/raw {base64, printer}`, `POST /drawer/open`, `POST /display {line1,line2}`, `GET /scale/weight`, `POST /fingerprint/enroll-capture`, `POST /fingerprint/verify`. Run it at login with Task Scheduler (`node dist\index.js`, working directory `bridge`).
+Every request needs the `X-Afey-Bridge-Token` header and must come from an allowed origin, so other websites in the browser cannot use your devices. Endpoints: `GET /status`, `POST /print/raw {base64, printer}`, `POST /drawer/open`, `POST /display {line1,line2}`, `GET /scale/weight`, `POST /scale/tare {zero?}`, `POST /fingerprint/enroll-capture`, `POST /fingerprint/verify`. Run it at login with Task Scheduler (`node dist\index.js`, working directory `bridge`).
 
 Raw receipt bytes for the bridge come from `GET /api/v1/sales/:id/receipt?format=escpos`.
 

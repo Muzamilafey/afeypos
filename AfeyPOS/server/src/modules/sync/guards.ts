@@ -8,7 +8,7 @@ import { AppError } from '../../lib/errors.js';
  * rest on the shop's own server; those changes sync up to head office like a sale does.
  */
 const HQ_OWNED: [RegExp, string][] = [
-  [/^\/(products|products-import|categories|brands|promotions|customer-prices)(\/|$)/, 'products, prices and promotions'],
+  [/^\/(products|products-import|catalog\/bulk|categories|brands|promotions|customer-prices)(\/|$)/, 'products, prices and promotions'],
   [/^\/settings\/(business|scale-barcodes|modules|users|branches|warehouses|tills|integrations|notifications)(\/|$)/, 'settings, staff, branches and integrations'],
   [/^\/suppliers(\/[a-f0-9]{24})?$/, 'suppliers'],
   [/^\/auth\/(password\/change|pin|2fa)(\/|$)/, 'staff passwords and PINs'],

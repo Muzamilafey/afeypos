@@ -76,3 +76,27 @@ describe('barcode engine', () => {
     expect(sim.categories[0].name).toBe('Fresh Produce');
   });
 });
+
+describe('product dashboard and bulk actions', () => {
+  it('counts what needs attention and fixes it in bulk', async () => {
+    const a = await createProduct(t.client, { name: 'Loose rice', sku: 'RICE-L', baseUnit: 'kg', soldByWeight: true, prices: { retail: 15000 }, costCents: 12000 });
+    const b = await createProduct(t.client, { name: 'Loose beans', sku: 'BEAN-L', baseUnit: 'kg', soldByWeight: true, prices: { retail: 18000 }, costCents: 17000, minPriceCents: 17500 });
+    const stats = (await t.client.get('/catalog/stats')).body.data;
+    expect(stats.weighedNoPlu).toBeGreaterThanOrEqual(2);
+    expect(stats.noBarcode).toBeGreaterThanOrEqual(2);
+
+    const plus = (await t.client.post('/catalog/bulk', { action: 'assign-plus', productIds: [a._id, b._id] })).body.data;
+    expect(plus.map((x: any) => x.result)).toEqual(['assigned', 'assigned']);
+    const codes = (await t.client.post('/catalog/bulk', { action: 'generate-barcodes', productIds: [a._id] })).body.data;
+    expect(codes[0].after).toMatch(/^04\d{11}$/);
+
+    // Price change: preview first; nothing goes below cost or the minimum.
+    const preview = (await t.client.post('/catalog/bulk', { action: 'update-prices', productIds: [a._id, b._id], mode: 'percent', value: -500, roundTo: 100 })).body.data;
+    const byName = Object.fromEntries(preview.map((x: any) => [x.name, x]));
+    expect(byName['Loose rice']).toMatchObject({ result: 'preview', before: 15000, after: 14300 });
+    expect(byName['Loose beans'].result).toMatch(/below cost or minimum/);
+    expect((await t.client.get(`/products/${a._id}`)).body.data.prices.retail).toBe(15000);
+    await t.client.post('/catalog/bulk', { action: 'update-prices', productIds: [a._id], mode: 'percent', value: -500, roundTo: 100, dryRun: false });
+    expect((await t.client.get(`/products/${a._id}`)).body.data.prices.retail).toBe(14300);
+  });
+});

@@ -853,6 +853,21 @@ export function IntegrationsPage() {
   );
 }
 
+/** Weighing scales at a glance, managed on their own page. */
+function ScalesSummaryCard() {
+  const q = useQuery({ queryKey: ['scales'], queryFn: () => api<{ data: any[] }>('/scales').then((r) => r.data) });
+  const rows = q.data ?? [];
+  const stale = rows.filter((s) => s.pluStatus?.applies && !s.pluStatus.upToDate).length;
+  const untested = rows.filter((s) => s.status !== 'verified').length;
+  return (
+    <Card className="mb-4" title="Weighing scales" actions={<Link className="text-sm text-brand-600 hover:underline" to="/settings/hardware/scales">Manage scales</Link>}>
+      <p className="text-sm text-ink-600 dark:text-ink-300" data-testid="scales-summary">
+        {rows.length ? `${rows.length} scale${rows.length === 1 ? '' : 's'} · ${rows.length - untested} verified${untested ? ` · ${untested} need testing` : ''}${stale ? ` · ${stale} with out-of-date prices` : ''}` : 'No scales set up yet.'}
+      </p>
+    </Card>
+  );
+}
+
 export function HardwarePage() {
   const toast = useToast();
   const qc = useQueryClient();
@@ -871,6 +886,7 @@ export function HardwarePage() {
           <li>Scales, customer displays, RFID and fingerprint readers need the device bridge on the till PC; see docs/HARDWARE.md. Not every model has been tested.</li>
         </ul>
       </Card>
+      <ScalesSummaryCard />
       <ReceiptPrinterCard />
       <BridgePairingCard />
       <FingerprintReadersCard />

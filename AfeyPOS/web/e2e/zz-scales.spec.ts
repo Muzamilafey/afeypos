@@ -56,6 +56,17 @@ test('weighing scales: register, verify with a test weight, send prices, weigh a
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Product saved')).toBeVisible();
 
+  // Products dashboard: health tiles and bulk actions (price changes are previewed, nothing saved yet).
+  await page.goto('/products');
+  await expect(page.getByTestId('product-stats')).toContainText('No barcode');
+  await page.getByLabel('Select BEEF1').check();
+  const bulk = page.getByTestId('bulk-bar');
+  await bulk.getByLabel('Price change %').fill('10');
+  await bulk.getByRole('button', { name: 'Preview prices' }).click();
+  await expect(bulk.getByTestId('price-preview')).toContainText('880.00');
+  await bulk.getByRole('button', { name: 'Cancel' }).click();
+  await page.screenshot({ path: 'test-results/products-dashboard.png', fullPage: true });
+
   await page.goto('/settings/hardware/scales');
   await expect(deli).toContainText('PLUs to send');
   await deli.getByRole('button', { name: 'Send prices' }).click();
