@@ -15,6 +15,7 @@ import { PaymentIntent, SyncCursor, Tenant } from '../../models/index.js';
 import { runInTenant, runAsPlatform } from '../../lib/context.js';
 import { logger } from '../../lib/logger.js';
 import { invalidateOwnership } from './ownership.js';
+import { processRemoteStockRequests } from '../inventory/remote.js';
 import { afterTransferReplicated, applyRecord, fromWire, mergePartyBalance, toWire } from './apply.js';
 import { STOCK_REPLICA_MODELS, downSpecs, specFor, upSpecs, type SyncSpec } from './spec.js';
 import { keyFingerprint, SYNC_PROTOCOL } from './hq.js';
@@ -193,6 +194,8 @@ async function runRound(): Promise<SyncRunReport> {
       }
       for (const spec of upSpecs()) await push(spec, tenantId, report);
       for (const spec of downSpecs().filter((s) => s.dir === 'both')) await pull(spec, report);
+      // Opening stock entered at head office for this branch's stores.
+      await processRemoteStockRequests().catch((err) => logger.warn({ err: err?.message }, 'remote stock requests failed'));
       for (const m of STOCK_REPLICA_MODELS) await pull(specFor(m.collection.collectionName)!, report, { key: `replica:${m.collection.collectionName}` });
       await tombstones();
       await mpesaRelay(tenantId);

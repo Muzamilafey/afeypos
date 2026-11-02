@@ -164,13 +164,14 @@ export function ProductEditPage() {
     setError(null);
     try {
       const body: ProductForm = { ...p, categoryId: p.categoryId || null, brandId: p.brandId || null, supplierId: p.supplierId || null, binLocation: p.binLocation || undefined, plu: p.plu || null, prices: Object.fromEntries(Object.entries(p.prices).filter(([, v]) => v !== null && v !== undefined)) };
-      for (const k of ['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants', 'stock', 'parentId'] as const) delete body[k];
+      for (const k of ['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants', 'stock', 'parentId', 'pendingStock'] as const) delete body[k];
       if (isNew && opening.qty && Number(opening.qty) > 0) {
         const wh = locs.data?.warehouses.find((w) => w.isDefault) ?? locs.data?.warehouses[0];
         body.openingStock = [{ warehouseId: wh?._id, qty: Number(opening.qty), unitCostCents: opening.costCents ?? p.costCents, batchNo: opening.batchNo || undefined, expiryDate: opening.expiryDate || undefined, serials: opening.serials ? opening.serials.split(/[,\s]+/).filter(Boolean) : undefined }];
       }
-      const r = isNew ? await api<{ data: any }>('/products', { body }) : await api<{ data: any }>(`/products/${id}`, { method: 'PUT', body });
+      const r = isNew ? await api<{ data: any; pendingStock?: number }>('/products', { body }) : await api<{ data: any }>(`/products/${id}`, { method: 'PUT', body });
       toast.success('Product saved');
+      if ((r as { pendingStock?: number }).pendingStock) toast.info('Opening stock was sent to the branch server: it shows once that branch syncs.');
       qc.invalidateQueries({ queryKey: ['products'] });
       nav(`/products/${r.data._id}`, { replace: true });
     } catch (e) { setError(e); } finally { setBusy(false); }
@@ -326,6 +327,11 @@ export function ProductEditPage() {
         {editable && <ImagesCard images={p.images ?? []} onChange={(images) => set('images', images)} />}
         {!isNew && existing.data?.levels && (
           <Card title="Stock by location" className="lg:col-span-3">
+            {(existing.data.pendingStock ?? []).map((r: any) => (
+              <div key={r._id} className={`mb-2 rounded-lg px-3 py-2 text-sm ${r.status === 'failed' ? 'bg-red-50 text-red-700 dark:bg-red-950/30' : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30'}`} data-testid="pending-stock">
+                {r.status === 'failed' ? `The branch could not add ${qty(r.qty)} ${p.baseUnit} to ${locs.data?.warehouses.find((w) => w._id === r.warehouseId)?.name ?? 'its store'}: ${r.error}` : `${qty(r.qty)} ${p.baseUnit} opening stock for ${locs.data?.warehouses.find((w) => w._id === r.warehouseId)?.name ?? 'a branch store'} is waiting for that branch server to sync.`}
+              </div>
+            ))}
             <ul className="text-sm">{existing.data.levels.map((l: any) => <li key={l._id} className="flex justify-between py-1"><span>{locs.data?.warehouses.find((w) => w._id === l.warehouseId)?.name}</span><span className="tabular-nums">{qty(l.qty)} {p.baseUnit} · reserved {qty(l.reserved)} · in transit {qty(l.inTransit)} · avg cost {money(l.avgCostCents)}</span></li>)}</ul>
           </Card>
         )}

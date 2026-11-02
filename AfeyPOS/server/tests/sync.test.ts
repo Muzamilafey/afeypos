@@ -218,6 +218,26 @@ describe('head-office changes reach the branch', () => {
   });
 });
 
+describe('opening stock entered at head office for a branch server', () => {
+  it('is sent to the branch, applied there once, and the stock comes back to HQ', async () => {
+    const r = await hq.client.post('/products', { name: 'Brookside Fresh Milk', sku: 'BRK500', prices: { retail: 6500 }, costCents: 5000, openingStock: [{ warehouseId: b1.warehouseId, qty: 24 }, { warehouseId: mainWh, qty: 10 }] });
+    expect(r.status).toBe(201);
+    expect(r.body.pendingStock).toBe(1);
+    const id = r.body.data._id;
+    expect((await hq.client.get(`/products/${id}`)).body.data.pendingStock).toMatchObject([{ qty: 24, status: 'pending' }]);
+    expect((await hq.client.get(`/inventory/levels?productId=${id}&warehouseId=${mainWh}`)).body.data[0].qty).toBe(10);
+
+    await runSync();
+    expect((await branch.get(`/inventory/levels?productId=${id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty).toBe(24);
+    await runSync();
+    await runSync();
+    // Applied once, even after several syncs; HQ sees the branch stock and nothing pending.
+    expect((await branch.get(`/inventory/levels?productId=${id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty).toBe(24);
+    expect((await hq.client.get(`/inventory/levels?productId=${id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty).toBe(24);
+    expect((await hq.client.get(`/products/${id}`)).body.data.pendingStock).toEqual([]);
+  }, 60_000);
+});
+
 describe('customers across branches', () => {
   it('a customer added at the branch reaches HQ, and credit sales update the HQ balance', async () => {
     await hq.client.put('/settings/modules', { enabled: ['customerCredit'] });

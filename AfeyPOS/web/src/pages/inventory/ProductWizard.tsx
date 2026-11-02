@@ -190,12 +190,13 @@ export function ProductWizardPage() {
       if (type === 'stock' && Number(openingQty) > 0 && wh) {
         body.openingStock = [{ warehouseId: wh, qty: Number(openingQty), unitCostCents: cost, batchNo: batchNo || undefined, expiryDate: expiryDate || undefined, serials: serials ? serials.split(/[,\s]+/).filter(Boolean) : undefined }];
       }
-      const r = await api<{ data: any }>('/products', { body });
+      const r = await api<{ data: any; pendingStock?: number }>('/products', { body });
       for (const combo of variantCombos) {
         const suffix = Object.values(combo).join(' ');
         await api('/products', { body: { ...body, openingStock: undefined, barcodes: [], plu: null, name: `${body.name} ${suffix}`, sku: `${body.sku}-${Object.values(combo).map((v) => v.toUpperCase().replace(/[^A-Z0-9]/g, '')).join('-')}`, parentId: r.data._id, variantAttributes: combo } });
       }
       toast.success(variantCombos.length ? `Product saved with ${variantCombos.length} variants` : 'Product saved');
+      if (r.pendingStock) toast.info('Opening stock was sent to the branch server: it shows once that branch syncs (usually within a minute).');
       qc.invalidateQueries({ queryKey: ['products'] });
       nav(`/products/${r.data._id}`, { replace: true });
     } catch (e) { setError(e); } finally { setBusy(false); }

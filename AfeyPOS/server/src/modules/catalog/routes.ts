@@ -3,13 +3,15 @@ import { z } from 'zod';
 import { Types } from 'mongoose';
 import { decodeScaleBarcode, detectBarcode, gtinAliases, mergeCheckoutRules, normalizeIsbn, PRICE_LISTS, PRODUCT_FIELDS } from '@afeypos/shared';
 import { scaleFormatsFor } from './barcodes.js';
-import { Brand, Category, CustomerPrice, Product, Promotion, StockLevel, UnitOfMeasure, Warehouse } from '../../models/index.js';
+import { Brand, Category, CustomerPrice, Product, Promotion, RemoteStockRequest, StockLevel, UnitOfMeasure, Warehouse } from '../../models/index.js';
 import { escapeRegex, idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { requireModule, requirePermission } from '../../http/auth.js';
 import { withTransaction } from '../../db/connection.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { applyMovement } from '../inventory/stock.js';
+import { requestRemoteStock } from '../inventory/remote.js';
+import { ownsWarehouse } from '../sync/ownership.js';
 import { quotePrice } from './pricing.js';
 import { parseCsv, toCsv } from '../../lib/csv.js';
 import { recordTombstone } from '../sync/hq.js';
@@ -326,7 +328,8 @@ router.get('/products/:id', requirePermission('products.read'), async (req, res)
   if (!p) throw notFound('Product');
   const levels = await StockLevel.find({ productId: p._id }).lean();
   const variants = await Product.find({ parentId: p._id }, { name: 1, sku: 1, variantAttributes: 1 }).lean();
-  res.json({ data: { ...p, levels, variants } });
+  const pendingStock = await RemoteStockRequest.find({ productId: p._id, status: { $in: ['pending', 'failed'] } }, { warehouseId: 1, qty: 1, status: 1, error: 1, createdAt: 1 }).lean();
+  res.json({ data: { ...p, levels, variants, pendingStock } });
 });
 
 router.post('/products/:id/quote', requirePermission('products.read'), async (req, res) => {
@@ -346,13 +349,19 @@ router.post('/products', requirePermission('products.manage'), async (req, res) 
     const [p] = await Product.create([data]);
     for (const os of openingStock ?? []) {
       if (!(await Warehouse.exists({ _id: os.warehouseId }))) throw notFound('Warehouse');
+      // A branch with its own server owns its stock: head office sends the opening stock there instead.
+      if (env().DEPLOYMENT_MODE === 'hq' && !(await ownsWarehouse(os.warehouseId))) {
+        await requestRemoteStock({ productId: p._id, warehouseId: os.warehouseId, qty: os.qty, unitCostCents: os.unitCostCents ?? p.costCents, batchNo: os.batchNo, expiryDate: os.expiryDate, serials: os.serials, userId: req.auth!.userId });
+        continue;
+      }
       await applyMovement({ product: p, productId: p._id, warehouseId: os.warehouseId, qty: os.qty, type: 'opening', unitCostCents: os.unitCostCents ?? p.costCents, reason: 'Opening stock', ref: { type: 'Product', id: p._id, number: p.sku }, userId: req.auth!.userId, batchNo: os.batchNo, expiryDate: os.expiryDate, serials: os.serials });
     }
     await audit(req, { action: 'product.created', entity: 'Product', entityId: p._id, details: { sku: p.sku } });
     return p;
   });
   await queueItemRegistration(product._id, req.capabilities!);
-  res.status(201).json({ data: product });
+  const pendingStock = await RemoteStockRequest.countDocuments({ productId: product._id, status: 'pending' });
+  res.status(201).json({ data: product, pendingStock });
 });
 
 router.put('/products/:id', requirePermission('products.manage'), async (req, res) => {

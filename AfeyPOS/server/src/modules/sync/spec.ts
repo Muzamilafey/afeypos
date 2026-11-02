@@ -14,7 +14,7 @@ import {
   AttendanceRecord, AuditLog, CustomRole, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
   IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
   SalesDocument, SerialItem, Shift, StockAdjustment, StockBatch, StockLevel, StockMovement, Stocktake, StockTransfer, Supplier,
-  SupplierQuotation, SupplierReturn, Tenant, Till, UnitOfMeasure, User, Voucher, LoyaltyTransaction, Warehouse, PaymentTerminal, TerminalTransaction,
+  SupplierQuotation, SupplierReturn, RemoteStockRequest, Tenant, Till, UnitOfMeasure, User, Voucher, LoyaltyTransaction, Warehouse, PaymentTerminal, TerminalTransaction,
 } from '../../models/index.js';
 
 export interface BranchScope {
@@ -72,6 +72,8 @@ export const SYNC_SPECS: SyncSpec[] = [
   },
   { model: PurchaseOrder, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
   { model: SupplierQuotation, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
+  // Stock changes asked for at head office for a branch that runs its own server: the branch applies them.
+  { model: RemoteStockRequest, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
   { model: BiometricTemplate, dir: 'both', field: 'updatedAt' },
   { model: CustomerActivity, dir: 'both', field: 'updatedAt' },
   // Vouchers can be sold at one branch and spent at another. Offline branches cannot see a balance spent
