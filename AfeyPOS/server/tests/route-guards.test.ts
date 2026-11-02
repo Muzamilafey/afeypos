@@ -48,7 +48,7 @@ describe('route access rules', () => {
     const anyone = signedInRoutes.filter((r) => r.guards.every((g) => g.startsWith('signed-in:'))).map((r) => `${r.method} ${r.path}`).sort();
     expect(anyone).toEqual([
       'DELETE /sessions/:id', 'GET /files/:id', 'GET /me', 'GET /sessions', 'GET /settings/locations',
-      'POST /2fa/disable', 'POST /2fa/enable', 'POST /2fa/setup', 'POST /email/resend', 'POST /logout-all', 'POST /override', 'POST /password/change', 'POST /pin',
+      'POST /2fa/disable', 'POST /2fa/enable', 'POST /2fa/setup', 'POST /email/resend', 'POST /logout-all', 'POST /override', 'POST /password/change', 'POST /pin', 'POST /unlock',
     ]);
   });
 });
