@@ -15,10 +15,15 @@ const auditSchema = new Schema(
     ip: String,
     details: Schema.Types.Mixed,
     at: { type: Date, default: () => new Date() },
+    /** Tamper evidence: numbered per server (origin) and signed with the server key, so an edited or deleted entry shows up. */
+    origin: String,
+    seq: Number,
+    sig: String,
   },
   { timestamps: false },
 );
 auditSchema.index({ tenantId: 1, at: -1 });
+auditSchema.index({ tenantId: 1, origin: 1, seq: 1 });
 auditSchema.index({ tenantId: 1, entity: 1, entityId: 1 });
 export const AuditLog = tenantModel('AuditLog', auditSchema);
 

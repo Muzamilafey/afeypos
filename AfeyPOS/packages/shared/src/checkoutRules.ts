@@ -13,6 +13,8 @@ export interface CheckoutRules {
     clearNeedsApproval: boolean;
     /** Cashiers may hold (park) sales and resume them. */
     holdAllowed: boolean;
+    /** Largest quantity of one item on a sale line (in its selling unit); 0 = no limit. More needs a supervisor. */
+    maxQtyPerLine: number;
   };
   discounts: {
     /** Cashiers may give discounts at all (without it every discount needs approval). */
@@ -60,6 +62,16 @@ export interface CheckoutRules {
     waitSeconds: number;
     /** When KRA has not answered in time, print the receipt without the stamp (else wait for a reprint). */
     printUnsigned: boolean;
+  };
+  /** Till security. */
+  security: {
+    /** Lock the till after this many minutes without use; the cashier unlocks with PIN, card or password. 0 = never. */
+    lockAfterMinutes: number;
+  };
+  /** Stock transfers between stores and branches. */
+  transfers: {
+    /** A manager (inventory.adjust.approve) approves a transfer before it can be dispatched. */
+    approvalRequired: boolean;
   };
   /** Whether the till collects the customer's phone number, and what it does with it. */
   customer: {
@@ -109,12 +121,14 @@ export const CASHIER_PAGE_OPTIONS: { key: string; label: string }[] = [
 ];
 
 export const CHECKOUT_RULE_DEFAULTS: CheckoutRules = {
-  items: { removeNeedsApproval: false, reduceQtyNeedsApproval: false, clearNeedsApproval: false, holdAllowed: true },
+  items: { removeNeedsApproval: false, reduceQtyNeedsApproval: false, clearNeedsApproval: false, holdAllowed: true, maxQtyPerLine: 0 },
   discounts: { allowed: true, lineLimitBp: 1000, saleLimitBp: 1000, maxAmountCents: 0 },
   shifts: { required: true, minOpeningFloatCents: 0, blindClose: false, closeNeedsApproval: false, maxCashInDrawerCents: 0, oneOpenShiftPerCashier: true },
   mpesa: { watchTillPayments: true, autoComplete: true },
   pricing: { wholesaleAtTill: false, wholesaleNeedsApproval: false, wholesaleByQuantity: true },
   kra: { waitSeconds: 30, printUnsigned: true },
+  security: { lockAfterMinutes: 0 },
+  transfers: { approvalRequired: false },
   customer: { phone: 'both', createFromPhone: true, awardLoyalty: true, required: false },
   cashierPages: CASHIER_PAGE_OPTIONS.map((p) => p.key),
   paymentMethods: PAYMENT_METHOD_OPTIONS.map((p) => p.key),
@@ -134,6 +148,7 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
       reduceQtyNeedsApproval: bool(s.items?.reduceQtyNeedsApproval, d.items.reduceQtyNeedsApproval),
       clearNeedsApproval: bool(s.items?.clearNeedsApproval, d.items.clearNeedsApproval),
       holdAllowed: bool(s.items?.holdAllowed, d.items.holdAllowed),
+      maxQtyPerLine: int(s.items?.maxQtyPerLine, d.items.maxQtyPerLine, 100000),
     },
     discounts: {
       allowed: bool(s.discounts?.allowed, d.discounts.allowed),
@@ -158,6 +173,8 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
       wholesaleNeedsApproval: bool(s.pricing?.wholesaleNeedsApproval, d.pricing.wholesaleNeedsApproval),
       wholesaleByQuantity: bool(s.pricing?.wholesaleByQuantity, d.pricing.wholesaleByQuantity),
     },
+    security: { lockAfterMinutes: int(s.security?.lockAfterMinutes, d.security.lockAfterMinutes, 240) },
+    transfers: { approvalRequired: bool(s.transfers?.approvalRequired, d.transfers.approvalRequired) },
     kra: {
       waitSeconds: int(s.kra?.waitSeconds, d.kra.waitSeconds, 120),
       printUnsigned: bool(s.kra?.printUnsigned, d.kra.printUnsigned),

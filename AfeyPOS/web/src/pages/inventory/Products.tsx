@@ -336,8 +336,36 @@ export function ProductEditPage() {
           </Card>
         )}
         {!isNew && can('purchasing.read') && <PurchaseHistoryCard productId={p._id ?? id!} unit={p.baseUnit} />}
+        {!isNew && can('purchasing.read') && <SupplierPricesCard productId={p._id ?? id!} unit={p.baseUnit} />}
       </div>
     </div>
+  );
+}
+
+/** Who sells this product: price, lead time and delivery record per supplier, best overall first. */
+function SupplierPricesCard({ productId, unit }: { productId: string; unit: string }) {
+  const q = useQuery({ queryKey: ['supplier-prices', productId], queryFn: () => api<{ data: { suppliers: any[]; best: string | null; basis: string } }>(`/products/${productId}/supplier-prices`).then((r) => r.data) });
+  const rows = q.data?.suppliers ?? [];
+  if (!rows.length) return null;
+  return (
+    <Card title="Supplier prices" className="lg:col-span-3">
+      <table className="w-full text-sm" data-testid="supplier-prices">
+        <thead><tr className="text-left text-xs text-ink-500"><th className="py-1">Supplier</th><th className="num">Last cost / {unit}</th><th className="num">Range</th><th className="num">Latest quote</th><th className="num">Lead time</th><th className="num">On time</th><th className="num">Complete</th><th className="num">Score</th></tr></thead>
+        <tbody>{rows.map((r) => (
+          <tr key={r.supplierId} className="border-t border-ink-100 dark:border-ink-800">
+            <td className="py-1.5 font-medium">{r.supplier}{r.supplierId === q.data?.best && <Badge tone="green">best overall</Badge>}{r.main && <Badge tone="blue">main</Badge>}</td>
+            <td className="num">{r.lastCostCents !== null ? money(r.lastCostCents) : '—'}</td>
+            <td className="num text-xs">{r.minCostCents !== null ? `${money(r.minCostCents)}–${money(r.maxCostCents)}` : '—'}</td>
+            <td className="num">{r.quoteCents !== null ? money(r.quoteCents) : '—'}</td>
+            <td className="num">{r.leadTimeDays} d</td>
+            <td className="num">{r.onTimePct === null ? '—' : `${r.onTimePct}%`}</td>
+            <td className="num">{r.fillRatePct === null ? '—' : `${r.fillRatePct}%`}</td>
+            <td className="num font-semibold">{r.score ?? '—'}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+      <p className="mt-2 text-xs text-ink-500">{q.data?.basis}</p>
+    </Card>
   );
 }
 

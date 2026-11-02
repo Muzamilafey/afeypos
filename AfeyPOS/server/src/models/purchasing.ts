@@ -57,6 +57,11 @@ const grnSchema = new Schema(
         batchNo: String,
         expiryDate: Date,
         serials: [String],
+        /** Delivered but damaged or rejected: not added to stock, not charged. */
+        damagedQty: Number,
+        /** Expected on the order but not delivered this time. */
+        shortQty: Number,
+        note: String,
         _id: false,
       },
     ],

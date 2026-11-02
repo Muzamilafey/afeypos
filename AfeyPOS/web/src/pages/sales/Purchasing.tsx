@@ -18,7 +18,7 @@ import { Icon } from '../../components/icons';
 
 interface Line {
   productId: string; name: string; unitCode: string; units: { code: string; name: string }[]; qty: number; unitCostCents: number;
-  batchNo?: string; expiryDate?: string; serials?: string; trackBatches?: boolean; trackSerials?: boolean; poLineId?: string; ordered?: number; received?: number;
+  batchNo?: string; expiryDate?: string; serials?: string; damagedQty?: number; trackBatches?: boolean; trackSerials?: boolean; poLineId?: string; ordered?: number; received?: number;
 }
 
 type Tab = 'quotations' | 'orders' | 'receiving';
@@ -63,6 +63,7 @@ function LineGrid({ lines, setLines, mode }: { lines: Line[]; setLines: (l: Line
           </>}
           {mode === 'grn' && l.trackBatches && <><Input placeholder="Batch no." value={l.batchNo ?? ''} onChange={(e) => upd(i, { batchNo: e.target.value })} /><Input type="date" value={l.expiryDate ?? ''} onChange={(e) => upd(i, { expiryDate: e.target.value })} aria-label="Expiry" /></>}
           {mode === 'grn' && l.trackSerials && <Input className="col-span-2" placeholder="Serial numbers (comma separated)" value={l.serials ?? ''} onChange={(e) => upd(i, { serials: e.target.value })} />}
+          {mode === 'grn' && <Input type="number" step="any" min="0" placeholder="Damaged / rejected" title="Delivered but damaged or rejected: not added to stock" value={l.damagedQty ?? ''} onChange={(e) => upd(i, { damagedQty: e.target.value === '' ? undefined : Number(e.target.value) })} aria-label={`Damaged ${l.name}`} />}
         </div>
       ))}
       {priced && <div className="text-right font-semibold">Total {money(lines.reduce((a, l) => a + Math.round(l.qty * l.unitCostCents), 0))}</div>}
@@ -335,6 +336,72 @@ function GrnModal({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
+/**
+ * Suggested purchase orders: what to order per supplier from recent sales, lead time and stock (on hand and on
+ * order). Quantities can be changed or lines left out; only draft orders are made, sent later as usual.
+ */
+function SuggestedOrdersModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const toast = useToast();
+  const locs = useLocations();
+  const [warehouseId, setWarehouseId] = useState('');
+  const [days, setDays] = useState(28);
+  const [cover, setCover] = useState(14);
+  const wh = warehouseId || locs.data?.warehouses.find((w) => w.isDefault)?._id || locs.data?.warehouses[0]?._id || '';
+  const q = useQuery({
+    queryKey: ['po-suggest', wh, days, cover],
+    queryFn: () => api<{ data: { groups: any[]; basis: { note: string } } }>('/purchase-orders/suggest', { body: { warehouseId: wh, days, coverDays: cover } }).then((r) => r.data),
+    enabled: Boolean(wh),
+  });
+  const [picked, setPicked] = useState<Record<string, { on: boolean; qty: number }>>({});
+  const key = (g: any, l: any) => `${g.supplierId ?? 'none'}:${l.productId}`;
+  const val = (g: any, l: any) => picked[key(g, l)] ?? { on: Boolean(g.supplierId), qty: l.suggestQty };
+  const create = async () => {
+    const create = (q.data?.groups ?? []).filter((g) => g.supplierId).map((g) => ({ supplierId: g.supplierId, lines: g.lines.filter((l: any) => val(g, l).on && val(g, l).qty > 0).map((l: any) => ({ productId: l.productId, qty: val(g, l).qty, unitCostCents: l.unitCostCents })) })).filter((g) => g.lines.length);
+    if (!create.length) { toast.error('Tick at least one product'); return; }
+    try {
+      const r = await api<{ data: any[] }>('/purchase-orders/suggest', { body: { warehouseId: wh, create } });
+      toast.success(`${r.data.length} draft purchase order${r.data.length === 1 ? '' : 's'} created: check and send them`);
+      onCreated();
+    } catch (e) { toast.error(e); }
+  };
+  return (
+    <Modal open onClose={onClose} size="xl" title="Suggested orders" subtitle={q.data?.basis.note} icon="sparkles"
+      footer={<><Button variant="secondary" onClick={onClose}>Close</Button><Button onClick={create} disabled={!q.data?.groups.some((g) => g.supplierId)}>Create draft orders</Button></>}>
+      <div className="mb-3 grid gap-3 sm:grid-cols-3">
+        <Field label="Store"><Select value={wh} onChange={(e) => setWarehouseId(e.target.value)} options={(locs.data?.warehouses ?? []).map((w: any) => ({ value: w._id, label: w.name }))} /></Field>
+        <Field label="Sales of the last (days)"><Input type="number" min={7} max={365} value={days} onChange={(e) => setDays(Math.max(7, Number(e.target.value) || 28))} /></Field>
+        <Field label="Days of stock to order for"><Input type="number" min={1} max={180} value={cover} onChange={(e) => setCover(Math.max(1, Number(e.target.value) || 14))} /></Field>
+      </div>
+      {q.isLoading && <Loading />}
+      <ErrorBox error={q.error} />
+      {q.data && !q.data.groups.length && <p className="text-sm text-ink-500">Nothing needs ordering: stock and orders cover the expected sales.</p>}
+      <div className="space-y-3" data-testid="suggested-orders">
+        {(q.data?.groups ?? []).map((g) => (
+          <div key={g.supplierId ?? 'none'} className="rounded-lg border border-ink-100 dark:border-ink-800">
+            <div className="flex items-center justify-between border-b border-ink-100 px-3 py-2 text-sm dark:border-ink-800">
+              <b>{g.supplier}</b><span className="text-ink-500">{g.supplierId ? `delivers in ${g.leadTimeDays} days · about ${money(g.totalCents)}` : 'set a main supplier on these products to order them'}</span>
+            </div>
+            <table className="w-full text-sm"><tbody>
+              {g.lines.map((l: any) => {
+                const v = val(g, l);
+                return (
+                  <tr key={l.productId} className="border-b border-ink-50 last:border-0 dark:border-ink-900">
+                    <td className="px-3 py-1.5">{g.supplierId && <input type="checkbox" className="mr-2" aria-label={`Order ${l.name}`} checked={v.on} onChange={(e) => setPicked({ ...picked, [key(g, l)]: { ...v, on: e.target.checked } })} />}{l.name}<div className="text-xs text-ink-500">{l.reason}</div></td>
+                    <td className="px-2 text-right text-xs text-ink-500">{l.daysLeft !== null ? `${l.daysLeft} days left` : ''}</td>
+                    <td className="w-28 px-2"><Input type="number" min={0} step="any" aria-label={`Quantity of ${l.name}`} value={v.qty} onChange={(e) => setPicked({ ...picked, [key(g, l)]: { ...v, qty: Number(e.target.value) } })} /></td>
+                    <td className="w-16 text-xs">{l.unit}</td>
+                    <td className="px-3 text-right tabular-nums">{money(Math.round(v.qty * l.unitCostCents))}</td>
+                  </tr>
+                );
+              })}
+            </tbody></table>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
 export function PurchasingPage({ tab }: { tab: Tab }) {
   const { can } = useAuth();
   const nav = useNavigate();
@@ -346,6 +413,7 @@ export function PurchasingPage({ tab }: { tab: Tab }) {
   const grns = useList(['grns'], '/goods-receipts', { limit: 50 }, tab === 'receiving');
   const [mode, setMode] = useState<null | 'po' | 'grn'>(null);
   const [rfqOpen, setRfqOpen] = useState(false);
+  const [suggestOpen, setSuggestOpen] = useState(false);
   const [quoteId, setQuoteId] = useState<string | null>(null);
   const [compareId, setCompareId] = useState<string | null>(null);
   const [poId, setPoId] = useState<string | null>(null);
@@ -373,7 +441,7 @@ export function PurchasingPage({ tab }: { tab: Tab }) {
   const submit = async () => {
     setError(null);
     try {
-      const payload = lines.filter((l) => l.qty > 0).map((l) => ({ productId: l.productId, poLineId: l.poLineId, unitCode: l.unitCode, qty: l.qty, unitCostCents: l.unitCostCents, batchNo: l.batchNo || undefined, expiryDate: l.expiryDate || undefined, serials: l.serials ? l.serials.split(/[,\s]+/).filter(Boolean) : undefined }));
+      const payload = lines.filter((l) => l.qty > 0).map((l) => ({ productId: l.productId, poLineId: l.poLineId, unitCode: l.unitCode, qty: l.qty, unitCostCents: l.unitCostCents, batchNo: l.batchNo || undefined, expiryDate: l.expiryDate || undefined, serials: l.serials ? l.serials.split(/[,\s]+/).filter(Boolean) : undefined, damagedQty: mode === 'grn' && l.damagedQty ? l.damagedQty : undefined }));
       if (mode === 'po') {
         const r = await api<{ data: any }>('/purchase-orders', { body: { supplierId: form.supplierId, warehouseId: whId, expectedAt: form.expectedAt || undefined, notes: form.notes || undefined, lines: payload } });
         toast.success(`Purchase order ${r.data.number} created`);
@@ -394,10 +462,12 @@ export function PurchasingPage({ tab }: { tab: Tab }) {
     <div>
       <PageHeader title={title} subtitle={subtitle} actions={<>
         {can('purchasing.manage') && <Button variant={tab === 'quotations' ? 'primary' : 'secondary'} onClick={() => setRfqOpen(true)}><Icon name="doc" className="h-4 w-4" />Request quotation</Button>}
+        {can('purchasing.manage') && <Button variant="secondary" onClick={() => setSuggestOpen(true)}><Icon name="sparkles" className="h-4 w-4" />Suggested orders</Button>}
         {can('purchasing.manage') && <Button variant={tab === 'orders' ? 'primary' : 'secondary'} onClick={() => { setForm({ supplierId: '', warehouseId: '' }); setLines([]); setError(null); setMode('po'); }}><Icon name="plus" className="h-4 w-4" />New purchase order</Button>}
         {can('inventory.receive') && <Button variant={tab === 'receiving' ? 'primary' : 'secondary'} onClick={() => { setForm({ supplierId: '', warehouseId: '', supplierInvoiceNo: '', taxCents: 0 }); setLines([]); setError(null); setMode('grn'); }}><Icon name="package" className="h-4 w-4" />Receive goods</Button>}
       </>} />
       <Tabs value={tab} onChange={(k) => nav(PATHS[k as Tab])} tabs={[{ key: 'quotations', label: 'Quotations' }, { key: 'orders', label: 'Purchase orders' }, { key: 'receiving', label: 'Goods received' }]} />
+      {suggestOpen && <SuggestedOrdersModal onClose={() => setSuggestOpen(false)} onCreated={() => { setSuggestOpen(false); qc.invalidateQueries({ queryKey: ['pos'] }); if (tab !== 'orders') nav(PATHS.orders); }} />}
       {tab === 'quotations' && <QuotationsTab onOpen={setQuoteId} />}
       {tab === 'orders' && (
         <div className="card">

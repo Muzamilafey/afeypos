@@ -63,6 +63,17 @@ export function CheckoutRulesPage() {
             <Toggle label="Lowering a quantity needs a supervisor" help="Changing 3 to 2 counts as removing an item." checked={rules.items.reduceQtyNeedsApproval} onChange={(v) => set('items', { reduceQtyNeedsApproval: v })} />
             <Toggle label="Clearing the whole sale needs a supervisor" checked={rules.items.clearNeedsApproval} onChange={(v) => set('items', { clearNeedsApproval: v })} />
             <Toggle label="Cashiers may hold and resume sales" checked={rules.items.holdAllowed} onChange={(v) => set('items', { holdAllowed: v })} />
+            <div className="py-3">
+              <Field label="Most of one item on a sale line" hint="0 = no limit. More needs a supervisor (e.g. stop 50 × sugar by mistake or bulk buying at retail).">
+                <Input type="number" min={0} value={rules.items.maxQtyPerLine} onChange={(e) => set('items', { maxQtyPerLine: Math.max(0, Number(e.target.value) || 0) })} />
+              </Field>
+            </div>
+            <div className="py-3">
+              <Field label="Lock the till after (minutes without use)" hint="0 = never. The cashier unlocks with their PIN, staff card or password; the sale on screen is kept.">
+                <Input type="number" min={0} max={240} value={rules.security.lockAfterMinutes} onChange={(e) => set('security', { lockAfterMinutes: Math.max(0, Math.min(240, Number(e.target.value) || 0)) })} />
+              </Field>
+            </div>
+            <Toggle label="Stock transfers need a manager's approval before dispatch" help="Staff request a transfer; a manager approves it (or dispatches it themselves)." checked={rules.transfers.approvalRequired} onChange={(v) => set('transfers', { approvalRequired: v })} />
           </div>
           <p className="mt-2 text-xs text-ink-500">Supervisors are users with the permission <b>Remove scanned items</b> (Branch manager and above). Change it in <Link className="text-brand-600 hover:underline" to="/settings/roles">Roles &amp; permissions</Link>.</p>
         </Card>

@@ -27,6 +27,7 @@ const customerSchema = z.object({
   priceList: z.enum(['retail', 'wholesale', 'contractor']).default('retail'),
   creditLimitCents: positiveCents.default(0),
   paymentTermsDays: z.number().int().min(0).max(365).default(30),
+  leadTimeDays: z.number().int().min(0).max(180).optional(),
   dateOfBirth: z.coerce.date().optional(),
   salesRepId: objectId.nullish(),
   notes: z.string().max(1000).optional(),
@@ -219,6 +220,7 @@ const supplierSchema = z.object({
   address: z.string().max(300).optional(),
   contactPerson: z.string().max(120).optional(),
   paymentTermsDays: z.number().int().min(0).max(365).default(30),
+  leadTimeDays: z.number().int().min(0).max(180).optional(),
   active: z.boolean().default(true),
 });
 

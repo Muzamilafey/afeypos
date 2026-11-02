@@ -108,6 +108,8 @@ const transferSchema = new Schema(
     status: { type: String, enum: ['draft', 'in_transit', 'received', 'cancelled'], default: 'draft' },
     notes: String,
     createdBy: ObjectId,
+    approvedBy: ObjectId,
+    approvedAt: Date,
     dispatchedBy: ObjectId,
     dispatchedAt: Date,
     receivedBy: ObjectId,

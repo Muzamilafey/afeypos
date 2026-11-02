@@ -17,9 +17,11 @@ import { allocateAgainstOpen } from '../sales/returns.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { emailDocument } from '../documents/routes.js';
 import { supplierQuotationRoutes } from './quotations.js';
+import { purchasingIntelligenceRoutes } from './intelligence.js';
 
 const router = Router();
 router.use(supplierQuotationRoutes);
+router.use(purchasingIntelligenceRoutes);
 
 const lineSchema = z.object({ productId: objectId, unitCode: z.string().optional(), qty: z.number().positive(), unitCostCents: positiveCents });
 /** Receiving: the cost may be left out (staff who do not see costs); the product's current cost is used. */
@@ -97,7 +99,7 @@ const grnSchema = z.object({
   dueDate: z.coerce.date().optional(),
   taxCents: positiveCents.default(0),
   notes: z.string().max(1000).optional(),
-  lines: z.array(grnLineSchema.extend({ poLineId: objectId.optional(), batchNo: z.string().max(60).optional(), expiryDate: z.coerce.date().optional(), serials: z.array(z.string()).optional() })).min(1).max(500),
+  lines: z.array(grnLineSchema.extend({ poLineId: objectId.optional(), batchNo: z.string().max(60).optional(), expiryDate: z.coerce.date().optional(), serials: z.array(z.string()).optional(), damagedQty: z.number().nonnegative().default(0), note: z.string().trim().max(200).optional() })).min(1).max(500),
   updateProductCost: z.boolean().default(true),
 });
 
@@ -150,7 +152,10 @@ const postGoodsReceipt = async (req: Request, res: Response) => {
       if (product.trackBatches && !l.batchNo) throw badRequest(`${product.name} requires a batch number`);
       await applyMovement({ product, productId: product._id, warehouseId: body.warehouseId, qty: baseQty, type: 'purchase_receipt', unitCostCents: baseCost, ref: { type: 'GoodsReceipt', id, number }, userId: req.auth!.userId, batchNo: l.batchNo, expiryDate: l.expiryDate, serials: l.serials, reason: body.supplierInvoiceNo ? `Invoice ${body.supplierInvoiceNo}` : undefined });
       if (body.updateProductCost && l.unitCostCents !== undefined) await Product.updateOne({ _id: product._id }, { $set: { costCents: baseCost } });
-      lines.push({ productId: product._id, poLineId: l.poLineId, name: product.name, unitCode: unit.code, factor: unit.factor, qty: roundQty(l.qty), unitCostCents, batchNo: l.batchNo, expiryDate: l.expiryDate, serials: l.serials });
+      // Short = what the order still expected of this line after this delivery (good units only count).
+      const poLine = po ? (l.poLineId ? po.lines.id(l.poLineId) : po.lines.find((x) => String(x.productId) === String(product._id))) : null;
+      const shortQty = poLine ? Math.max(0, roundQty((poLine.qty ?? 0) - (poLine.receivedQty ?? 0))) : undefined;
+      lines.push({ productId: product._id, poLineId: l.poLineId, name: product.name, unitCode: unit.code, factor: unit.factor, qty: roundQty(l.qty), unitCostCents, batchNo: l.batchNo, expiryDate: l.expiryDate, serials: l.serials, damagedQty: l.damagedQty ? roundQty(l.damagedQty) : undefined, shortQty: shortQty || undefined, note: l.note });
     }
     const subtotal = lines.reduce((a, l) => a + lineAmount(l.qty, l.unitCostCents), 0);
     const total = subtotal + body.taxCents;

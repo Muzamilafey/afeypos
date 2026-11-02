@@ -11,16 +11,44 @@ import { CustomerCrmPanel } from '../crm/CRM';
 import { Icon } from '../../components/icons';
 import { PdfButton } from '../../components/DocumentActions';
 
+/** Delivery record per supplier: on time, lead time, complete deliveries, damaged goods and price changes. */
+function SupplierPerformanceCard() {
+  const q = useQuery({ queryKey: ['supplier-performance'], queryFn: () => api<{ data: any[]; notes: string }>('/reports/supplier-performance') });
+  const rows = (q.data?.data ?? []).filter((r) => r.orders > 0 || r.delivered > 0);
+  const pct = (v: number | null) => (v === null ? '—' : `${v}%`);
+  return (
+    <Card className="mt-4" title="Supplier performance">
+      {rows.length === 0 ? <p className="text-sm text-ink-500">Shows once purchase orders have been sent and received.</p> : (
+        <table className="w-full text-sm" data-testid="supplier-performance">
+          <thead><tr className="text-left text-xs text-ink-500"><th className="py-1">Supplier</th><th className="num">Orders</th><th className="num">On time</th><th className="num">Avg lead time</th><th className="num">Complete</th><th className="num">Damaged</th><th className="num">Price changes</th><th className="num">We owe</th></tr></thead>
+          <tbody>{rows.map((r) => (
+            <tr key={r.supplierId} className="border-t border-ink-100 dark:border-ink-800">
+              <td className="py-1.5 font-medium">{r.supplier}</td><td className="num">{r.orders}</td>
+              <td className={`num ${r.onTimePct !== null && r.onTimePct < 70 ? 'text-red-600' : ''}`}>{pct(r.onTimePct)}</td>
+              <td className="num">{r.avgLeadDays === null ? '—' : `${r.avgLeadDays} d`}</td>
+              <td className={`num ${r.fillRatePct !== null && r.fillRatePct < 90 ? 'text-amber-600' : ''}`}>{pct(r.fillRatePct)}</td>
+              <td className={`num ${r.damagedPct > 2 ? 'text-amber-600' : ''}`}>{r.damagedPct}%</td>
+              <td className="num">{r.priceChanges ? `${r.priceChanges} (avg ${r.avgPriceChangePct > 0 ? '+' : ''}${r.avgPriceChangePct}%)` : '—'}</td>
+              <td className="num">{money(r.balanceCents)}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+      {q.data?.notes && <p className="mt-2 text-xs text-ink-500">{q.data.notes}</p>}
+    </Card>
+  );
+}
+
 function PartyForm({ kind, initial, onSaved, onClose }: { kind: 'customer' | 'supplier'; initial?: any; onSaved: () => void; onClose: () => void }) {
   const { me, can } = useAuth();
-  const [f, setF] = useState<any>(initial ? { ...initial, dateOfBirth: initial.dateOfBirth?.slice(0, 10) ?? '', tagsText: (initial.tags ?? []).join(', ') } : { name: '', phone: '', email: '', taxPin: '', address: '', kind: 'retail', priceList: 'retail', creditLimitCents: 0, paymentTermsDays: 30 });
+  const [f, setF] = useState<any>(initial ? { ...initial, dateOfBirth: initial.dateOfBirth?.slice(0, 10) ?? '', tagsText: (initial.tags ?? []).join(', ') } : { name: '', phone: '', email: '', taxPin: '', address: '', kind: 'retail', priceList: 'retail', creditLimitCents: 0, paymentTermsDays: 30, leadTimeDays: 7 });
   const [error, setError] = useState<unknown>(null);
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const save = async () => {
     try {
       const body: any = { name: f.name, phone: f.phone || undefined, email: f.email || undefined, taxPin: f.taxPin || undefined, address: f.address || undefined, paymentTermsDays: Number(f.paymentTermsDays) };
       if (kind === 'customer') Object.assign(body, { kind: f.kind === 'walk_in' ? 'retail' : f.kind, priceList: f.priceList, creditLimitCents: f.creditLimitCents, dateOfBirth: f.dateOfBirth || undefined, tags: String(f.tagsText ?? '').split(',').map((x) => x.trim()).filter(Boolean), marketingOptIn: Boolean(f.marketingOptIn) });
-      else body.contactPerson = f.contactPerson || undefined;
+      else Object.assign(body, { contactPerson: f.contactPerson || undefined, leadTimeDays: Number(f.leadTimeDays ?? 7) });
       const path = kind === 'customer' ? '/customers' : '/suppliers';
       if (initial?._id) await api(`${path}/${initial._id}`, { method: 'PATCH', body });
       else await api(path, { body });
@@ -35,6 +63,7 @@ function PartyForm({ kind, initial, onSaved, onClose }: { kind: 'customer' | 'su
         <Field label="Email"><Input value={f.email ?? ''} onChange={set('email')} /></Field>
         <Field label="KRA PIN / Tax ID"><Input value={f.taxPin ?? ''} onChange={set('taxPin')} /></Field>
         <Field label="Payment terms (days)"><Input type="number" value={f.paymentTermsDays} onChange={set('paymentTermsDays')} /></Field>
+        {kind === 'supplier' && <Field label="Delivery lead time (days)" hint="From order to delivery; used for suggested orders"><Input type="number" min={0} value={f.leadTimeDays ?? 7} onChange={set('leadTimeDays')} /></Field>}
         <Field label="Address" className="sm:col-span-2"><Input value={f.address ?? ''} onChange={set('address')} /></Field>
         {kind === 'customer' && (
           <>
@@ -74,6 +103,7 @@ export function PartiesPage({ kind }: { kind: 'customer' | 'supplier' }) {
             { key: 'b', header: kind === 'customer' ? 'Owes us' : 'We owe', className: 'num', render: (r: any) => <span className={r.balanceCents > 0 ? 'font-medium text-red-600' : ''}>{money(r.balanceCents)}</span> },
           ]} />
       </div>
+      {kind === 'supplier' && can('purchasing.read') && <SupplierPerformanceCard />}
       {creating && <PartyForm kind={kind} onClose={() => setCreating(false)} onSaved={() => { setCreating(false); qc.invalidateQueries({ queryKey: [path] }); }} />}
     </div>
   );

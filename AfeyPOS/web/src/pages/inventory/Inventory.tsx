@@ -150,6 +150,7 @@ export function AdjustmentsPage() {
 }
 
 export function TransfersPage() {
+  const { me, can } = useAuth();
   const w = useWarehouseSelect();
   const qc = useQueryClient();
   const toast = useToast();
@@ -159,6 +160,7 @@ export function TransfersPage() {
   const [to, setTo] = useState('');
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [error, setError] = useState<unknown>(null);
+  const needsApproval = Boolean(me?.tenant.checkoutRules?.transfers?.approvalRequired);
   const act = async (id: string, action: string) => {
     try { await api(`/inventory/transfers/${id}/${action}`, { body: {} }); qc.invalidateQueries({ queryKey: ['transfers'] }); toast.success('Updated'); } catch (e) { toast.error(e); }
   };
@@ -173,7 +175,12 @@ export function TransfersPage() {
             { key: 't', header: 'To', render: (r: any) => w.name(r.toWarehouseId) },
             { key: 'l', header: 'Lines', render: (r: any) => r.lines.length },
             { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
-            { key: 'a', header: '', render: (r: any) => r.status === 'draft' ? <Button size="sm" onClick={() => act(r._id, 'dispatch')}>Dispatch</Button> : r.status === 'in_transit' ? <Button size="sm" onClick={() => act(r._id, 'receive')}>Receive all</Button> : null },
+            { key: 'a', header: '', render: (r: any) => r.status === 'draft' ? (
+              <div className="flex justify-end gap-1">
+                {needsApproval && !r.approvedAt && can('inventory.adjust.approve') && <Button size="sm" variant="secondary" onClick={() => act(r._id, 'approve')}>Approve</Button>}
+                {needsApproval && !r.approvedAt && !can('inventory.adjust.approve') ? <Badge tone="amber">waiting for approval</Badge> : <Button size="sm" onClick={() => act(r._id, 'dispatch')}>Dispatch</Button>}
+              </div>
+            ) : r.status === 'in_transit' ? <Button size="sm" onClick={() => act(r._id, 'receive')}>Receive all</Button> : null },
           ]} />
       </div>
       <Modal open={open} onClose={() => setOpen(false)} title="New transfer" size="lg" footer={<><Button variant="secondary" onClick={() => setOpen(false)}>Cancel</Button><Button disabled={!from || !to || !lines.length} onClick={async () => {

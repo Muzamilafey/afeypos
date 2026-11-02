@@ -8,7 +8,7 @@ import {
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { requireModule, requirePermission, signedIn } from '../../http/auth.js';
 import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
-import { audit } from '../../lib/audit.js';
+import { audit, auditSignature, auditSigningText } from '../../lib/audit.js';
 import { hashPassword } from '../../lib/crypto.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { nextNumber } from '../../lib/numbering.js';
@@ -135,12 +135,14 @@ router.post('/settings/receipt/preview', requirePermission('settings.manage'), a
 // ---------- checkout rules and card terminals ----------
 const bp = z.number().int().min(0).max(10000);
 const rulesSchema = z.object({
-  items: z.object({ removeNeedsApproval: z.boolean(), reduceQtyNeedsApproval: z.boolean(), clearNeedsApproval: z.boolean(), holdAllowed: z.boolean() }).partial(),
+  items: z.object({ removeNeedsApproval: z.boolean(), reduceQtyNeedsApproval: z.boolean(), clearNeedsApproval: z.boolean(), holdAllowed: z.boolean(), maxQtyPerLine: z.number().int().min(0).max(100000) }).partial(),
   discounts: z.object({ allowed: z.boolean(), lineLimitBp: bp, saleLimitBp: bp, maxAmountCents: positiveCents }).partial(),
   shifts: z.object({ required: z.boolean(), minOpeningFloatCents: positiveCents, blindClose: z.boolean(), closeNeedsApproval: z.boolean(), maxCashInDrawerCents: positiveCents, oneOpenShiftPerCashier: z.boolean() }).partial(),
   mpesa: z.object({ watchTillPayments: z.boolean(), autoComplete: z.boolean() }).partial(),
   pricing: z.object({ wholesaleAtTill: z.boolean(), wholesaleNeedsApproval: z.boolean(), wholesaleByQuantity: z.boolean() }).partial(),
   kra: z.object({ waitSeconds: z.number().int().min(0).max(120), printUnsigned: z.boolean() }).partial(),
+  security: z.object({ lockAfterMinutes: z.number().int().min(0).max(240) }).partial(),
+  transfers: z.object({ approvalRequired: z.boolean() }).partial(),
   customer: z.object({ phone: z.enum(['off', 'ask', 'mpesa', 'both']), createFromPhone: z.boolean(), awardLoyalty: z.boolean(), required: z.boolean() }).partial(),
   cashierPages: z.array(z.enum(CASHIER_PAGE_OPTIONS.map((p) => p.key) as [string, ...string[]])).max(CASHIER_PAGE_OPTIONS.length),
   paymentMethods: z.array(z.enum(PAYMENT_METHOD_OPTIONS.map((p) => p.key) as [string, ...string[]])).min(1, 'Keep at least one way to pay').max(PAYMENT_METHOD_OPTIONS.length),
@@ -156,7 +158,7 @@ router.get('/settings/checkout-rules', requirePermission('settings.manage'), asy
 router.put('/settings/checkout-rules', requirePermission('settings.manage'), async (req, res) => {
   const body = parse(z.object({ rules: rulesSchema, cardTerminals: terminalsSchema.optional() }), req.body);
   const current = mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
-  const rules = mergeCheckoutRules({ ...current, ...body.rules, items: { ...current.items, ...body.rules.items }, discounts: { ...current.discounts, ...body.rules.discounts }, shifts: { ...current.shifts, ...body.rules.shifts }, mpesa: { ...current.mpesa, ...body.rules.mpesa }, pricing: { ...current.pricing, ...body.rules.pricing }, kra: { ...current.kra, ...body.rules.kra }, customer: { ...current.customer, ...body.rules.customer } });
+  const rules = mergeCheckoutRules({ ...current, ...body.rules, items: { ...current.items, ...body.rules.items }, discounts: { ...current.discounts, ...body.rules.discounts }, shifts: { ...current.shifts, ...body.rules.shifts }, mpesa: { ...current.mpesa, ...body.rules.mpesa }, pricing: { ...current.pricing, ...body.rules.pricing }, kra: { ...current.kra, ...body.rules.kra }, security: { ...current.security, ...body.rules.security }, transfers: { ...current.transfers, ...body.rules.transfers }, customer: { ...current.customer, ...body.rules.customer } });
   // The older single settings stay in step for anything that still reads them.
   const set: Record<string, unknown> = { 'settings.checkoutRules': rules, 'settings.requireOpenShift': rules.shifts.required, 'settings.cashierDiscountLimitBp': rules.discounts.saleLimitBp };
   if (body.cardTerminals) set['settings.cardTerminals'] = body.cardTerminals;
@@ -568,6 +570,30 @@ router.get('/audit', requirePermission('audit.read'), async (req, res) => {
   if (q.from || q.to) filter.at = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
   const [data, total] = await Promise.all([AuditLog.find(filter).sort({ at: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), AuditLog.countDocuments(filter)]);
   res.json({ data, total, page: q.page, limit: q.limit });
+});
+
+/**
+ * Checks the audit trail: every signed entry must still match its signature (edited entries do not), and each
+ * server's entry numbers must run without gaps (a gap is a deleted entry, or an action that was rolled back).
+ */
+router.get('/audit/verify', requirePermission('audit.read'), async (req, res) => {
+  const tenantId = req.tenant!._id;
+  const altered: { id: unknown; origin: string; seq: number; action: string; at: Date }[] = [];
+  const gaps: { origin: string; from: number; to: number }[] = [];
+  const counts = new Map<string, number>();
+  let unsigned = 0;
+  let last: { origin: string; seq: number } | null = null;
+  const cursor = AuditLog.find({}, { ip: 0 }).sort({ origin: 1, seq: 1 }).lean().cursor();
+  for await (const e of cursor) {
+    if (!e.sig || !e.origin || !e.seq) { unsigned++; continue; }
+    counts.set(e.origin, (counts.get(e.origin) ?? 0) + 1);
+    if (auditSignature(auditSigningText({ ...e, tenantId } as any)) !== e.sig && altered.length < 100) altered.push({ id: e._id, origin: e.origin, seq: e.seq, action: e.action, at: e.at });
+    if (last && last.origin === e.origin && e.seq > last.seq + 1 && gaps.length < 100) gaps.push({ origin: e.origin, from: last.seq + 1, to: e.seq - 1 });
+    last = { origin: e.origin, seq: e.seq };
+  }
+  await audit(req, { action: 'audit.verified', details: { altered: altered.length, gaps: gaps.length } });
+  res.json({ data: { ok: altered.length === 0, checked: [...counts.values()].reduce((a, b) => a + b, 0), servers: Object.fromEntries(counts), unsigned, altered, gaps,
+    note: 'Altered: the entry was changed after it was written. Gaps: numbers missing, from deleted entries or from actions that were cancelled before they finished. Entries from before signing started are counted as unsigned.' } });
 });
 
 // ---------- repairs (electronics) ----------
