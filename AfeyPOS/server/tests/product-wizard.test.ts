@@ -75,7 +75,7 @@ describe('product wizard fields', () => {
     const sc = new Client(ctx.api, 'wizshop');
     await sc.login('stock@wizshop.test', 'Passw0rd!x');
     const cur = (await t.client.get(`/products/${p._id}`)).body.data;
-    const { _id, tenantId, createdAt, updatedAt, __v, levels, variants, ...body } = cur;
+    const body = Object.fromEntries(Object.entries(cur).filter(([k]) => !['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants'].includes(k)));
     const r = await sc.put(`/products/${p._id}`, { ...body, minPriceCents: 100 });
     expect(r.body.error.message).toMatch(/prices.manage/);
     expect((await sc.put(`/products/${p._id}`, { ...body, binLocation: 'B1' })).status).toBe(200);
