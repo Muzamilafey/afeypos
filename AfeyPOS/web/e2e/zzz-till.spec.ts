@@ -126,3 +126,17 @@ test('drop cash: amount, supervisor approval, recorded and taken off the drawer'
   await page.screenshot({ path: 'test-results/cash-drop.png' });
   await page.getByRole('button', { name: 'Done' }).click();
 });
+
+test('the top bar has a Back button to the previous page', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Previous page' })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Products', exact: true }).click();
+  await page.getByRole('link', { name: 'Stock levels', exact: true }).click();
+  await expect(page).toHaveURL(/\/inventory$/);
+  await page.getByRole('button', { name: 'Previous page' }).click();
+  await expect(page).toHaveURL(/\/products$/);
+});

@@ -202,7 +202,16 @@ export function AppShell() {
                 </button>
                 <Link to="/" className="ml-1 hidden items-center gap-2 sm:flex" aria-label="Afey POS home"><Logo className="h-6 w-auto" /><span className="text-[14px] font-bold text-ink-800 dark:text-white">Checkout</span></Link>
               </>
-            ) : <button className="rounded p-1.5 text-ink-600 hover:bg-ink-100 lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Icon name="menu" className="h-5 w-5" /></button>}
+            ) : <>
+              <button className="rounded p-1.5 text-ink-600 hover:bg-ink-100 lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Icon name="menu" className="h-5 w-5" /></button>
+              {/* Back to the previous page (the dashboard when there is none, e.g. a page opened from a link). */}
+              {loc.pathname !== '/' && (
+                <button type="button" onClick={() => ((window.history.state?.idx ?? 0) > 0 ? nav(-1) : nav('/', { replace: true }))} title="Back to the previous page" aria-label="Previous page"
+                  className="inline-flex items-center gap-1 rounded-md border border-[#d5d9de] bg-white px-2 py-1 text-[13px] font-semibold text-ink-700 shadow-sm transition hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-200 dark:hover:bg-ink-800">
+                  <Icon name="chevron" className="h-3.5 w-3.5 rotate-180" /><span className="hidden sm:inline">Back</span>
+                </button>
+              )}
+            </>}
             <div className={cx('hidden items-center gap-1 text-ink-500', !pos && 'sm:flex')}>
               {can('sales.create') && has('pos') && <Link to="/pos" className="rounded p-1.5 hover:bg-ink-100 hover:text-ink-800 dark:hover:bg-ink-800" title="Checkout" aria-label="Open checkout"><Icon name="cart" className="h-4 w-4" /></Link>}
               {can('sales.read') && <Link to="/returns" className="rounded p-1.5 hover:bg-ink-100 hover:text-ink-800 dark:hover:bg-ink-800" title="Returns" aria-label="Open returns"><Icon name="undo" className="h-4 w-4" /></Link>}
