@@ -11,6 +11,7 @@ import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { OverrideModal } from '../POS';
 import { StaffAccessPanel } from './StaffAccess';
 import { BridgePairingCard, FingerprintReadersCard, ReceiptPrinterCard } from './ThisComputer';
 import { makeAppIcons } from '../../lib/appIcon';
@@ -251,8 +252,22 @@ export function LocationsPage() {
   const [modal, setModal] = useState<null | 'branch' | 'warehouse' | 'till'>(null);
   const [f, setF] = useState<any>({});
   const [error, setError] = useState<unknown>(null);
+  const { me } = useAuth();
+  // Deleting needs an owner or administrator to confirm on the spot (fingerprint, staff card, or login with PIN/password).
+  const [del, setDel] = useState<{ kind: 'branch' | 'warehouse' | 'till'; id: string; name: string } | null>(null);
+  const isAdmin = Boolean(me?.user.roles.some((r: string) => r === 'tenant_owner' || r === 'business_admin'));
   if (!locs.data) return <Loading />;
   const { branches, warehouses, tills } = locs.data;
+  const delButton = (kind: 'branch' | 'warehouse' | 'till', id: string, name: string) => isAdmin && (
+    <button type="button" aria-label={`Delete ${name}`} title={`Delete ${name}`} onClick={() => setDel({ kind, id, name })} className="rounded p-1 text-ink-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"><Icon name="trash" className="h-3.5 w-3.5" /></button>
+  );
+  const runDelete = (token: string) => {
+    const d = del!;
+    setDel(null);
+    api(`/settings/${d.kind === 'branch' ? 'branches' : d.kind === 'warehouse' ? 'warehouses' : 'tills'}/${d.id}`, { method: 'DELETE', headers: { 'X-Approval': token } })
+      .then(() => { toast.success(`${d.name} deleted`); qc.invalidateQueries({ queryKey: ['locations'] }); })
+      .catch(toast.error);
+  };
   const submit = async () => {
     try {
       await api(`/settings/${modal === 'branch' ? 'branches' : modal === 'warehouse' ? 'warehouses' : 'tills'}`, { body: f });
@@ -263,13 +278,18 @@ export function LocationsPage() {
     <div className="max-w-5xl">
       <PageHeader title="Branches, stores & tills" actions={<><Button variant="secondary" onClick={() => { setF({}); setModal('branch'); }}>Add branch</Button><Button variant="secondary" onClick={() => { setF({ branchId: branches[0]?._id }); setModal('warehouse'); }}>Add store</Button><Button onClick={() => { setF({ branchId: branches[0]?._id, warehouseId: warehouses[0]?._id }); setModal('till'); }}>Add till</Button></>} />
       <div className="space-y-4">{branches.map((b) => (
-        <Card key={b._id} title={`${b.name} (${b.code})`} actions={b.hasServer ? <Badge tone="blue">own server</Badge> : undefined}>
+        <Card key={b._id} title={`${b.name} (${b.code})`} actions={<span className="flex items-center gap-2">{b.hasServer && <Badge tone="blue">own server</Badge>}{branches.length > 1 && delButton('branch', b._id, b.name)}</span>}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div><div className="label">Stock locations</div>{warehouses.filter((w) => w.branchId === b._id).map((w) => <div key={w._id} className="text-sm">{w.name} {w.isDefault && <Badge>default</Badge>}</div>)}</div>
-            <div><div className="label">Tills</div>{tills.filter((t) => t.branchId === b._id).map((t) => <div key={t._id} className="flex items-center gap-2 text-sm">{t.name} ({t.code}) {!t.active && <Badge tone="red">inactive</Badge>}</div>)}</div>
+            <div><div className="label">Stock locations</div>{warehouses.filter((w) => w.branchId === b._id).map((w) => <div key={w._id} className="flex items-center gap-2 text-sm">{w.name} {w.isDefault && <Badge>default</Badge>}{delButton('warehouse', w._id, w.name)}</div>)}</div>
+            <div><div className="label">Tills</div>{tills.filter((t) => t.branchId === b._id).map((t) => <div key={t._id} className="flex items-center gap-2 text-sm">{t.name} ({t.code}) {!t.active && <Badge tone="red">inactive</Badge>}{delButton('till', t._id, t.name)}</div>)}</div>
           </div>
         </Card>
       ))}</div>
+      {del && (
+        <OverrideModal permission="settings.manage" title={`Delete ${del.name}`} who="administrator" allowLogin
+          message={`${del.kind === 'branch' ? `Delete the branch ${del.name}, with its stores and tills.` : del.kind === 'warehouse' ? `Delete the store ${del.name}.` : `Delete the till ${del.name}.`} Past sales and reports keep it. An owner or administrator confirms with a fingerprint, staff card, or username / email with PIN or password.`}
+          onClose={() => setDel(null)} onApproved={runDelete} />
+      )}
       <Modal open={Boolean(modal)} onClose={() => setModal(null)} title={`Add ${modal}`} footer={<Button onClick={submit}>Save</Button>}>
         <div className="grid gap-3">
           {modal !== 'branch' && <Field label="Branch"><Select value={f.branchId ?? ''} onChange={(e) => setF({ ...f, branchId: e.target.value })} options={branches.map((b) => ({ value: b._id, label: b.name }))} /></Field>}

@@ -24,7 +24,7 @@ const ownerOnly = (req: any) => {
  * Issuing or stopping a branch server's access needs an administrator to confirm on the spot (fingerprint, staff
  * card, or username/email with PIN or password), even when one is already signed in: a single-use approval.
  */
-async function adminApproval(req: any) {
+export async function adminApproval(req: any) {
   const token = String(req.get('X-Approval') ?? '');
   if (!token) throw new AppError(403, 'OVERRIDE_REQUIRED', 'An administrator must confirm this', { permission: 'settings.manage' });
   const by = await consumeOverride(token, 'settings.manage', String(req.tenant!._id), String(req.auth!.userId));

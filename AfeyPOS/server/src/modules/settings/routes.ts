@@ -243,7 +243,9 @@ router.patch('/settings/users/:id', requirePermission('users.manage'), async (re
 router.get('/settings/locations', signedIn('needed to choose a till or warehouse'), async (_req, res) => {
   // Every signed-in user sees branch and warehouse names (stock transfers name the other side);
   // tills are branch-scoped, so restricted users only get their own branches' tills.
-  const [branches, warehouses, tills] = await Promise.all([Branch.find({}).lean(), Warehouse.find({}).lean(), Till.find({}).lean()]);
+  // Deleted branches, stores and tills are kept for history but no longer listed.
+  const live = { deletedAt: { $exists: false } };
+  const [branches, warehouses, tills] = await Promise.all([Branch.find(live).lean(), Warehouse.find(live).lean(), Till.find(live).lean()]);
   res.json({ data: { branches, warehouses, tills } });
 });
 

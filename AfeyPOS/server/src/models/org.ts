@@ -8,6 +8,9 @@ const branchSchema = new Schema(
     address: String,
     phone: String,
     active: { type: Boolean, default: true },
+    /** Deleted by an administrator: kept for the sales history, hidden everywhere else. */
+    deletedAt: Date,
+    deletedBy: ObjectId,
     mpesaConfigId: { type: ObjectId, ref: 'IntegrationConfig' },
     /**
      * Set at head office when the branch runs its own server (own database, syncs with HQ). Stock in its
@@ -36,6 +39,8 @@ const warehouseSchema = new Schema(
     code: { type: String, required: true, uppercase: true },
     isDefault: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
+    deletedAt: Date,
+    deletedBy: ObjectId,
   },
   { timestamps: true },
 );
@@ -49,6 +54,8 @@ const tillSchema = new Schema(
     name: { type: String, required: true },
     code: { type: String, required: true, uppercase: true },
     active: { type: Boolean, default: true },
+    deletedAt: Date,
+    deletedBy: ObjectId,
     receiptPrinterId: { type: ObjectId, ref: 'HardwareDevice' },
     lastSeenAt: Date,
   },
