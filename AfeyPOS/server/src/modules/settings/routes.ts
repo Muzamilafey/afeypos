@@ -140,6 +140,7 @@ const rulesSchema = z.object({
   shifts: z.object({ required: z.boolean(), minOpeningFloatCents: positiveCents, blindClose: z.boolean(), closeNeedsApproval: z.boolean(), maxCashInDrawerCents: positiveCents, oneOpenShiftPerCashier: z.boolean() }).partial(),
   mpesa: z.object({ watchTillPayments: z.boolean(), autoComplete: z.boolean() }).partial(),
   pricing: z.object({ wholesaleAtTill: z.boolean(), wholesaleNeedsApproval: z.boolean(), wholesaleByQuantity: z.boolean() }).partial(),
+  kra: z.object({ waitSeconds: z.number().int().min(0).max(120), printUnsigned: z.boolean() }).partial(),
   customer: z.object({ phone: z.enum(['off', 'ask', 'mpesa', 'both']), createFromPhone: z.boolean(), awardLoyalty: z.boolean(), required: z.boolean() }).partial(),
   cashierPages: z.array(z.enum(CASHIER_PAGE_OPTIONS.map((p) => p.key) as [string, ...string[]])).max(CASHIER_PAGE_OPTIONS.length),
   paymentMethods: z.array(z.enum(PAYMENT_METHOD_OPTIONS.map((p) => p.key) as [string, ...string[]])).min(1, 'Keep at least one way to pay').max(PAYMENT_METHOD_OPTIONS.length),
@@ -155,7 +156,7 @@ router.get('/settings/checkout-rules', requirePermission('settings.manage'), asy
 router.put('/settings/checkout-rules', requirePermission('settings.manage'), async (req, res) => {
   const body = parse(z.object({ rules: rulesSchema, cardTerminals: terminalsSchema.optional() }), req.body);
   const current = mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
-  const rules = mergeCheckoutRules({ ...current, ...body.rules, items: { ...current.items, ...body.rules.items }, discounts: { ...current.discounts, ...body.rules.discounts }, shifts: { ...current.shifts, ...body.rules.shifts }, mpesa: { ...current.mpesa, ...body.rules.mpesa }, pricing: { ...current.pricing, ...body.rules.pricing }, customer: { ...current.customer, ...body.rules.customer } });
+  const rules = mergeCheckoutRules({ ...current, ...body.rules, items: { ...current.items, ...body.rules.items }, discounts: { ...current.discounts, ...body.rules.discounts }, shifts: { ...current.shifts, ...body.rules.shifts }, mpesa: { ...current.mpesa, ...body.rules.mpesa }, pricing: { ...current.pricing, ...body.rules.pricing }, kra: { ...current.kra, ...body.rules.kra }, customer: { ...current.customer, ...body.rules.customer } });
   // The older single settings stay in step for anything that still reads them.
   const set: Record<string, unknown> = { 'settings.checkoutRules': rules, 'settings.requireOpenShift': rules.shifts.required, 'settings.cashierDiscountLimitBp': rules.discounts.saleLimitBp };
   if (body.cardTerminals) set['settings.cardTerminals'] = body.cardTerminals;

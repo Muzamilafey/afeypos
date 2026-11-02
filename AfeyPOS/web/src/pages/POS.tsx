@@ -1316,28 +1316,49 @@ export function OverrideModal({ permission, message, onClose, onApproved, title 
 
 function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: string; onClose: () => void }) {
   const toast = useToast();
-  const { has } = useAuth();
+  const { has, me } = useAuth();
+  const kra = (me!.tenant.checkoutRules ?? mergeCheckoutRules(undefined, me!.tenant.settings ?? {})).kra;
   const [to, setTo] = useState('');
   const [receiptHtml, setReceiptHtml] = useState<string | null>(null);
-  // eTIMS signs in the background; give it a few seconds so the printed receipt carries the KRA signature.
+  // eTIMS / the ETR signs in the background: the till waits up to the set seconds so the printed receipt carries
+  // the KRA stamp (signature and QR code), then prints. If KRA is slower, the rules say whether to print anyway.
   const [sale, setSale] = useState<any>(initial);
-  const [waited, setWaited] = useState(!initial.etims || initial.etims.status !== 'pending');
+  const [waited, setWaited] = useState(!initial.etims || initial.etims.status !== 'pending' || kra.waitSeconds === 0);
+  const [elapsed, setElapsed] = useState(0);
+  const [timedOut, setTimedOut] = useState(false);
+  const signed = sale.etims?.status === 'signed';
   // The way most of the sale was paid, for the success animation.
   const paidWith = [...(initial.payments ?? [])].sort((a: any, b: any) => b.amountCents - a.amountCents)[0]?.method as string | undefined;
   useEffect(() => {
     if (waited) return;
-    let n = 0;
+    const started = Date.now();
+    let busy = false;
     const t = setInterval(async () => {
-      n += 1;
+      const secs = (Date.now() - started) / 1000;
+      setElapsed(secs);
+      if (busy) return;
+      busy = true;
+      const s = await api<{ data: any }>(`/sales/${initial._id}`).then((r) => r.data).catch(() => null);
+      busy = false;
+      if (s) setSale(s);
+      if (s?.etims?.status !== 'pending') { clearInterval(t); setWaited(true); return; }
+      if (secs >= kra.waitSeconds) { clearInterval(t); setTimedOut(true); setWaited(true); }
+    }, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial._id, waited]);
+  // After the wait, keep checking quietly so a late stamp can still be printed.
+  useEffect(() => {
+    if (!timedOut || signed) return;
+    const t = setInterval(async () => {
       const s = await api<{ data: any }>(`/sales/${initial._id}`).then((r) => r.data).catch(() => null);
       if (s) setSale(s);
-      if (s?.etims?.status !== 'pending' || n >= 6) {
-        clearInterval(t);
-        setWaited(true);
-      }
-    }, 700);
+      if (s?.etims?.status === 'signed') toast.success('KRA stamp received: press Print receipt for the stamped copy');
+      if (s?.etims?.status !== 'pending') clearInterval(t);
+    }, 5000);
     return () => clearInterval(t);
-  }, [initial._id, waited]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timedOut, signed]);
   // Cash sale: the drawer opens at once, not after the receipt (which may wait a few seconds for KRA).
   const cashSale = (initial.payments ?? []).some((p: any) => p.method === 'cash');
   const drawerOpened = useRef(false);
@@ -1386,7 +1407,8 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
     return () => clearTimeout(t);
   }, [printState]);
   useEffect(() => {
-    if (waited && getWorkstation().autoPrint) print();
+    // Unsigned after the wait: print only when the rules allow a receipt without the KRA stamp.
+    if (waited && getWorkstation().autoPrint && (!timedOut || kra.printUnsigned)) print();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waited]);
   return (
@@ -1402,7 +1424,22 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
             {sale.etims.status === 'signed'
               ? (sale.etims.device === 'etr' ? <Badge tone="green">Signed by the KRA ETR · CU invoice {sale.etims.cuInvoiceNo}</Badge> : <Badge tone="green">KRA eTIMS signed · CU {sale.etims.sdcId}/{sale.etims.rcptNo}</Badge>)
               : sale.etims.status === 'failed' ? <Badge tone="red">{sale.etims.device === 'etr' ? 'ETR' : 'eTIMS'} rejected: see KRA eTIMS page</Badge>
-              : <Badge tone="amber">{waited ? 'Will be signed when KRA / the ETR device answers; reprint later' : 'Signing with KRA…'}</Badge>}
+              : waited ? <Badge tone="amber">{kra.printUnsigned ? 'Printed without the KRA stamp: it is added when KRA / the ETR answers; reprint then' : 'Waiting for the KRA stamp: print once it arrives'}</Badge> : null}
+          </div>
+        )}
+        {!waited && (
+          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950/30" data-testid="kra-stamping">
+            <div className="flex items-center justify-center gap-3">
+              <span className="relative inline-flex h-12 w-12 items-center justify-center">
+                <svg viewBox="0 0 36 36" className="absolute inset-0 -rotate-90"><circle cx="18" cy="18" r="16" fill="none" strokeWidth="3" className="stroke-emerald-100 dark:stroke-emerald-900" /><circle cx="18" cy="18" r="16" fill="none" strokeWidth="3" strokeLinecap="round" className="stroke-emerald-600 transition-all" strokeDasharray={`${Math.min(100, (elapsed / Math.max(1, kra.waitSeconds)) * 100)} 100`} pathLength={100} /></svg>
+                <span className="text-[10px] font-extrabold text-emerald-700">KRA</span>
+              </span>
+              <div className="text-left">
+                <div className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">Adding the KRA stamp and QR code…</div>
+                <div className="text-xs text-emerald-700/80">{Math.max(0, Math.ceil(kra.waitSeconds - elapsed))} s left · the receipt prints as soon as it is signed</div>
+              </div>
+            </div>
+            <div className="mt-2 text-center"><button type="button" className="text-xs font-medium text-emerald-800 underline" onClick={() => { setTimedOut(true); setWaited(true); }}>Print now without the stamp</button></div>
           </div>
         )}
       </div>

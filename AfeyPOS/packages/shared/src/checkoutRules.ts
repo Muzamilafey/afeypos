@@ -54,6 +54,13 @@ export interface CheckoutRules {
     /** Products with a "wholesale from quantity" get the wholesale price on a line reaching that quantity. Off: retail only. */
     wholesaleByQuantity: boolean;
   };
+  /** KRA eTIMS / ETR stamp on the printed receipt. */
+  kra: {
+    /** Seconds the till waits for KRA (or the ETR device) to sign the sale before printing. */
+    waitSeconds: number;
+    /** When KRA has not answered in time, print the receipt without the stamp (else wait for a reprint). */
+    printUnsigned: boolean;
+  };
   /** Whether the till collects the customer's phone number, and what it does with it. */
   customer: {
     /**
@@ -107,6 +114,7 @@ export const CHECKOUT_RULE_DEFAULTS: CheckoutRules = {
   shifts: { required: true, minOpeningFloatCents: 0, blindClose: false, closeNeedsApproval: false, maxCashInDrawerCents: 0, oneOpenShiftPerCashier: true },
   mpesa: { watchTillPayments: true, autoComplete: true },
   pricing: { wholesaleAtTill: false, wholesaleNeedsApproval: false, wholesaleByQuantity: true },
+  kra: { waitSeconds: 30, printUnsigned: true },
   customer: { phone: 'both', createFromPhone: true, awardLoyalty: true, required: false },
   cashierPages: CASHIER_PAGE_OPTIONS.map((p) => p.key),
   paymentMethods: PAYMENT_METHOD_OPTIONS.map((p) => p.key),
@@ -149,6 +157,10 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
       wholesaleAtTill: bool(s.pricing?.wholesaleAtTill, d.pricing.wholesaleAtTill),
       wholesaleNeedsApproval: bool(s.pricing?.wholesaleNeedsApproval, d.pricing.wholesaleNeedsApproval),
       wholesaleByQuantity: bool(s.pricing?.wholesaleByQuantity, d.pricing.wholesaleByQuantity),
+    },
+    kra: {
+      waitSeconds: int(s.kra?.waitSeconds, d.kra.waitSeconds, 120),
+      printUnsigned: bool(s.kra?.printUnsigned, d.kra.printUnsigned),
     },
     customer: {
       phone: (['off', 'ask', 'mpesa', 'both'] as const).includes(s.customer?.phone) ? s.customer.phone : d.customer.phone,

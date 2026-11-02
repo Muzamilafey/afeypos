@@ -68,3 +68,14 @@ describe('wholesale price from a quantity', () => {
     await t.client.post(`/shifts/${shift._id}/close`, { countedCashCents: 72000 });
   });
 });
+
+describe('KRA stamp wait (checkout rules)', () => {
+  it('defaults to 30 seconds with printing unsigned after, and saves within 0-120', async () => {
+    expect((await t.client.get('/settings/checkout-rules')).body.data.rules.kra).toEqual({ waitSeconds: 30, printUnsigned: true });
+    await t.client.put('/settings/checkout-rules', { rules: { kra: { waitSeconds: 45, printUnsigned: false } } });
+    expect((await t.client.get('/settings/checkout-rules')).body.data.rules.kra).toEqual({ waitSeconds: 45, printUnsigned: false });
+    expect((await t.client.put('/settings/checkout-rules', { rules: { kra: { waitSeconds: 500 } } })).status).toBe(400);
+    // The other rules are kept when only this part changes.
+    expect((await t.client.get('/settings/checkout-rules')).body.data.rules.pricing.wholesaleAtTill).toBe(true);
+  });
+});

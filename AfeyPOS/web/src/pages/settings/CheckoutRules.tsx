@@ -115,6 +115,16 @@ export function CheckoutRulesPage() {
           </div>
         </Card>
 
+        <Card title={<span className="flex items-center gap-2"><Icon name="receipt" className="h-4 w-4 text-emerald-600" />KRA stamp on receipts</span>}>
+          <div className="space-y-2">
+            <Field label="Seconds to wait for the KRA stamp before printing" hint="The till shows a countdown and prints as soon as eTIMS / the ETR signs, with the KRA QR code. 0 = print at once.">
+              <Input type="number" min={0} max={120} value={rules.kra.waitSeconds} onChange={(e) => set('kra', { waitSeconds: Math.max(0, Math.min(120, Number(e.target.value) || 0)) })} />
+            </Field>
+            <Checkbox label="If KRA has not answered in time, print without the stamp" checked={rules.kra.printUnsigned} onChange={(v) => set('kra', { printUnsigned: v })} />
+            <p className="pl-6 text-xs text-ink-500">Off: the till waits for the stamp and you print once it arrives. Either way the sale is signed as soon as KRA answers, and a reprint carries the stamp.</p>
+          </div>
+        </Card>
+
         <Card title={<span className="flex items-center gap-2"><Icon name="tag" className="h-4 w-4 text-amber-500" />Retail or wholesale</span>}>
           <div className="divide-y divide-ink-100 dark:divide-ink-800">
             <Toggle label="Show a Retail / Wholesale switch at checkout" help="Off: every sale at the till uses retail prices (customers set to wholesale still get theirs). On: the cashier can switch a sale to wholesale prices; products without a wholesale price stay at retail." checked={rules.pricing.wholesaleAtTill} onChange={(v) => set('pricing', { wholesaleAtTill: v })} />
