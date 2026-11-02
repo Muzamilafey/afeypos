@@ -12,7 +12,7 @@
 import { Types, type Model } from 'mongoose';
 import {
   AssistantConfig, AttendanceRecord, AuditLog, CustomRole, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
-  IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
+  FiscalDeviceState, FiscalTransaction, IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
   SalesDocument, SerialItem, Shift, StockAdjustment, StockBatch, StockLevel, StockMovement, Stocktake, StockTransfer, Supplier,
   SupplierQuotation, SupplierReturn, RemoteStockRequest, Tenant, Till, UnitOfMeasure, User, Voucher, LoyaltyTransaction, Warehouse, PaymentTerminal, TerminalTransaction,
 } from '../../models/index.js';
@@ -114,6 +114,9 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: AttendanceRecord, dir: 'up', field: 'at' },
   { model: LoyaltyTransaction, dir: 'up', field: 'at' },
   { model: AuditLog, dir: 'up', field: 'at' },
+  // Fiscal devices are reached by the server they are plugged into: its log and device health reach HQ for monitoring.
+  { model: FiscalTransaction, dir: 'up', field: 'updatedAt' },
+  { model: FiscalDeviceState, dir: 'up', field: 'updatedAt' },
 ];
 
 /**

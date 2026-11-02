@@ -114,7 +114,7 @@ describe('signing sales, credit notes and voids', () => {
     expect(r.status).toBe(201);
     await runJobs();
     let s = (await t.client.get(`/sales/${r.body.data._id}`)).body.data;
-    expect(s.etims.status).toBe('pending');
+    expect(s.etims.status).toBe('device_disconnected');
     expect(s.etims.error).toMatch(/Network error/);
     expect((await t.client.get(`/sales/${r.body.data._id}/receipt?format=text`)).text).toContain('awaiting signature');
     await runJobs();

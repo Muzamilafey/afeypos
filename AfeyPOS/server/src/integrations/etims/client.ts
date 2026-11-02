@@ -6,6 +6,7 @@
  * initialisation). Amounts are decimal shillings; dates are East Africa Time.
  */
 import { httpJson, IntegrationError } from '../http.js';
+import { classifyTransportError, FiscalDisconnectedError, FiscalDuplicateError, FiscalUncertainError } from '../fiscal/adapter.js';
 
 export interface EtimsConfig {
   mode: 'oscu' | 'vscu';
@@ -110,6 +111,11 @@ export interface EtimsGateway {
   initialize(): Promise<{ sdcId?: string; mrcNo?: string; cmcKey?: string; bhfNm?: string; taxprNm?: string }>;
   saveItem(item: EtimsItem): Promise<void>;
   saveSale(sale: EtimsSale): Promise<EtimsSignature>;
+  /**
+   * Whether this invoice is already recorded (null: not recorded, safe to send). Only where the device or service
+   * documents such a query; otherwise absent.
+   */
+  findSale?(sale: EtimsSale): Promise<EtimsSignature | null>;
 }
 
 const OK = '000';
@@ -127,12 +133,18 @@ export class EtimsClient implements EtimsGateway {
 
   private async post<T>(path: string, body: Record<string, unknown>, needKey = true): Promise<EtimsResponse<T>> {
     if (needKey && !this.cfg.cmcKey) throw new IntegrationError('Initialise the eTIMS device first (no communication key yet)', undefined, undefined, false);
-    const r = await httpJson<EtimsResponse<T>>(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', tin: this.cfg.tin, bhfId: this.cfg.bhfId, ...(needKey ? { cmcKey: this.cfg.cmcKey! } : {}) },
-      body: JSON.stringify({ tin: this.cfg.tin, bhfId: this.cfg.bhfId, ...body }),
-      timeoutMs: 20_000,
-    });
+    let r: EtimsResponse<T>;
+    try {
+      r = await httpJson<EtimsResponse<T>>(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', tin: this.cfg.tin, bhfId: this.cfg.bhfId, ...(needKey ? { cmcKey: this.cfg.cmcKey! } : {}) },
+        body: JSON.stringify({ tin: this.cfg.tin, bhfId: this.cfg.bhfId, ...body }),
+        timeoutMs: 20_000,
+      });
+    } catch (err) {
+      // "Could not connect" (nothing sent) and "no answer after sending" are different fiscal states.
+      throw classifyTransportError(err, this.cfg.mode === 'vscu' ? 'VSCU' : 'KRA eTIMS');
+    }
     if (r?.resultCd !== OK && !ALREADY.has(String(r?.resultCd))) {
       // KRA validation errors will not succeed on retry; connectivity errors (thrown above) will.
       throw new IntegrationError(`eTIMS ${r?.resultCd ?? '?'}: ${r?.resultMsg ?? 'rejected'}`, undefined, r, false);
@@ -153,7 +165,11 @@ export class EtimsClient implements EtimsGateway {
 
   async saveSale(sale: EtimsSale) {
     const r = await this.post<EtimsSignature>('/saveTrnsSalesOsdc', sale as unknown as Record<string, unknown>);
-    if (!r.data?.rcptSign) throw new IntegrationError('eTIMS did not return a receipt signature', undefined, r, true);
+    if (!r.data?.rcptSign) {
+      // "Already recorded" without the signature: a person must look it up, Afey POS will not guess it.
+      if (ALREADY.has(String(r.resultCd))) throw new FiscalDuplicateError(`eTIMS ${r.resultCd}: ${r.resultMsg ?? 'invoice already recorded'} (invoice ${sale.invcNo})`, r);
+      throw new FiscalUncertainError('eTIMS answered without a receipt signature', r);
+    }
     return r.data;
   }
 }
@@ -163,6 +179,17 @@ export class MockEtimsGateway implements EtimsGateway {
   static items: EtimsItem[] = [];
   static sales: EtimsSale[] = [];
   static failNext = 0;
+  /**
+   * What the next submissions do, for tests: "timeout" records the invoice but the answer is lost, "disconnected"
+   * never reaches it, "reject" is a validation refusal, "duplicate" says already recorded without a signature.
+   */
+  static script: ('ok' | 'timeout' | 'disconnected' | 'reject' | 'duplicate')[] = [];
+  static recorded = new Map<string, EtimsSignature>();
+  /** scope: the configuration, so two simulated devices keep separate records. */
+  constructor(private scope = '') {}
+  private key(sale: EtimsSale) {
+    return `${this.scope}:${sale.rcptTyCd}:${sale.trdInvcNo}`;
+  }
   async initialize() {
     return { sdcId: 'KRACU0100000001', mrcNo: 'WIS00000001', cmcKey: 'MOCK-CMC-KEY', bhfNm: 'Simulated branch', taxprNm: 'Simulated taxpayer' };
   }
@@ -172,14 +199,25 @@ export class MockEtimsGateway implements EtimsGateway {
   async saveSale(sale: EtimsSale) {
     if (MockEtimsGateway.failNext > 0) {
       MockEtimsGateway.failNext -= 1;
-      throw new IntegrationError('Network error calling etims (simulated)');
+      throw new FiscalDisconnectedError('Network error calling etims (simulated)');
     }
+    const step = MockEtimsGateway.script.shift() ?? 'ok';
+    if (step === 'disconnected') throw new FiscalDisconnectedError('Simulated eTIMS not reachable');
+    if (step === 'reject') throw new IntegrationError('eTIMS 910: Invalid item classification (simulated)', undefined, { resultCd: '910' }, false);
+    const existing = MockEtimsGateway.recorded.get(this.key(sale));
+    if (existing || step === 'duplicate') throw new FiscalDuplicateError(`eTIMS 994: invoice already recorded (simulated, invoice ${sale.invcNo})`);
     MockEtimsGateway.sales.push(sale);
     const n = MockEtimsGateway.sales.length;
-    return {
+    const sig = {
       curRcptNo: n, totRcptNo: n, sdcId: 'KRACU0100000001', mrcNo: 'WIS00000001',
       intrlData: `SIMINTRL${String(sale.invcNo).padStart(8, '0')}`, rcptSign: `SIMSIGN${String(sale.invcNo).padStart(9, '0')}`, sdcDateTime: sale.cfmDt,
     };
+    MockEtimsGateway.recorded.set(this.key(sale), sig);
+    if (step === 'timeout') throw new FiscalUncertainError('Simulated eTIMS did not answer in time; it may have recorded the invoice');
+    return sig;
+  }
+  async findSale(sale: EtimsSale) {
+    return MockEtimsGateway.recorded.get(this.key(sale)) ?? null;
   }
 }
 

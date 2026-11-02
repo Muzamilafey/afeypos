@@ -86,7 +86,14 @@ export function etimsLines(sale: ReceiptSale, width: number): string[] {
     out.push(rest);
     return out;
   };
-  if (e.status !== 'signed') return [e.device === 'etr' ? 'KRA ETR: awaiting signature' : 'KRA eTIMS: awaiting signature', 'Reprint this receipt for the signed copy'];
+  if (e.status !== 'signed') {
+    // Never presented as fiscalized until the device or KRA has answered.
+    const who = e.device === 'etr' ? 'KRA ETR' : 'KRA eTIMS';
+    const waiting = ['pending', 'processing', 'awaiting_confirmation', 'device_disconnected'].includes(String(e.status ?? 'pending'));
+    return waiting
+      ? [`${who}: awaiting signature`, 'NOT YET A FISCAL RECEIPT', 'Reprint this receipt for the signed copy']
+      : [`${who}: not fiscalized`, 'NOT A FISCAL RECEIPT'];
+  }
   if (e.device === 'etr') {
     // Signed by the ETR device (TIMS control unit) on the Afey POS computer.
     const when = e.sdcDateTime && !/^\d{14}$/.test(e.sdcDateTime) && !Number.isNaN(Date.parse(e.sdcDateTime))

@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { IntegrationError } from '../http.js';
+import { classifyTransportError, FiscalDisconnectedError, FiscalUncertainError } from '../fiscal/adapter.js';
 import type { EtimsGateway, EtimsItem, EtimsSale, EtimsSignature } from './client.js';
 
 export interface EtrConfig {
@@ -34,6 +35,12 @@ export interface EtrConfig {
   fieldDate?: string;
   /** Extra header for programs that want a key (e.g. "Authorization: Bearer x" or "X-Api-Key: x"). */
   authHeader?: string;
+  /**
+   * http: where the program answers "was this invoice signed?", from the maker's documentation, e.g.
+   * "/invoice/{invoiceNumber}". Left empty when the program has no such query: an unanswered invoice then goes to
+   * reconciliation instead of being sent again.
+   */
+  statusPath?: string;
 }
 
 /** The invoice as Afey POS sends it to the ETR program (documented in docs/KRA-ETR-DEVICE.md). */
@@ -155,6 +162,7 @@ function assertLocal(url: string) {
 
 export class EtrGateway implements EtimsGateway {
   static simulated: EtrInvoice[] = [];
+  static simulatedSigned = new Map<string, EtrSignature>();
   constructor(private cfg: EtrConfig, private seller: { name?: string; pin?: string } = {}) {}
 
   private timeout() {
@@ -185,6 +193,67 @@ export class EtrGateway implements EtimsGateway {
     return { sdcId: this.cfg.cuSerial || undefined };
   }
 
+  /** Whether a status query exists for this connection. */
+  get canFindSale() {
+    return this.cfg.connection !== 'http' || Boolean(this.cfg.statusPath);
+  }
+
+  /**
+   * Was this invoice already signed? simulator: its own record; folder: the program's answer file (or "never sent");
+   * http: the program's documented status address (statusPath). null means not recorded: safe to send.
+   */
+  async findSale(sale: EtimsSale): Promise<EtrSignature | null> {
+    const invoice = toEtrInvoice(sale, this.seller);
+    if (this.cfg.connection === 'simulator') return EtrGateway.simulatedSigned.get(invoice.invoiceNumber) ?? null;
+    if (this.cfg.connection === 'folder') {
+      const { inbox, outbox } = this.cfg;
+      if (!inbox || !outbox) throw new IntegrationError('Set both the inbox and the outbox folder of the ETR program', undefined, undefined, false);
+      const name = invoice.invoiceNumber.replace(/[^\w.-]/g, '_');
+      for (const dir of [outbox, path.join(outbox, 'done')]) {
+        for (const ext of ['.json', '.txt', '.out', '']) {
+          const f = path.join(dir, `${name}${ext}`);
+          if (fs.existsSync(f) && fs.statSync(f).isFile()) {
+            const text = fs.readFileSync(f, 'utf8');
+            if (!text.trim()) continue;
+            const sig = readEtrSignature(parseEtrAnswer(text), this.cfg);
+            if (dir === outbox) {
+              fs.mkdirSync(path.join(outbox, 'done'), { recursive: true });
+              fs.renameSync(f, path.join(outbox, 'done', path.basename(f)));
+            }
+            return sig;
+          }
+        }
+      }
+      if (!fs.existsSync(path.join(path.dirname(path.resolve(outbox)), '.afey-sent', name))) return null;
+      throw new FiscalUncertainError(`${invoice.invoiceNumber} was handed to the ETR program, which has not answered yet`);
+    }
+    if (!this.cfg.statusPath) throw new IntegrationError('This ETR program has no status address set', 501, undefined, false);
+    const u = assertLocal(this.cfg.url ?? '');
+    const target = new URL(this.cfg.statusPath.replace('{invoiceNumber}', encodeURIComponent(invoice.invoiceNumber)).replace(/^\/?/, '/'), u);
+    let res: Response;
+    try {
+      res = await fetch(target, { headers: this.headers(), signal: AbortSignal.timeout(this.timeout()) });
+    } catch (err) {
+      throw classifyTransportError(err, `ETR program at ${target.origin}`);
+    }
+    if (res.status === 404) return null;
+    const text = await res.text();
+    if (!res.ok) throw new FiscalUncertainError(`ETR program status query answered ${res.status}`, text.slice(0, 500));
+    try {
+      return readEtrSignature(parseEtrAnswer(text), this.cfg);
+    } catch {
+      // An answer without a CU invoice number does not prove the invoice was not signed.
+      throw new FiscalUncertainError(`ETR program status query for ${invoice.invoiceNumber} has no CU invoice number`, text.slice(0, 500));
+    }
+  }
+
+  private headers() {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    const auth = this.cfg.authHeader?.match(/^\s*([\w-]+)\s*:\s*(.+)$/);
+    if (auth) headers[auth[1]!] = auth[2]!.trim();
+    return headers;
+  }
+
   /** TIMS devices do not need items registered in advance. */
   async saveItem(_item: EtimsItem) {}
 
@@ -194,7 +263,9 @@ export class EtrGateway implements EtimsGateway {
       EtrGateway.simulated.push(invoice);
       const serial = this.cfg.cuSerial || 'KRAMW000SIM0001';
       const no = `${serial.replace(/\D/g, '').padStart(10, '0').slice(-10)}${String(sale.invcNo).padStart(9, '0')}`;
-      return readEtrSignature({ cuInvoiceNumber: no, cuSerialNumber: serial, qrCode: `https://itax.kra.go.ke/KRA-Portal/invoiceChk.htm?actionCode=loadPage&invoiceNo=${no}`, dateTime: invoice.dateTime }, this.cfg);
+      const sig = readEtrSignature({ cuInvoiceNumber: no, cuSerialNumber: serial, qrCode: `https://itax.kra.go.ke/KRA-Portal/invoiceChk.htm?actionCode=loadPage&invoiceNo=${no}`, dateTime: invoice.dateTime }, this.cfg);
+      EtrGateway.simulatedSigned.set(invoice.invoiceNumber, sig);
+      return sig;
     }
     return this.cfg.connection === 'folder' ? this.viaFolder(invoice) : this.viaHttp(invoice);
   }
@@ -202,15 +273,12 @@ export class EtrGateway implements EtimsGateway {
   private async viaHttp(invoice: EtrInvoice) {
     const u = assertLocal(this.cfg.url ?? '');
     const target = new URL((this.cfg.invoicePath || '/invoice').replace(/^\/?/, '/'), u);
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
-    const auth = this.cfg.authHeader?.match(/^\s*([\w-]+)\s*:\s*(.+)$/);
-    if (auth) headers[auth[1]!] = auth[2]!.trim();
     let res: Response;
     try {
-      res = await fetch(target, { method: 'POST', headers, body: JSON.stringify(invoice), signal: AbortSignal.timeout(this.timeout()) });
+      res = await fetch(target, { method: 'POST', headers: this.headers(), body: JSON.stringify(invoice), signal: AbortSignal.timeout(this.timeout()) });
     } catch (err: any) {
-      // Device or program not reachable: retried, so the sale is signed once it is back.
-      throw new IntegrationError(`ETR program not reached at ${target.origin}: ${err?.message ?? 'no answer'}`);
+      // Not reachable (nothing sent): retried once it is back. Sent but no answer: it may be signed, so it is checked first.
+      throw classifyTransportError(err, `ETR program at ${target.origin}`);
     }
     const text = await res.text();
     let body: any;
@@ -227,7 +295,12 @@ export class EtrGateway implements EtimsGateway {
     const { inbox, outbox } = this.cfg;
     if (!inbox || !outbox) throw new IntegrationError('Set both the inbox and the outbox folder of the ETR program', undefined, undefined, false);
     const name = invoice.invoiceNumber.replace(/[^\w.-]/g, '_');
-    fs.mkdirSync(inbox, { recursive: true });
+    try {
+      fs.mkdirSync(inbox, { recursive: true });
+      fs.accessSync(inbox, fs.constants.W_OK);
+    } catch (err: any) {
+      throw new FiscalDisconnectedError(`Afey POS cannot write to the ETR inbox ${inbox} (${err?.code ?? err?.message})`);
+    }
     // Sent once only: a retry waits for the answer and never hands the device the same invoice twice.
     const sentDir = path.join(path.dirname(path.resolve(outbox)), '.afey-sent');
     const sent = path.join(sentDir, name);
@@ -256,6 +329,6 @@ export class EtrGateway implements EtimsGateway {
       await new Promise((r) => setTimeout(r, 500));
     }
     // Still in the inbox: the program will answer later, and the retry picks the answer up.
-    throw new IntegrationError(`The ETR program did not answer for ${invoice.invoiceNumber} within ${Math.round(this.timeout() / 1000)} s. Is it running and watching ${inbox}?`);
+    throw new FiscalUncertainError(`The ETR program did not answer for ${invoice.invoiceNumber} within ${Math.round(this.timeout() / 1000)} s. Is it running and watching ${inbox}?`);
   }
 }

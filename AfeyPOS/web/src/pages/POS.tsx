@@ -19,6 +19,9 @@ import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
 import { MpesaPaid, MpesaPanel, needsConfirm, type MpesaAccount } from '../components/MpesaPayment';
 import { CashVisual, MpesaMark, PaySuccess, PrintingVisual } from '../components/PayVisuals';
 import { WeighModal } from '../components/Weigh';
+
+/** Fiscal states in which the KRA stamp may still arrive. */
+const FISCAL_WAITING = ['pending', 'processing', 'awaiting_confirmation', 'device_disconnected'];
 import { openCustomerDisplay, useCustomerDisplayFeed, type DisplayState } from './CustomerDisplay';
 
 interface Product {
@@ -1445,7 +1448,7 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
   // eTIMS / the ETR signs in the background: the till waits up to the set seconds so the printed receipt carries
   // the KRA stamp (signature and QR code), then prints. If KRA is slower, the rules say whether to print anyway.
   const [sale, setSale] = useState<any>(initial);
-  const [waited, setWaited] = useState(!initial.etims || initial.etims.status !== 'pending' || kra.waitSeconds === 0);
+  const [waited, setWaited] = useState(!initial.etims || !FISCAL_WAITING.includes(initial.etims.status) || kra.waitSeconds === 0);
   const [elapsed, setElapsed] = useState(0);
   const [timedOut, setTimedOut] = useState(false);
   const signed = sale.etims?.status === 'signed';
@@ -1463,7 +1466,7 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
       const s = await api<{ data: any }>(`/sales/${initial._id}`).then((r) => r.data).catch(() => null);
       busy = false;
       if (s) setSale(s);
-      if (s?.etims?.status !== 'pending') { clearInterval(t); setWaited(true); return; }
+      if (!FISCAL_WAITING.includes(s?.etims?.status)) { clearInterval(t); setWaited(true); return; }
       if (secs >= kra.waitSeconds) { clearInterval(t); setTimedOut(true); setWaited(true); }
     }, 1000);
     return () => clearInterval(t);
@@ -1476,7 +1479,7 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
       const s = await api<{ data: any }>(`/sales/${initial._id}`).then((r) => r.data).catch(() => null);
       if (s) setSale(s);
       if (s?.etims?.status === 'signed') toast.success('KRA stamp received: press Print receipt for the stamped copy');
-      if (s?.etims?.status !== 'pending') clearInterval(t);
+      if (!FISCAL_WAITING.includes(s?.etims?.status)) clearInterval(t);
     }, 5000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1545,7 +1548,7 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
           <div className="mt-2 text-xs">
             {sale.etims.status === 'signed'
               ? (sale.etims.device === 'etr' ? <Badge tone="green">Signed by the KRA ETR · CU invoice {sale.etims.cuInvoiceNo}</Badge> : <Badge tone="green">KRA eTIMS signed · CU {sale.etims.sdcId}/{sale.etims.rcptNo}</Badge>)
-              : sale.etims.status === 'failed' ? <Badge tone="red">{sale.etims.device === 'etr' ? 'ETR' : 'eTIMS'} rejected: see KRA eTIMS page</Badge>
+              : ['failed', 'rejected', 'requires_reconciliation'].includes(sale.etims.status) ? <Badge tone="red">{sale.etims.device === 'etr' ? 'ETR' : 'eTIMS'} {sale.etims.status === 'requires_reconciliation' ? 'needs checking' : 'rejected'}: not a fiscal receipt yet, see Fiscal devices</Badge>
               : waited ? <Badge tone="amber">{kra.printUnsigned ? 'Printed without the KRA stamp: it is added when KRA / the ETR answers; reprint then' : 'Waiting for the KRA stamp: print once it arrives'}</Badge> : null}
           </div>
         )}

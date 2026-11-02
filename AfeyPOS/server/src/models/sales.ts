@@ -4,7 +4,12 @@ import { ObjectId, tenantModel } from './common.js';
 /** KRA eTIMS submission of a sale or credit note (see modules/etims). */
 const etimsSubmissionSchema = new Schema(
   {
-    status: { type: String, enum: ['pending', 'signed', 'failed'], default: 'pending' },
+    /**
+     * pending → processing → signed (Fiscalized). On the way it may be awaiting_confirmation (sent, no answer),
+     * device_disconnected (not reached), rejected (refused by KRA or the device), failed (could not be sent, e.g.
+     * device removed) or requires_reconciliation (nobody can tell whether it was recorded: a person checks).
+     */
+    status: { type: String, enum: ['pending', 'processing', 'signed', 'rejected', 'failed', 'awaiting_confirmation', 'device_disconnected', 'requires_reconciliation'], default: 'pending' },
     configId: ObjectId,
     invcNo: Number,
     orgInvcNo: Number,
@@ -23,6 +28,17 @@ const etimsSubmissionSchema = new Schema(
     attempts: { type: Number, default: 0 },
     error: String,
     signedAt: Date,
+    /** While one worker is sending it, no other may (several tills sharing one device). */
+    claimUntil: Date,
+    lastAttemptAt: Date,
+    statusChangedAt: Date,
+    /** How the signature was obtained: the device answered, a status query found it, or a person recorded it. */
+    via: { type: String, enum: ['device', 'status_query', 'manual'] },
+    /** A person checked the device or KRA and confirmed this invoice was not recorded, so it may be sent again. */
+    resendConfirmedBy: ObjectId,
+    reconciledBy: ObjectId,
+    reconciledAt: Date,
+    reconcileNote: String,
   },
   { _id: false },
 );
@@ -121,6 +137,8 @@ saleSchema.index({ tenantId: 1, completedAt: -1 });
 saleSchema.index({ tenantId: 1, customerId: 1, completedAt: -1 });
 saleSchema.index({ tenantId: 1, shiftId: 1 });
 saleSchema.index({ tenantId: 1, 'lines.serials': 1 });
+saleSchema.index({ tenantId: 1, 'etims.status': 1, completedAt: 1 }, { partialFilterExpression: { 'etims.status': { $type: 'string' } } });
+saleSchema.index({ tenantId: 1, 'etims.configId': 1, 'etims.invcNo': 1 }, { partialFilterExpression: { 'etims.invcNo': { $type: 'number' } } });
 export const Sale = tenantModel('Sale', saleSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 export type SaleDoc = InstanceType<typeof Sale>;
 
@@ -154,6 +172,7 @@ saleReturnSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 saleReturnSchema.index({ tenantId: 1, clientRequestId: 1 }, { unique: true });
 saleReturnSchema.index({ tenantId: 1, createdAt: -1 });
 saleReturnSchema.index({ tenantId: 1, saleId: 1 });
+saleReturnSchema.index({ tenantId: 1, 'etims.status': 1, createdAt: 1 }, { partialFilterExpression: { 'etims.status': { $type: 'string' } } });
 export const SaleReturn = tenantModel('SaleReturn', saleReturnSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 
 const salesDocumentSchema = new Schema(

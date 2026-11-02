@@ -119,11 +119,11 @@ describe('ETR device on the Afey POS computer', () => {
       const cfg = await addEtr('Folder ETR', { connection: 'folder', inbox, outbox, cuSerial: 'KRAMW004077777', timeoutSeconds: 5 });
       expect(cfg.status).toBe(201);
       const sale = await sell(cfg.body.data.id);
-      // The device program is not running: no answer in time, the sale waits for a retry.
+      // The device program is not running: no answer in time. It was handed over, so it awaits confirmation.
       await runJobs();
       const file = path.join(inbox, `${sale.body.data.number}.json`);
       expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({ type: 'sale', invoiceNumber: sale.body.data.number });
-      expect((await t.client.get(`/sales/${sale.body.data._id}`)).body.data.etims.status).toBe('pending');
+      expect((await t.client.get(`/sales/${sale.body.data._id}`)).body.data.etims.status).toBe('awaiting_confirmation');
       // The program takes the file and answers in its outbox (key=value text).
       fs.rmSync(file);
       fs.mkdirSync(outbox, { recursive: true });
@@ -132,7 +132,7 @@ describe('ETR device on the Afey POS computer', () => {
       // The retry did not drop the invoice in again: it read the answer.
       expect(fs.existsSync(file)).toBe(false);
       const signed = (await t.client.get(`/sales/${sale.body.data._id}`)).body.data.etims;
-      expect(signed).toMatchObject({ status: 'signed', cuInvoiceNo: '0040777770000000001', cuSerial: 'KRAMW004077777' });
+      expect(signed).toMatchObject({ status: 'signed', via: 'status_query', cuInvoiceNo: '0040777770000000001', cuSerial: 'KRAMW004077777' });
       expect(fs.existsSync(path.join(outbox, 'done', `${sale.body.data.number}.txt`))).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
