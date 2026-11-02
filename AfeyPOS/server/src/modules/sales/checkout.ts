@@ -196,7 +196,7 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
       if (!input.ageVerified) throw unprocessable(`${product.name} is age-restricted: confirm the customer is ${product.minAge ?? 18} or older`, 'AGE_VERIFICATION_REQUIRED');
       ageVerifiedBy = userId;
     }
-    const quote = await quotePrice({ product, unitCode: unit.code, qty: lineQty, priceList, customerId: customer?._id, branchId: till.branchId, couponCode: input.couponCode });
+    const quote = await quotePrice({ product, unitCode: unit.code, qty: lineQty, priceList, customerId: customer?._id, branchId: till.branchId, couponCode: input.couponCode, wholesaleByQty: rules.pricing.wholesaleByQuantity });
     let unitPrice = quote.unitPriceCents;
     if (l.unitPriceCents !== undefined && l.unitPriceCents !== unitPrice && promised.get(String(product._id)) === l.unitPriceCents) {
       unitPrice = l.unitPriceCents;

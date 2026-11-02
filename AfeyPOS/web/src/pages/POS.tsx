@@ -25,7 +25,7 @@ interface Product {
   type?: 'stock' | 'service' | 'non_stock'; trackStock?: boolean;
   taxRateBp: number | null; soldByWeight?: boolean; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>;
 }
-interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean }
+interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean; wholesaleQty?: boolean }
 interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string }
 interface Payment { method: string; amountCents: number; tenderedCents?: number; reference?: string; paymentIntentId?: string; terminalTransactionId?: string; label?: string }
 
@@ -274,10 +274,10 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       if (opts.priceCents !== undefined && qt.unitPriceCents > 0) lineQty = roundQty(opts.priceCents / qt.unitPriceCents);
       update((c) => {
         const ex = existing && c.lines.find((l) => l.key === existing.key);
-        if (ex) return { ...c, lines: c.lines.map((l) => (l.key === ex.key ? { ...l, qty: lineQty, unitPriceCents: l.unitPriceCents === l.quotedCents ? qt.unitPriceCents : l.unitPriceCents, quotedCents: qt.unitPriceCents, promotion: qt.source === 'promotion' } : l)) };
+        if (ex) return { ...c, lines: c.lines.map((l) => (l.key === ex.key ? { ...l, qty: lineQty, unitPriceCents: l.unitPriceCents === l.quotedCents ? qt.unitPriceCents : l.unitPriceCents, quotedCents: qt.unitPriceCents, promotion: qt.source === 'promotion', wholesaleQty: qt.source === 'wholesale_qty' } : l)) };
         const key = newRequestId();
         setSelectedKey(key);
-        return { ...c, lines: [...c.lines, { key, product, unitCode, qty: lineQty, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, discountCents: 0, serials: [], promotion: qt.source === 'promotion' }] };
+        return { ...c, lines: [...c.lines, { key, product, unitCode, qty: lineQty, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, discountCents: 0, serials: [], promotion: qt.source === 'promotion', wholesaleQty: qt.source === 'wholesale_qty' }] };
       });
       if (existing) setSelectedKey(existing.key);
     } catch (e) {
@@ -336,6 +336,8 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
         const qt = await quote(next.product, next.unitCode, next.qty, cart);
         if (line.unitPriceCents === line.quotedCents || patch.unitCode) next.unitPriceCents = qt.unitPriceCents;
         next.quotedCents = qt.unitPriceCents;
+        next.promotion = qt.source === 'promotion';
+        next.wholesaleQty = qt.source === 'wholesale_qty';
       } catch (e) {
         setError(e);
       }
@@ -347,7 +349,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   const requoteAll = async (c: Cart) => {
     const lines = await Promise.all(c.lines.map(async (l) => {
       const qt = await quote(l.product, l.unitCode, l.qty, c).catch(() => null);
-      return qt ? { ...l, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, promotion: qt.source === 'promotion' } : l;
+      return qt ? { ...l, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, promotion: qt.source === 'promotion', wholesaleQty: qt.source === 'wholesale_qty' } : l;
     }));
     update(() => ({ ...c, lines }));
   };
@@ -762,7 +764,7 @@ function SaleRow({ line, selected, allowFraction, big, onSelect, onChange, onRem
       className={cx('cursor-pointer border-b border-ink-50 transition dark:border-ink-800', selected ? 'bg-brand-50/70 shadow-[inset_3px_0_0_theme(colors.brand.500)] dark:bg-brand-500/10' : 'hover:bg-[#f7f8fa] dark:hover:bg-ink-800/40')}>
       <td className={cx('px-5', big ? 'py-4' : 'py-3')}>
         <div className="text-[15px] font-extrabold uppercase text-ink-900 dark:text-white">{line.product.name}</div>
-        <div className="mt-0.5 text-xs font-medium uppercase tracking-wide text-ink-400">SKU: {line.product.sku}{line.promotion && <span className="ml-2 normal-case text-emerald-600">promo</span>}{line.unitPriceCents !== line.quotedCents && <span className="ml-2 normal-case text-amber-600">price changed</span>}</div>
+        <div className="mt-0.5 text-xs font-medium uppercase tracking-wide text-ink-400">SKU: {line.product.sku}{line.promotion && <span className="ml-2 normal-case text-emerald-600">promo</span>}{line.wholesaleQty && <span className="ml-2 normal-case text-amber-600">wholesale price</span>}{line.unitPriceCents !== line.quotedCents && <span className="ml-2 normal-case text-amber-600">price changed</span>}</div>
       </td>
       <td className="px-3 text-center"><span className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] font-bold uppercase text-ink-600 dark:border-ink-700">{line.unitCode}</span></td>
       <td className="px-3 text-right font-mono tabular-nums">{money(line.unitPriceCents)}</td>

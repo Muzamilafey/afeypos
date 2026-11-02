@@ -118,6 +118,7 @@ export function CheckoutRulesPage() {
         <Card title={<span className="flex items-center gap-2"><Icon name="tag" className="h-4 w-4 text-amber-500" />Retail or wholesale</span>}>
           <div className="divide-y divide-ink-100 dark:divide-ink-800">
             <Toggle label="Show a Retail / Wholesale switch at checkout" help="Off: every sale at the till uses retail prices (customers set to wholesale still get theirs). On: the cashier can switch a sale to wholesale prices; products without a wholesale price stay at retail." checked={rules.pricing.wholesaleAtTill} onChange={(v) => set('pricing', { wholesaleAtTill: v })} />
+            <Toggle label="Wholesale price from a quantity" help="Products with a 'wholesale from quantity' get their wholesale price by themselves when one line reaches it (e.g. 12 or more). Off: retail price whatever the quantity." checked={rules.pricing.wholesaleByQuantity} onChange={(v) => set('pricing', { wholesaleByQuantity: v })} />
             {rules.pricing.wholesaleAtTill && <Toggle label="Wholesale needs a supervisor" help="A supervisor approves wholesale sales on the till (staff card + PIN, fingerprint or email + PIN)." checked={rules.pricing.wholesaleNeedsApproval} onChange={(v) => set('pricing', { wholesaleNeedsApproval: v })} />}
           </div>
         </Card>

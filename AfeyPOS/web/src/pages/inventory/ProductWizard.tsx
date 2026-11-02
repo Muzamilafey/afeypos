@@ -53,6 +53,7 @@ export function ProductWizardPage() {
   const [retail, setRetail] = useState<number | null>(null);
   const [wholesale, setWholesale] = useState<number | null>(null);
   const [minPrice, setMinPrice] = useState<number | null>(null);
+  const [wholesaleMinQty, setWholesaleMinQty] = useState('');
   const [entryIncl, setEntryIncl] = useState(bizIncl);
   const [taxPct, setTaxPct] = useState('');
   const [branchPrices, setBranchPrices] = useState<Record<string, number | null>>({});
@@ -179,7 +180,7 @@ export function ProductWizardPage() {
         name: name.trim(), sku: sku.trim(), type, categoryId: categoryId || null, brandId: brandId || null, description: description || undefined,
         sellingMethod: method, baseUnit, units: storedUnits, barcodes,
         costCents: cost, prices: { ...(retail !== null ? { retail: toStored(retail) } : {}), ...(wholesale !== null ? { wholesale: toStored(wholesale) } : {}) },
-        minPriceCents: toStored(minPrice), taxRateBp: taxPct === '' ? null : rateBp,
+        minPriceCents: toStored(minPrice), wholesaleMinQty: Number(wholesaleMinQty) || 0, taxRateBp: taxPct === '' ? null : rateBp,
         branchPrices: Object.entries(branchPrices).filter(([, v]) => v != null).map(([branchId, v]) => ({ branchId, retail: toStored(v) })),
         trackStock: type === 'stock' && trackStock, trackBatches, trackSerials, allowFractional: fractional && !trackSerials, soldByWeight: weighed,
         reorderLevel: Number(reorderLevel) || 0, reorderQty: Number(reorderQty) || 0, maxStock: Number(maxStock) || 0, binLocation: binLocation || undefined,
@@ -314,6 +315,7 @@ export function ProductWizardPage() {
             {can('products.cost') && <Field label="Cost (per base unit)" hint={`Per ${baseUnit}, before VAT`}><MoneyInput value={costCents} onChange={setCostCents} /></Field>}
             <Field label="Selling price" hint={`Per ${baseUnit}`}><MoneyInput value={retail} onChange={setRetail} /></Field>
             <Field label="Wholesale price"><MoneyInput value={wholesale} onChange={setWholesale} /></Field>
+            <Field label="Wholesale from quantity" hint={`A retail sale of this many ${baseUnit} or more on one line gets the wholesale price. Blank = never`}><Input inputMode="decimal" value={wholesaleMinQty} onChange={(e) => setWholesaleMinQty(e.target.value.replace(/[^\d.]/g, ''))} placeholder="e.g. 12" /></Field>
             <Field label="Minimum price" hint="The till cannot go lower without a manager"><MoneyInput value={minPrice} onChange={setMinPrice} /></Field>
             <Field label="VAT %" hint="Blank = business default"><Input inputMode="decimal" value={taxPct} onChange={(e) => setTaxPct(e.target.value)} placeholder={String((settings.defaultTaxRateBp ?? 1600) / 100)} /></Field>
           </div>
@@ -352,6 +354,7 @@ export function ProductWizardPage() {
               </div>
             </div>
           )}
+          {Number(wholesaleMinQty) > 0 && wholesale === null && <p className="mt-2 text-sm text-amber-700">Set a wholesale price, or the quantity rule has nothing to switch to.</p>}
           <Warnings warnings={warnings} />
         </Card>
       )}
@@ -446,6 +449,7 @@ export function ProductWizardPage() {
             <Row k="Selling price" v={retail !== null ? `${money(retail)} ${entryIncl ? 'incl.' : 'excl.'} VAT` : '—'} />
             {can('products.cost') && <Row k="Cost" v={money(cost)} />}
             <Row k="Minimum price" v={minPrice !== null ? money(minPrice) : 'None'} />
+            {Number(wholesaleMinQty) > 0 && <Row k="Wholesale price" v={`${wholesale !== null ? money(wholesale) : '—'} from ${wholesaleMinQty} ${baseUnit}`} />}
             <Row k="Barcodes" v={barcodes.length ? barcodes.map((b) => `${b.code} (${b.unitCode})`).join(', ') : 'None'} />
             <Row k="Opening stock" v={Number(openingQty) > 0 ? `${openingQty} ${baseUnit}` : 'None'} />
             {plu && <Row k="PLU" v={plu} />}

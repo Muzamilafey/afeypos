@@ -20,7 +20,7 @@ describe('wholesale at the till (checkout rules)', () => {
     const shift = await openShift(c, till);
     const sell = (overrideToken?: string) => c.post('/sales', { clientRequestId: rid(), tillId: till, priceList: 'wholesale', overrideToken, lines: [{ productId: p._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 24000 }] });
 
-    expect((await t.client.get('/settings/checkout-rules')).body.data.rules.pricing).toEqual({ wholesaleAtTill: false, wholesaleNeedsApproval: false });
+    expect((await t.client.get('/settings/checkout-rules')).body.data.rules.pricing).toMatchObject({ wholesaleAtTill: false, wholesaleNeedsApproval: false, wholesaleByQuantity: true });
     const off = await sell();
     expect(off.body.error.code).toBe('WHOLESALE_OFF');
     // Retail still sells.
@@ -32,11 +32,39 @@ describe('wholesale at the till (checkout rules)', () => {
     expect(on.body.data.lines[0].unitPriceCents).toBe(24000);
 
     await t.client.put('/settings/checkout-rules', { rules: { pricing: { wholesaleNeedsApproval: true } } });
-    expect((await t.client.get('/settings/checkout-rules')).body.data.rules.pricing).toEqual({ wholesaleAtTill: true, wholesaleNeedsApproval: true });
+    expect((await t.client.get('/settings/checkout-rules')).body.data.rules.pricing).toMatchObject({ wholesaleAtTill: true, wholesaleNeedsApproval: true });
     const needs = await sell();
     expect(needs.body.error.code).toBe('OVERRIDE_REQUIRED');
     const token = (await c.post('/auth/override', { email: 'owner@wholeshop.test', password: OWNER_PASSWORD, permission: 'sales.price.override' })).body.overrideToken;
     expect((await sell(token)).status).toBe(201);
     await c.post(`/shifts/${shift._id}/close`, { countedCashCents: 0 });
+  });
+});
+
+describe('wholesale price from a quantity', () => {
+  it('switches a retail line to wholesale at the product quantity, unless the rule is off', async () => {
+    const till = t.locations.tills[0]._id;
+    const p = await createProduct(t.client, {
+      name: 'Soda 500ml', sku: 'SODA5', prices: { retail: 6000, wholesale: 5000 }, wholesaleMinQty: 12,
+      units: [{ code: 'ctn', name: 'Crate', factor: 24, prices: {} }], openingStock: [{ warehouseId: t.locations.warehouses[0]._id, qty: 500 }],
+    });
+    const quote = async (qty: number, unitCode = 'pc') => (await t.client.post(`/products/${p._id}/quote`, { qty, unitCode })).body.data;
+    expect(await quote(11)).toMatchObject({ unitPriceCents: 6000, source: 'base_price' });
+    expect(await quote(12)).toMatchObject({ unitPriceCents: 5000, source: 'wholesale_qty' });
+    // A crate is 24 pieces: wholesale per piece x 24.
+    expect(await quote(1, 'ctn')).toMatchObject({ unitPriceCents: 120000, source: 'wholesale_qty' });
+
+    const shift = await openShift(t.client, till);
+    const sale = await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: p._id, qty: 12 }, { productId: p._id, qty: 2 }], payments: [{ method: 'cash', amountCents: 60000 + 12000 }] });
+    expect(sale.status).toBe(201);
+    expect(sale.body.data.lines.map((l: any) => l.unitPriceCents)).toEqual([5000, 6000]);
+
+    await t.client.put('/settings/checkout-rules', { rules: { pricing: { wholesaleByQuantity: false } } });
+    expect(await quote(12)).toMatchObject({ unitPriceCents: 6000 });
+    // A product without the setting never changes.
+    await t.client.put('/settings/checkout-rules', { rules: { pricing: { wholesaleByQuantity: true } } });
+    const q = await createProduct(t.client, { name: 'Bread', sku: 'BRD9', prices: { retail: 6000, wholesale: 5000 } });
+    expect((await t.client.post(`/products/${q._id}/quote`, { qty: 100 })).body.data.unitPriceCents).toBe(6000);
+    await t.client.post(`/shifts/${shift._id}/close`, { countedCashCents: 72000 });
   });
 });

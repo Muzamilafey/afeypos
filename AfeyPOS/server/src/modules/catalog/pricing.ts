@@ -8,7 +8,7 @@ export interface PriceQuote {
   listPriceCents: number;
   /** Price per selling unit to charge. */
   unitPriceCents: number;
-  source: 'customer' | 'tier' | 'unit_price' | 'base_price' | 'promotion' | 'fallback';
+  source: 'customer' | 'tier' | 'wholesale_qty' | 'unit_price' | 'base_price' | 'promotion' | 'fallback';
   promotionId?: Types.ObjectId;
   unitFactor: number;
 }
@@ -51,6 +51,8 @@ export async function quotePrice(opts: {
   branchId?: Types.ObjectId | null;
   couponCode?: string | null;
   at?: Date;
+  /** Checkout rule: a retail line reaching the product's wholesaleMinQty is charged the wholesale price. */
+  wholesaleByQty?: boolean;
 }): Promise<PriceQuote> {
   const { product, priceList } = opts;
   const unit = resolveUnit(product, opts.unitCode);
@@ -70,6 +72,15 @@ export async function quotePrice(opts: {
     if (cp) {
       price = cp.priceCents;
       source = 'customer';
+    }
+  }
+  // Quantity-triggered wholesale: enough of the product on one retail line gets the wholesale price.
+  const minQty = product.wholesaleMinQty ?? 0;
+  if (source !== 'customer' && opts.wholesaleByQty && priceList === 'retail' && minQty > 0 && baseQty >= minQty) {
+    const ws = fromUnit('wholesale') ?? fromBase('wholesale');
+    if (ws !== null && ws < price) {
+      price = ws;
+      source = 'wholesale_qty';
     }
   }
   if (source !== 'customer') {

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Types } from 'mongoose';
-import { decodeScaleBarcode, detectBarcode, gtinAliases, normalizeIsbn, PRICE_LISTS, PRODUCT_FIELDS } from '@afeypos/shared';
+import { decodeScaleBarcode, detectBarcode, gtinAliases, mergeCheckoutRules, normalizeIsbn, PRICE_LISTS, PRODUCT_FIELDS } from '@afeypos/shared';
 import { scaleFormatsFor } from './barcodes.js';
 import { Brand, Category, CustomerPrice, Product, Promotion, StockLevel, UnitOfMeasure, Warehouse } from '../../models/index.js';
 import { escapeRegex, idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
@@ -63,6 +63,7 @@ const productSchema = z.object({
   minPriceCents: positiveCents.nullish(),
   branchPrices: z.array(z.object({ branchId: objectId, retail: positiveCents.nullish(), wholesale: positiveCents.nullish() })).max(200).default([]),
   maxStock: z.number().min(0).default(0),
+  wholesaleMinQty: z.number().min(0).max(1e6).default(0),
   binLocation: z.string().trim().max(40).optional(),
   supplierId: objectId.nullish(),
   scaleIds: z.array(objectId).max(50).optional(),
@@ -332,7 +333,8 @@ router.post('/products/:id/quote', requirePermission('products.read'), async (re
   const body = parse(z.object({ unitCode: z.string().optional(), qty: z.number().positive(), priceList: z.enum(PRICE_LISTS).default('retail'), customerId: objectId.optional(), branchId: objectId.optional(), couponCode: z.string().optional() }), req.body);
   const product = await Product.findById(idParam(req.params.id));
   if (!product) throw notFound('Product');
-  res.json({ data: await quotePrice({ product, ...body }) });
+  const rules = mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
+  res.json({ data: await quotePrice({ product, ...body, wholesaleByQty: rules.pricing.wholesaleByQuantity }) });
 });
 
 router.post('/products', requirePermission('products.manage'), async (req, res) => {
@@ -358,7 +360,7 @@ router.put('/products/:id', requirePermission('products.manage'), async (req, re
   const input = parse(productSchema, req.body);
   const before = await Product.findById(id).lean();
   if (!before) throw notFound('Product');
-  const priceShape = (x: { prices?: unknown; minPriceCents?: number | null; branchPrices?: { branchId: unknown; retail?: number | null; wholesale?: number | null }[] }) => JSON.stringify([x.prices, x.minPriceCents ?? null, (x.branchPrices ?? []).map((b) => [String(b.branchId), b.retail ?? null, b.wholesale ?? null])]);
+  const priceShape = (x: { prices?: unknown; minPriceCents?: number | null; wholesaleMinQty?: number | null; branchPrices?: { branchId: unknown; retail?: number | null; wholesale?: number | null }[] }) => JSON.stringify([x.prices, x.minPriceCents ?? null, x.wholesaleMinQty ?? 0, (x.branchPrices ?? []).map((b) => [String(b.branchId), b.retail ?? null, b.wholesale ?? null])]);
   if (priceShape(before) !== priceShape(input) && !req.auth!.permissions.has('prices.manage')) throw badRequest('You need the prices.manage permission to change prices');
   const data = normalizeProduct(input, req.capabilities!);
   await assertUnique(data, id);

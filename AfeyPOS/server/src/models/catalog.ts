@@ -77,6 +77,8 @@ const productSchema = new Schema(
     /** Branch-specific base-unit prices; override the product's prices at that branch's tills. */
     branchPrices: { type: [{ branchId: { type: ObjectId, ref: 'Branch', required: true }, retail: Number, wholesale: Number, _id: false }], default: [] },
     maxStock: { type: Number, default: 0 },
+    /** Base-unit quantity on one line from which a retail sale gets the wholesale price (0 = never). */
+    wholesaleMinQty: { type: Number, default: 0 },
     /** Shelf / bin location in the store, e.g. "A3-2". */
     binLocation: String,
     supplierId: { type: ObjectId, ref: 'Supplier' },

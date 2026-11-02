@@ -259,6 +259,8 @@ export function ProductEditPage() {
           {can('products.cost') && p.prices?.retail && p.costCents ? <p className="mt-2 text-xs text-ink-500">Margin {Math.round(((p.prices.retail - p.costCents) / p.prices.retail) * 100)}% (before tax)</p> : null}
           <div className="mt-3 grid gap-3 sm:grid-cols-4">
             <Field label="Minimum price" hint="Lower needs a manager at the till"><MoneyInput value={p.minPriceCents} onChange={(v) => set('minPriceCents', v)} /></Field>
+            <Field label="Wholesale price"><MoneyInput value={p.prices?.wholesale} onChange={(v) => set('prices', { ...p.prices, wholesale: v })} /></Field>
+            <Field label="Wholesale from quantity" hint={`${p.baseUnit} on one line; 0 = never`}><Input type="number" min={0} step="any" value={p.wholesaleMinQty ?? 0} onChange={(e) => set('wholesaleMinQty', Number(e.target.value))} /></Field>
             {(locs.data?.branches.length ?? 0) > 1 && can('prices.manage') && (locs.data!.branches as any[]).map((b) => {
               const cur = (p.branchPrices ?? []).find((x: any) => String(x.branchId) === b._id);
               return (

@@ -51,6 +51,8 @@ export interface CheckoutRules {
     wholesaleAtTill: boolean;
     /** Switching a sale to wholesale needs a supervisor's approval (sales.price.override). */
     wholesaleNeedsApproval: boolean;
+    /** Products with a "wholesale from quantity" get the wholesale price on a line reaching that quantity. Off: retail only. */
+    wholesaleByQuantity: boolean;
   };
   /** Whether the till collects the customer's phone number, and what it does with it. */
   customer: {
@@ -104,7 +106,7 @@ export const CHECKOUT_RULE_DEFAULTS: CheckoutRules = {
   discounts: { allowed: true, lineLimitBp: 1000, saleLimitBp: 1000, maxAmountCents: 0 },
   shifts: { required: true, minOpeningFloatCents: 0, blindClose: false, closeNeedsApproval: false, maxCashInDrawerCents: 0, oneOpenShiftPerCashier: true },
   mpesa: { watchTillPayments: true, autoComplete: true },
-  pricing: { wholesaleAtTill: false, wholesaleNeedsApproval: false },
+  pricing: { wholesaleAtTill: false, wholesaleNeedsApproval: false, wholesaleByQuantity: true },
   customer: { phone: 'both', createFromPhone: true, awardLoyalty: true, required: false },
   cashierPages: CASHIER_PAGE_OPTIONS.map((p) => p.key),
   paymentMethods: PAYMENT_METHOD_OPTIONS.map((p) => p.key),
@@ -146,6 +148,7 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
     pricing: {
       wholesaleAtTill: bool(s.pricing?.wholesaleAtTill, d.pricing.wholesaleAtTill),
       wholesaleNeedsApproval: bool(s.pricing?.wholesaleNeedsApproval, d.pricing.wholesaleNeedsApproval),
+      wholesaleByQuantity: bool(s.pricing?.wholesaleByQuantity, d.pricing.wholesaleByQuantity),
     },
     customer: {
       phone: (['off', 'ask', 'mpesa', 'both'] as const).includes(s.customer?.phone) ? s.customer.phone : d.customer.phone,
