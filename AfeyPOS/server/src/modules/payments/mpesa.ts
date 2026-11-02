@@ -25,7 +25,7 @@ import { enqueue, registerJob } from '../../jobs/queue.js';
 import { DarajaClient, MockMpesaGateway, parseAsyncResult, parseDarajaDate, parseStkCallback, splitParty, stkResultToStatus, type MpesaGateway } from '../../integrations/mpesa/daraja.js';
 import { configsForTill, findActiveConfig, openSecrets } from '../integrations/configs.js';
 import { handleB2CResult } from './payouts.js';
-import { finalizeIntent, presentIntent } from './intents.js';
+import { finalizeIntent, presentIntent, reviveConfirmedPayment } from './intents.js';
 import { verifyGatewayIntent } from './gateways.js';
 
 /**
@@ -254,6 +254,43 @@ router.post('/payments/intents/:id/query', requirePermission('sales.create'), as
   res.json({ data: presentIntent((await PaymentIntent.findById(i._id).lean())!) });
 });
 
+/**
+ * "Check again with Safaricom" for a prompt marked failed or expired whose money the business did receive.
+ * Asks M-Pesa about the prompt; if it was paid, the payment becomes usable on a sale.
+ */
+router.post('/payments/intents/:id/recheck', requirePermission('sales.create'), async (req, res) => {
+  const i = await PaymentIntent.findById(idParam(req.params.id));
+  if (!i) throw notFound('Payment');
+  if (!['failed', 'expired', 'cancelled'].includes(i.status) || !i.checkoutRequestId) throw unprocessable('Only a failed, expired or cancelled M-Pesa prompt can be checked again');
+  // A confirmation that already arrived late (older records kept it without making it usable).
+  const lateCallback = await MpesaEvent.findOne({ paymentIntentId: i._id, kind: 'stk_callback', outcome: 'late_confirmation' }).sort({ createdAt: -1 }).lean();
+  const parsedLate = lateCallback ? parseStkCallback(lateCallback.payload) : null;
+  let revived = null;
+  if (parsedLate?.resultCode === 0 && parsedLate.receiptNumber) {
+    revived = await reviveConfirmedPayment(i._id, { receiptNumber: parsedLate.receiptNumber, paidAmountCents: Math.round((parsedLate.amount ?? 0) * 100), how: 'confirmation that arrived late' });
+  } else if (i.receiptNumber && (i.paidAmountCents ?? 0) > 0) {
+    revived = await reviveConfirmedPayment(i._id, { receiptNumber: i.receiptNumber, paidAmountCents: i.paidAmountCents!, how: 'confirmation that arrived late' });
+  } else {
+    const cfg = await IntegrationConfig.findById(i.configId);
+    if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'The M-Pesa account of this payment is no longer set up');
+    let q: any;
+    try {
+      q = await gatewayFor(cfg).stkQuery(i.checkoutRequestId);
+    } catch (err: any) {
+      throw new AppError(502, 'MPESA_UNAVAILABLE', `Could not ask M-Pesa: ${err?.message}`);
+    }
+    await MpesaEvent.create({ kind: 'stk_query', payload: q, paymentIntentId: i._id });
+    if (String(q.ResultCode) === '0') revived = await reviveConfirmedPayment(i._id, { paidAmountCents: i.amountCents, how: 'confirmed by an M-Pesa status query' });
+    else {
+      await audit(req, { action: 'mpesa.recheck', entity: 'PaymentIntent', entityId: i._id, details: { paid: false, said: q.ResultDesc ?? q.errorMessage } });
+      throw unprocessable(`M-Pesa says this prompt was not paid: ${q.ResultDesc ?? q.errorMessage ?? 'no payment'}. If the customer has an M-Pesa message, type its code at the till instead.`, 'MPESA_NOT_PAID');
+    }
+  }
+  if (!revived) throw unprocessable('This payment is already recorded on another M-Pesa entry (look it up by its code at the till)', 'MPESA_ALREADY_RECORDED');
+  await audit(req, { action: 'mpesa.recheck', entity: 'PaymentIntent', entityId: i._id, details: { paid: true, receipt: revived.receiptNumber ?? null, amountCents: revived.paidAmountCents } });
+  res.json({ data: presentIntent(revived) });
+});
+
 router.post('/payments/intents/:id/cancel', requirePermission('sales.create'), async (req, res) => {
   // Marks the local intent abandoned; if Safaricom later confirms it, the callback is still recorded and flagged for reconciliation.
   const i = await PaymentIntent.findOneAndUpdate({ _id: idParam(req.params.id), status: 'pending' }, { $set: { status: 'cancelled', resultDesc: 'Cancelled by cashier', completedAt: new Date() } }, { new: true });
@@ -455,6 +492,10 @@ router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (
     if (r?.claimed) found = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: body.receipt }).lean();
     else if (r?.reason && r.reason !== 'not_found') throw unprocessable(r.reason, 'MPESA_NOT_AVAILABLE');
   }
+  if (found && found.status !== 'succeeded' && found.checkoutRequestId && (found.paidAmountCents ?? 0) > 0) {
+    // A prompt marked failed whose money did arrive (older records): make it usable now.
+    found = (await reviveConfirmedPayment(found._id, { receiptNumber: found.receiptNumber, paidAmountCents: found.paidAmountCents!, how: 'code typed at the till' }))?.toObject() ?? found;
+  }
   if (found) {
     const free = (found.paidAmountCents ?? 0) - (found.allocatedCents ?? 0);
     if (found.status !== 'succeeded') throw unprocessable(`M-Pesa ${body.receipt} is ${found.status}`, 'MPESA_NOT_AVAILABLE');
@@ -549,10 +590,13 @@ export async function handleStkCallback(tenantId: Types.ObjectId, payload: any, 
       // and flag confirmations that arrive after the intent was abandoned, for reconciliation.
       if (parsed.resultCode === 0 && parsed.receiptNumber && !intent.receiptNumber) {
         const late = intent.status !== 'succeeded';
-        await PaymentIntent.updateOne(
-          { _id: intent._id },
-          { $set: { receiptNumber: parsed.receiptNumber, ...(late ? { resultDesc: `Late confirmation after ${intent.status}`, paidAmountCents: Math.round((parsed.amount ?? 0) * 100) } : {}) } },
-        ).catch(() => undefined);
+        if (late) {
+          // The money arrived: make it a usable payment instead of leaving it marked failed.
+          const revived = await reviveConfirmedPayment(intent._id, { receiptNumber: parsed.receiptNumber, paidAmountCents: Math.round((parsed.amount ?? 0) * 100), how: 'late confirmation from Safaricom' });
+          if (!revived) await PaymentIntent.updateOne({ _id: intent._id }, { $set: { resultDesc: `Late confirmation ${parsed.receiptNumber} after ${intent.status}` } }).catch(() => undefined);
+        } else {
+          await PaymentIntent.updateOne({ _id: intent._id }, { $set: { receiptNumber: parsed.receiptNumber } }).catch(() => undefined);
+        }
         event.outcome = late ? 'late_confirmation' : 'receipt_added';
       } else event.outcome = 'duplicate';
       await event.save();

@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { useLocations } from '../lib/hooks';
 import { dateTime, money } from '../lib/format';
 import { DataTable } from '../components/DataTable';
-import { Badge, Button, Field, Input, Modal, PageHeader, Select, Stat } from '../components/ui';
+import { Badge, Button, Field, Input, Modal, PageHeader, Select, Stat, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { MpesaMark } from '../components/PayVisuals';
 
@@ -70,6 +70,15 @@ export function MpesaLogsPage() {
     refetchInterval: 20_000, placeholderData: (p) => p,
   });
   const rows = list.data?.data ?? [];
+  const toast = useToast();
+  /** The money reached the business but the prompt was marked failed: ask Safaricom and free it for a sale. */
+  const recheck = async (intentId: string) => {
+    try {
+      const r = await api<{ data: any }>(`/payments/intents/${intentId}/recheck`, { body: {} });
+      toast.success(`Paid${r.data.receiptNumber ? ` (${r.data.receiptNumber})` : ''}: ${money(r.data.paidAmountCents)} is now free to use on a sale (type the code at the till or pick it from Received payments)`);
+      list.refetch();
+    } catch (e) { toast.error(e); }
+  };
   return (
     <div>
       <PageHeader title="M-Pesa logs" subtitle="Every message between this server and Safaricom" actions={<Button variant="secondary" disabled={!rows.length} onClick={() => csv('mpesa-logs', ['Time', 'Type', 'Outcome', 'Receipt', 'Amount', 'Phone', 'Number', 'Account', 'Payer', 'Result'], rows.map((r) => [dateTime(r.at), KIND[r.kind] ?? r.kind, r.outcome, r.receipt, r.amountCents !== undefined ? (r.amountCents / 100).toFixed(2) : '', r.phone, r.shortCode, r.account, r.payer, r.resultDesc]))}><Icon name="download" className="h-4 w-4" />CSV</Button>} />
@@ -85,7 +94,13 @@ export function MpesaLogsPage() {
           { key: 'p', header: 'From', render: (r: any) => <span className="text-xs">{r.payer ? <b>{r.payer}</b> : null} {r.phone}</span> },
           { key: 'n', header: 'Till / Paybill', render: (r: any) => <span className="text-xs">{r.shortCode}{r.account ? ` · ${r.account}` : ''}</span> },
           { key: 'o', header: 'Outcome', render: (r: any) => <span>{r.outcome && <Badge tone={OUTCOME_TONE(r.outcome)}>{r.outcome.replace(/_/g, ' ')}</Badge>}<div className="max-w-[260px] text-xs text-ink-500">{r.resultDesc ?? r.error ?? ''}</div></span> },
-          { key: 'x', header: '', render: (r: any) => <Button size="sm" variant="ghost" onClick={() => setOpen(r)}>Details</Button> },
+          { key: 'x', header: '', render: (r: any) => (
+            <div className="flex justify-end gap-1">
+              {r.lateConfirmed && <Badge tone="green">received late · usable</Badge>}
+              {r.canRecheck && <Button size="sm" variant="secondary" onClick={() => recheck(r.paymentIntentId)}>Check again</Button>}
+              <Button size="sm" variant="ghost" onClick={() => setOpen(r)}>Details</Button>
+            </div>
+          ) },
         ]} />
         <Pager page={page} total={list.data?.total ?? 0} limit={limit} setPage={setPage} />
       </div>

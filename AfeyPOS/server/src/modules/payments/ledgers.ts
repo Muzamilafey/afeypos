@@ -81,8 +81,13 @@ ledgerRoutes.get('/payments/mpesa/logs', READ, async (req, res) => {
     MpesaEvent.countDocuments(filter),
     MpesaEvent.aggregate([{ $group: { _id: '$kind', n: { $sum: 1 } } }]),
   ]);
+  // The payment each message belongs to: a prompt marked failed/expired can be checked again with Safaricom.
+  const intents = new Map((await PaymentIntent.find({ _id: { $in: rows.map((e: any) => e.paymentIntentId).filter(Boolean) } }, { status: 1, checkoutRequestId: 1, allocatedCents: 1, lateConfirmedAt: 1 }).lean()).map((i: any) => [String(i._id), i]));
   res.json({
-    data: rows.map((e: any) => ({ id: e._id, at: e.at, kind: e.kind, provider: e.provider, outcome: e.outcome, error: e.error, ip: e.ip, paymentIntentId: e.paymentIntentId, ...summarise(e), payload: maskDeep(e.payload) })),
+    data: rows.map((e: any) => {
+      const i = e.paymentIntentId ? intents.get(String(e.paymentIntentId)) : null;
+      return { id: e._id, at: e.at, kind: e.kind, provider: e.provider, outcome: e.outcome, error: e.error, ip: e.ip, paymentIntentId: e.paymentIntentId, intentStatus: i?.status, canRecheck: Boolean(i?.checkoutRequestId && ['failed', 'expired', 'cancelled'].includes(i.status)), lateConfirmed: Boolean(i?.lateConfirmedAt), ...summarise(e), payload: maskDeep(e.payload) };
+    }),
     total, page: q.page, limit: q.limit, kinds: Object.fromEntries(kinds.map((k) => [k._id, k.n])),
   });
 });

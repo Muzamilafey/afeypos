@@ -49,6 +49,8 @@ const paymentIntentSchema = new Schema(
     allocatedCents: { type: Number, default: 0 },
     allocatedAt: Date,
     lastQueriedAt: Date,
+    /** Safaricom confirmed the money after this payment had been marked failed/expired/cancelled: usable on a sale. */
+    lateConfirmedAt: Date,
     completedAt: Date,
   },
   { timestamps: true },

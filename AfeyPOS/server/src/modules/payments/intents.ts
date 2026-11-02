@@ -52,6 +52,32 @@ export async function finalizeIntent(intent: PaymentIntentDoc, update: FinalUpda
   }
 }
 
+/**
+ * The customer's money reached the business after the prompt had been marked failed, expired or cancelled
+ * (PIN entered late, Safaricom slow, cashier gave up). The record becomes a received, unused M-Pesa payment that
+ * any sale can take (by its code, or from the received list). Never one already used, never counted twice.
+ */
+export async function reviveConfirmedPayment(intentId: unknown, opts: { receiptNumber?: string | null; paidAmountCents: number; how: string }) {
+  const before = await PaymentIntent.findById(intentId);
+  if (!before || !['failed', 'expired', 'cancelled'].includes(before.status) || (before.allocatedCents ?? 0) > 0 || !before.checkoutRequestId) return null;
+  if (!(opts.paidAmountCents > 0)) return null;
+  const set: Record<string, unknown> = {
+    status: 'succeeded', paidAmountCents: opts.paidAmountCents, lateConfirmedAt: new Date(), completedAt: new Date(),
+    resultDesc: `Money received after this payment was marked ${before.status} (${opts.how}): free to use on a sale`,
+  };
+  if (opts.receiptNumber) set.receiptNumber = opts.receiptNumber;
+  let r;
+  try {
+    r = await PaymentIntent.findOneAndUpdate({ _id: before._id, status: before.status, allocatedCents: { $in: [0, null] } }, { $set: set }, { new: true });
+  } catch (err: any) {
+    // The receipt is already on another record (e.g. a Till confirmation): that one is the usable payment.
+    if (err?.code === 11000) return null;
+    throw err;
+  }
+  if (r) emitToTenant(r.tenantId, 'payment.updated', presentIntent(r));
+  return r;
+}
+
 /** Moves a receipt from an unused, stand-alone C2B record of the same amount to this pending payment. */
 async function takeOverReceipt(intent: PaymentIntentDoc, update: FinalUpdate) {
   if ((intent.provider ?? 'mpesa') !== 'mpesa') return null;
