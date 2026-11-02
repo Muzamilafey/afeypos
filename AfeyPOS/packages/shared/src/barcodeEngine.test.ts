@@ -95,3 +95,26 @@ describe('internal codes', () => {
     expect(skuPrefix('')).toBe('ITM');
   });
 });
+
+describe('pricing maths', async () => {
+  const { marginBp, markupBp, priceForMargin, priceForMarkup, addTax, removeTax, pricingWarnings, unitProblems } = await import('./index.js');
+  it('computes margin and markup both ways', () => {
+    expect(marginBp(7500, 10000)).toBe(2500);
+    expect(markupBp(7500, 10000)).toBe(3333);
+    expect(priceForMargin(7500, 2500)).toBe(10000);
+    expect(priceForMarkup(7500, 3333)).toBe(10000);
+    expect(priceForMarkup(8000, 2500)).toBe(10000);
+    expect(addTax(10000, 1600)).toBe(11600);
+    expect(removeTax(11600, 1600)).toBe(10000);
+  });
+  it('warns below cost and minimum, never changing a price', () => {
+    const w = pricingWarnings({ costCents: 10000, retailCents: 11000, minPriceCents: 12000, pricesIncludeTax: true, taxRateBp: 1600, units: [{ code: 'ctn', factor: 24, retailCents: 200000 }] });
+    expect(w.map((x) => x.field)).toEqual(expect.arrayContaining(['retail', 'minPrice', 'unit.ctn']));
+    expect(w.find((x) => x.field === 'retail' && x.level === 'error')!.message).toMatch(/below cost/);
+    expect(pricingWarnings({ costCents: 5000, retailCents: 11600, pricesIncludeTax: true, taxRateBp: 1600 })).toEqual([]);
+  });
+  it('catches unit mistakes', () => {
+    expect(unitProblems('kg', [{ code: 'kg', factor: 1 }, { code: 'g', factor: 0.001 }])).toEqual([]);
+    expect(unitProblems('kg', [{ code: 'g', factor: 0 }, { code: 'g', factor: 1 }])).toHaveLength(2);
+  });
+});

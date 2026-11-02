@@ -56,12 +56,12 @@ type ProductForm = Record<string, any>;
 const emptyProduct = (baseUnit = 'pc'): ProductForm => ({
   name: '', sku: '', type: 'stock', categoryId: '', description: '', baseUnit, units: [], barcodes: [], costCents: 0, prices: { retail: null, wholesale: null, contractor: null }, priceTiers: [],
   minOrderQty: 0, taxRateBp: null, trackStock: true, trackBatches: false, trackSerials: false, allowFractional: false, reorderLevel: 0, reorderQty: 0, attributes: {},
-  warrantyMonths: 0, requiresPrescription: false, ageRestricted: false, minAge: 18, soldByWeight: false, plu: '', active: true,
+  warrantyMonths: 0, requiresPrescription: false, ageRestricted: false, minAge: 18, soldByWeight: false, plu: '', active: true, minPriceCents: null, branchPrices: [], maxStock: 0, binLocation: '',
 });
 
 export function ProductEditPage() {
   const { id } = useParams();
-  const isNew = id === 'new';
+  const isNew = !id || id === 'new';
   const nav = useNavigate();
   const toast = useToast();
   const qc = useQueryClient();
@@ -93,7 +93,7 @@ export function ProductEditPage() {
     setBusy(true);
     setError(null);
     try {
-      const body: ProductForm = { ...p, categoryId: p.categoryId || null, brandId: p.brandId || null, plu: p.plu || null, prices: Object.fromEntries(Object.entries(p.prices).filter(([, v]) => v !== null && v !== undefined)) };
+      const body: ProductForm = { ...p, categoryId: p.categoryId || null, brandId: p.brandId || null, supplierId: p.supplierId || null, binLocation: p.binLocation || undefined, plu: p.plu || null, prices: Object.fromEntries(Object.entries(p.prices).filter(([, v]) => v !== null && v !== undefined)) };
       for (const k of ['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants', 'stock', 'parentId'] as const) delete body[k];
       if (isNew && opening.qty && Number(opening.qty) > 0) {
         const wh = locs.data?.warehouses.find((w) => w.isDefault) ?? locs.data?.warehouses[0];
@@ -142,6 +142,8 @@ export function ProductEditPage() {
             {has('requiresPrescription') && <Checkbox label="Prescription only (POM)" checked={p.requiresPrescription} onChange={(v) => set('requiresPrescription', v)} />}
             {has('ageRestricted') && <><Checkbox label="Age restricted" checked={p.ageRestricted} onChange={(v) => set('ageRestricted', v)} />{p.ageRestricted && <Field label="Minimum age"><Input type="number" value={p.minAge} onChange={(e) => set('minAge', Number(e.target.value))} /></Field>}</>}
             {has('plu') && <Field label="Scale PLU code" hint="Used for variable-weight barcodes"><Input value={p.plu} onChange={(e) => set('plu', e.target.value)} /></Field>}
+            <Field label="Shelf / bin location"><Input value={p.binLocation ?? ''} onChange={(e) => set('binLocation', e.target.value)} /></Field>
+            <Field label="Maximum stock" hint="0 = no limit"><Input type="number" min={0} value={p.maxStock ?? 0} onChange={(e) => set('maxStock', Number(e.target.value))} /></Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="Reorder level"><Input type="number" min={0} value={p.reorderLevel} onChange={(e) => set('reorderLevel', Number(e.target.value))} /></Field>
               <Field label="Reorder qty"><Input type="number" min={0} value={p.reorderQty} onChange={(e) => set('reorderQty', Number(e.target.value))} /></Field>
@@ -185,6 +187,17 @@ export function ProductEditPage() {
             <Field label="Tax rate %" hint="Blank = business default"><Input inputMode="decimal" value={p.taxRateBp === null || p.taxRateBp === undefined ? '' : p.taxRateBp / 100} onChange={(e) => set('taxRateBp', e.target.value === '' ? null : Math.round(Number(e.target.value) * 100))} /></Field>
           </div>
           {can('products.cost') && p.prices?.retail && p.costCents ? <p className="mt-2 text-xs text-ink-500">Margin {Math.round(((p.prices.retail - p.costCents) / p.prices.retail) * 100)}% (before tax)</p> : null}
+          <div className="mt-3 grid gap-3 sm:grid-cols-4">
+            <Field label="Minimum price" hint="Lower needs a manager at the till"><MoneyInput value={p.minPriceCents} onChange={(v) => set('minPriceCents', v)} /></Field>
+            {(locs.data?.branches.length ?? 0) > 1 && can('prices.manage') && (locs.data!.branches as any[]).map((b) => {
+              const cur = (p.branchPrices ?? []).find((x: any) => String(x.branchId) === b._id);
+              return (
+                <Field key={b._id} label={`${b.name} price`} hint="Blank = same as everywhere">
+                  <MoneyInput value={cur?.retail ?? null} onChange={(v) => set('branchPrices', [...(p.branchPrices ?? []).filter((x: any) => String(x.branchId) !== b._id), ...(v !== null ? [{ branchId: b._id, retail: v }] : [])])} />
+                </Field>
+              );
+            })}
+          </div>
           {caps.modules.includes('bulkDiscounts') && (
             <div className="mt-4">
               <div className="label">Quantity price tiers (price per base unit)</div>

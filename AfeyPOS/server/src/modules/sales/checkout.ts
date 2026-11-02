@@ -196,7 +196,10 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     if (l.unitPriceCents !== undefined && l.unitPriceCents !== unitPrice && promised.get(String(product._id)) === l.unitPriceCents) {
       unitPrice = l.unitPriceCents;
     } else if (l.unitPriceCents !== undefined && l.unitPriceCents !== unitPrice) {
-      await authz.require('sales.price.override', `price change on ${product.name}`);
+      // Below the product's minimum price needs someone who sets prices (one approval covers it).
+      const min = product.minPriceCents ? Math.round(product.minPriceCents * unit.factor) : 0;
+      if (min && l.unitPriceCents < min) await authz.require('prices.manage', `selling ${product.name} below its minimum price`);
+      else await authz.require('sales.price.override', `price change on ${product.name}`);
       unitPrice = l.unitPriceCents;
     }
     const gross = lineAmount(lineQty, unitPrice);

@@ -70,6 +70,18 @@ const productSchema = new Schema(
     minAge: { type: Number, default: 18 },
     soldByWeight: { type: Boolean, default: false },
     plu: String,
+    /** How it is sold (unit, weight, volume, length, area, pack, multi_uom, variants); set by the product wizard. */
+    sellingMethod: { type: String, enum: ['unit', 'weight', 'volume', 'length', 'area', 'pack', 'multi_uom', 'variants'] },
+    /** Lowest price per base unit the till may sell at; going lower needs a manager (prices.manage). */
+    minPriceCents: { type: Number, default: null },
+    /** Branch-specific base-unit prices; override the product's prices at that branch's tills. */
+    branchPrices: { type: [{ branchId: { type: ObjectId, ref: 'Branch', required: true }, retail: Number, wholesale: Number, _id: false }], default: [] },
+    maxStock: { type: Number, default: 0 },
+    /** Shelf / bin location in the store, e.g. "A3-2". */
+    binLocation: String,
+    supplierId: { type: ObjectId, ref: 'Supplier' },
+    /** Shelf label and scale label preferences. */
+    label: { copies: { type: Number, default: 1 }, showPrice: { type: Boolean, default: true }, template: String },
     parentId: { type: ObjectId, ref: 'Product' },
     variantAttributes: { type: Schema.Types.Mixed },
     active: { type: Boolean, default: true },

@@ -13,9 +13,24 @@ export interface PriceQuote {
   unitFactor: number;
 }
 
-function basePrice(product: ProductDoc, list: PriceListKey): number | null {
+function basePrice(product: ProductDoc, list: PriceListKey, branchId?: Types.ObjectId | null): number | null {
+  const branch = branchPriceOf(product, list, branchId);
+  if (branch !== null) return branch;
   const p = (product.prices ?? {}) as Record<string, number | null | undefined>;
   return p[list] ?? null;
+}
+
+/** This branch's own base-unit price for the list (retail/wholesale), or null. */
+function branchPriceOf(product: ProductDoc, list: PriceListKey, branchId?: Types.ObjectId | null): number | null {
+  if (!branchId || (list !== 'retail' && list !== 'wholesale')) return null;
+  const bp = (product.branchPrices ?? []).find((b) => String(b.branchId) === String(branchId));
+  const v = bp?.[list];
+  return typeof v === 'number' ? v : null;
+}
+
+/** True when this branch has its own price for the list (it then wins over unit prices set for all branches). */
+function hasBranchPrice(product: ProductDoc, list: PriceListKey, branchId?: Types.ObjectId | null) {
+  return branchPriceOf(product, list, branchId) !== null;
 }
 
 /**
@@ -40,9 +55,10 @@ export async function quotePrice(opts: {
   const { product, priceList } = opts;
   const unit = resolveUnit(product, opts.unitCode);
   const baseQty = opts.qty * unit.factor;
-  const fromUnit = (list: PriceListKey) => unit.prices[list] ?? null;
+  // A branch's own base price replaces the all-branch unit prices there (carton = branch price x 24).
+  const fromUnit = (list: PriceListKey) => (hasBranchPrice(product, list, opts.branchId) ? null : unit.prices[list] ?? null);
   const fromBase = (list: PriceListKey) => {
-    const b = basePrice(product, list);
+    const b = basePrice(product, list, opts.branchId);
     return b === null ? null : Math.round(b * unit.factor);
   };
   const listPrice = fromUnit(priceList) ?? fromBase(priceList) ?? fromUnit('retail') ?? fromBase('retail') ?? 0;

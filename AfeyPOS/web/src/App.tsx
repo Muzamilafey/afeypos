@@ -20,6 +20,7 @@ import { RolesPage } from './pages/settings/Roles';
 import { PurchasingPage } from './pages/sales/Purchasing';
 import { DocumentsPage } from './pages/sales/Documents';
 import { ProductEditPage, ProductsPage } from './pages/inventory/Products';
+import { ProductWizardPage } from './pages/inventory/ProductWizard';
 import { AdjustmentsPage, LabelsPage, MovementsPage, StockLevelsPage, StocktakesPage, TransfersPage } from './pages/inventory/Inventory';
 import { PartiesPage, PartyDetailPage } from './pages/parties/Parties';
 import { AuditPage, ExpensesPage, MpesaPage, OnlinePaymentsPage, PromotionsPage, ReportsPage, RepairsPage } from './pages/Finance';
@@ -71,6 +72,8 @@ export function App() {
         <Route path="repairs" element={<Gate module="repairs"><RepairsPage /></Gate>} />
         <Route path="products" element={<Gate perm="products.read"><ProductsPage /></Gate>} />
         <Route path="products/import" element={<Gate perm="products.manage"><ImportProductsPage /></Gate>} />
+        <Route path="products/new" element={<Gate perm="products.manage"><ProductWizardPage /></Gate>} />
+        <Route path="products/new/classic" element={<Gate perm="products.manage"><ProductEditPage /></Gate>} />
         <Route path="products/:id" element={<Gate perm="products.read"><ProductEditPage /></Gate>} />
         <Route path="inventory" element={<Gate perm="inventory.read"><StockLevelsPage /></Gate>} />
         <Route path="inventory/receive" element={<Gate perm="inventory.receive" module="inventory"><ReceiveStockPage /></Gate>} />

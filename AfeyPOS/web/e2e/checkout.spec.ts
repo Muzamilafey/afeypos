@@ -25,11 +25,31 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
 
   await page.getByRole('link', { name: 'Products', exact: true }).click();
   await page.getByRole('button', { name: 'New product' }).click();
+  // The product wizard: name, how it sells, units, pricing, SKU, stock, hardware, review.
+  const next = () => page.getByRole('button', { name: 'Next' }).click();
   await page.getByLabel('Name', { exact: true }).fill('Fresh milk 500ml');
-  await page.getByLabel('SKU / code').fill('MILK500');
+  await next();
+  await expect(page.getByRole('button', { name: /By weight/ })).toBeVisible();
+  await next();
+  await next();
   await page.getByLabel('Selling price').fill('65');
   await page.getByLabel('Cost (per base unit)').fill('48');
+  await expect(page.getByTestId('price-calculator')).toContainText('Margin');
+  await page.getByLabel('Minimum price').fill('40');
+  await page.getByLabel('Selling price').fill('30');
+  await expect(page.getByTestId('price-warnings')).toContainText('below cost');
+  await page.getByLabel('Selling price').fill('65');
+  await next();
+  await page.getByLabel('SKU / code').fill('MILK500');
+  await page.getByLabel('Scan or type a barcode').fill('5901234123457');
+  await page.getByLabel('Scan or type a barcode').press('Enter');
+  await expect(page.getByTestId('wizard-barcodes')).toContainText('Check digit OK');
+  await next();
   await page.getByLabel(/Quantity \(pc\)/).fill('24');
+  await next();
+  await next();
+  await expect(page.getByTestId('wizard-review')).toContainText('MILK500');
+  await page.screenshot({ path: 'test-results/product-wizard.png', fullPage: true });
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Product saved')).toBeVisible();
   await page.screenshot({ path: 'test-results/product.png', fullPage: true });

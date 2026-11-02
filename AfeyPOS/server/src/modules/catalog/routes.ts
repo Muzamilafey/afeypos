@@ -59,6 +59,13 @@ const productSchema = z.object({
   ageRestricted: z.boolean().default(false),
   minAge: z.number().int().min(0).max(30).default(18),
   soldByWeight: z.boolean().default(false),
+  sellingMethod: z.enum(['unit', 'weight', 'volume', 'length', 'area', 'pack', 'multi_uom', 'variants']).nullish(),
+  minPriceCents: positiveCents.nullish(),
+  branchPrices: z.array(z.object({ branchId: objectId, retail: positiveCents.nullish(), wholesale: positiveCents.nullish() })).max(200).default([]),
+  maxStock: z.number().min(0).default(0),
+  binLocation: z.string().trim().max(40).optional(),
+  supplierId: objectId.nullish(),
+  label: z.object({ copies: z.number().int().min(1).max(50), showPrice: z.boolean(), template: z.string().max(40) }).partial().optional(),
   plu: z.string().trim().regex(/^\d{1,6}$/).nullish(),
   parentId: objectId.nullish(),
   variantAttributes: z.record(z.string(), z.string().max(60)).optional(),
@@ -92,7 +99,23 @@ function normalizeProduct(p: ProductInput, caps: { productFields: readonly strin
   if (p.trackBatches && !caps.modules.includes('batchExpiry')) throw badRequest('Enable the batches & expiry module first');
   const attributes = Object.fromEntries(Object.entries(p.attributes).filter(([k]) => (PRODUCT_FIELDS as readonly string[]).includes(k) || k.startsWith('custom_')));
   const trackStock = p.type === 'stock' ? p.trackStock : false;
+  if (new Set(p.branchPrices.map((b) => String(b.branchId))).size !== p.branchPrices.length) throw badRequest('One price per branch');
+  if (p.minPriceCents && p.prices.retail && p.minPriceCents > p.prices.retail) throw badRequest('The minimum price is higher than the retail price');
   return { ...p, units, attributes, trackStock };
+}
+
+/** Friendly duplicate checks before the unique indexes (a PLU "0123" is the same scale item as "123"). */
+async function assertUnique(p: { plu?: string | null; barcodes: { code: string }[]; sku: string }, selfId?: Types.ObjectId) {
+  const not = selfId ? { _id: { $ne: selfId } } : {};
+  if (p.plu) {
+    const other = await Product.findOne({ ...not, plu: { $in: [...new Set([p.plu, String(Number(p.plu))])] } }, { name: 1 }).lean();
+    if (other) throw new AppError(409, 'DUPLICATE_PLU', `PLU ${p.plu} is already used by ${other.name}`);
+  }
+  if (p.barcodes.length) {
+    const codes = p.barcodes.map((b) => b.code);
+    const other = await Product.findOne({ ...not, 'barcodes.code': { $in: codes } }, { name: 1, barcodes: 1 }).lean();
+    if (other) throw new AppError(409, 'DUPLICATE_BARCODE', `Barcode ${other.barcodes.find((b) => codes.includes(b.code))?.code} is already on ${other.name}`);
+  }
 }
 
 
@@ -315,6 +338,7 @@ router.post('/products', requirePermission('products.manage'), async (req, res) 
   const input = parse(createSchema, req.body);
   const { openingStock, ...rest } = input;
   const data = normalizeProduct(rest, req.capabilities!);
+  await assertUnique(data);
   const product = await withTransaction(async () => {
     const [p] = await Product.create([data]);
     for (const os of openingStock ?? []) {
@@ -333,8 +357,10 @@ router.put('/products/:id', requirePermission('products.manage'), async (req, re
   const input = parse(productSchema, req.body);
   const before = await Product.findById(id).lean();
   if (!before) throw notFound('Product');
-  if (JSON.stringify(before.prices) !== JSON.stringify(input.prices) && !req.auth!.permissions.has('prices.manage')) throw badRequest('You need the prices.manage permission to change prices');
+  const priceShape = (x: { prices?: unknown; minPriceCents?: number | null; branchPrices?: { branchId: unknown; retail?: number | null; wholesale?: number | null }[] }) => JSON.stringify([x.prices, x.minPriceCents ?? null, (x.branchPrices ?? []).map((b) => [String(b.branchId), b.retail ?? null, b.wholesale ?? null])]);
+  if (priceShape(before) !== priceShape(input) && !req.auth!.permissions.has('prices.manage')) throw badRequest('You need the prices.manage permission to change prices');
   const data = normalizeProduct(input, req.capabilities!);
+  await assertUnique(data, id);
   // Staff who cannot see cost prices cannot change them either (their editor does not show the cost).
   if (!req.auth!.permissions.has('products.cost')) data.costCents = before.costCents ?? 0;
   if (before.trackSerials !== data.trackSerials || before.trackBatches !== data.trackBatches) {

@@ -12,3 +12,4 @@ export * from './loyalty.js';
 export * from './cash.js';
 export * from './terminals.js';
 export * from './barcodeEngine.js';
+export * from './pricing.js';
