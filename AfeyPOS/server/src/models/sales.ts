@@ -219,10 +219,14 @@ const cashMovementSchema = new Schema(
   {
     shiftId: { type: ObjectId, required: true },
     tillId: ObjectId,
-    type: { type: String, enum: ['float', 'sale', 'refund', 'cash_in', 'cash_out', 'customer_payment', 'expense'], required: true },
+    type: { type: String, enum: ['float', 'sale', 'refund', 'cash_in', 'cash_out', 'drop', 'customer_payment', 'expense'], required: true },
     amountCents: { type: Number, required: true },
     reason: String,
     userId: ObjectId,
+    /** Cash drops: the supervisor who approved and took the cash. */
+    supervisorId: ObjectId,
+    number: String,
+    denominations: Schema.Types.Mixed,
     ref: { type: { type: String }, id: ObjectId, number: String },
     at: { type: Date, default: () => new Date() },
   },

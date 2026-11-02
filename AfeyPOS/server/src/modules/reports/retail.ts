@@ -531,7 +531,7 @@ router.get('/reports/cash-flow', requirePermission('reports.financial'), async (
     Sale.aggregate([{ $match: match }, { $unwind: '$payments' }, { $match: { 'payments.method': { $ne: 'credit' } } }, { $group: { _id: '$payments.method', count: { $sum: 1 }, amountCents: { $sum: '$payments.amountCents' } } }, { $sort: { amountCents: -1 } }]),
     SaleReturn.aggregate([{ $match: returnMatch(p) }, { $group: { _id: '$refundMethod', count: { $sum: 1 }, amountCents: { $sum: '$refundCents' } } }]),
     Expense.aggregate([{ $match: { date: { $gte: p.start, $lt: p.end } } }, { $group: { _id: '$method', count: { $sum: 1 }, amountCents: { $sum: '$amountCents' } } }]),
-    CashMovement.aggregate([{ $match: { at: { $gte: p.start, $lt: p.end }, type: { $in: ['cash_in', 'cash_out'] } } }, { $group: { _id: '$type', count: { $sum: 1 }, amountCents: { $sum: '$amountCents' } } }]),
+    CashMovement.aggregate([{ $match: { at: { $gte: p.start, $lt: p.end }, type: { $in: ['cash_in', 'cash_out', 'drop'] } } }, { $group: { _id: '$type', count: { $sum: 1 }, amountCents: { $sum: '$amountCents' } } }]),
     LedgerEntry.aggregate([{ $match: { partyType: 'supplier', kind: 'payment', at: { $gte: p.start, $lt: p.end } } }, { $group: { _id: null, amountCents: { $sum: { $abs: '$amountCents' } } } }]),
     LedgerEntry.aggregate([{ $match: { partyType: 'customer', kind: 'payment', at: { $gte: p.start, $lt: p.end } } }, { $group: { _id: null, amountCents: { $sum: { $abs: '$amountCents' } } } }]),
   ]);
@@ -547,9 +547,11 @@ router.get('/reports/cash-flow', requirePermission('reports.financial'), async (
     ...(supplierPaid[0] ? [{ what: 'Paid to suppliers', direction: 'out', count: 0, amountCents: supplierPaid[0].amountCents }] : []),
     ...drawer.filter((r) => r._id === 'cash_out').map((r) => ({ what: 'Cash taken out of the till', direction: 'out', count: r.count, amountCents: r.amountCents })),
   ];
+  // Cash drops move money from the tills to the safe: shown, but not money leaving the business.
+  const drops = drawer.find((r) => r._id === 'drop');
   const inCents = sum(inRows);
   const outCents = sum(outRows);
-  send(res, p.format, 'cash-flow', [...inRows, ...outRows], { summary: { inCents, outCents, netCents: inCents - outCents }, byMethod: received });
+  send(res, p.format, 'cash-flow', [...inRows, ...outRows], { summary: { inCents, outCents, netCents: inCents - outCents, droppedToSafeCents: drops ? Math.abs(drops.amountCents) : 0, drops: drops?.count ?? 0 }, byMethod: received });
 });
 
 /** Every delivery of one product: when, from whom, how many and at what cost (the buying price over time). */

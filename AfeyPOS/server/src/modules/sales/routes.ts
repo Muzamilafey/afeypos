@@ -10,7 +10,7 @@ import { notify } from '../notifications/service.js';
 import { denominationsFor, denominationTotalCents, formatMoney, mergeReceipt } from '@afeypos/shared';
 import { checkout, checkoutSchema } from './checkout.js';
 import { mpesaPhoneOf, processReturn, returnPolicy, returnSchema, voidSale, voidSchema } from './returns.js';
-import { checkoutRulesOf, closeShift, hideExpected, openShift, recordCashMovement, shiftSummary } from './shifts.js';
+import { checkoutRulesOf, closeShift, hideExpected, openShift, recordCashDrop, recordCashMovement, shiftSummary } from './shifts.js';
 import { Shift } from '../../models/index.js';
 import { creditNoteAsReceipt, receiptContext, renderReceiptEscPos, renderReceiptHtml, renderReceiptText } from '../hardware/receipt.js';
 import { runAsPlatform } from '../../lib/context.js';
@@ -219,7 +219,7 @@ router.get('/shifts/:id/report', requirePermission('shifts.open'), async (req, r
   <table>${kv('Shift', sh.number)}${kv('Till', till?.name ?? '')}${kv('Cashier', cashier?.name ?? '')}${kv('Opened', new Date(sh.openedAt).toLocaleString('en-KE'))}${closed ? kv('Closed', new Date(sh.closedAt).toLocaleString('en-KE')) : ''}</table>
   <h3>Sales</h3><table>${kv('Sales', `${summary.sales.count} · ${m(summary.sales.totalCents)}`)}${kv('Discounts', m(summary.sales.discountCents))}${kv('Tax', m(summary.sales.taxCents))}${kv('Voids', `${summary.voids.count} · ${m(summary.voids.totalCents)}`)}</table>
   <h3>Payments</h3><table>${Object.entries(summary.paymentsByMethod ?? {}).map(([k, v]: any) => kv(k, m(v.totalCents))).join('') || kv('None', '')}</table>
-  <h3>Cash</h3><table>${kv('Opening float', m(sh.openingFloatCents))}${summary.blind ? '' : kv('Expected in drawer', m(summary.expectedCashCents ?? sh.expectedCashCents))}${closed ? kv('Counted', m(sh.countedCashCents)) : ''}${closed && !summary.blind ? kv('Difference', m(sh.varianceCents)) : ''}</table>
+  <h3>Cash</h3><table>${kv('Opening float', m(sh.openingFloatCents))}${summary.cashMovements?.drop ? kv(`Cash drops (${summary.cashMovements.drop.count})`, m(Math.abs(summary.cashMovements.drop.totalCents))) : ''}${summary.blind ? '' : kv('Expected in drawer', m(summary.expectedCashCents ?? sh.expectedCashCents))}${closed ? kv('Counted', m(sh.countedCashCents)) : ''}${closed && !summary.blind ? kv('Difference', m(sh.varianceCents)) : ''}</table>
   ${countTable(sh.openingDenominations, 'Opening float count')}${countTable(sh.denominations, 'Closing cash count')}
   ${sh.notes ? `<h3>Notes</h3><p>${esc(sh.notes)}</p>` : ''}<p style="margin-top:14px">Cashier signature: ____________</p><p>Supervisor signature: ____________</p></body></html>`);
 });
@@ -227,6 +227,14 @@ router.get('/shifts/:id/report', requirePermission('shifts.open'), async (req, r
 router.post('/shifts/:id/cash', requirePermission('cash.movement'), async (req, res) => {
   const body = parse(z.object({ type: z.enum(['cash_in', 'cash_out']), amountCents: positiveCents.refine((v) => v > 0), reason: z.string().trim().min(2).max(200) }), req.body);
   res.status(201).json({ data: await recordCashMovement(req, idParam(req.params.id), body.type, body.amountCents, body.reason) });
+});
+
+/** Cash drop to the safe or office during the shift: supervisor approval (card, fingerprint or PIN) every time. */
+router.post('/shifts/:id/drop', requirePermission('cash.movement'), async (req, res) => {
+  const body = parse(z.object({ amountCents: positiveCents.refine((v) => v > 0, 'Enter the amount'), overrideToken: z.string().max(2000).optional(), note: z.string().trim().max(200).optional(), denominations: z.record(z.string(), z.number().int().nonnegative()).optional() }), req.body);
+  const m = await recordCashDrop(req, idParam(req.params.id), body.amountCents, body.overrideToken, body.note, body.denominations);
+  const supervisor = await User.findById(m.supervisorId, { name: 1 }).lean();
+  res.status(201).json({ data: { ...m.toObject(), amountCents: -m.amountCents, supervisorName: supervisor?.name ?? null } });
 });
 
 router.post('/shifts/:id/close', requirePermission('shifts.open'), async (req, res) => {

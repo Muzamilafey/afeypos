@@ -11,7 +11,7 @@ import { bridgeConfigured, fingerprint } from '../lib/bridge';
 import { money, mpesaPayer, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
 import { connectRealtime, useRealtime } from '../lib/realtime';
 import { TxnStatus, type TerminalTxn } from './settings/CardTerminals';
-import { openCashDrawer, printHtml, printReceipt } from '../lib/printing';
+import { openCashDrawer, printHtml, printHtmlString, printReceipt } from '../lib/printing';
 import { CashCount, cashCountTotal, type CashCounts } from '../components/CashCount';
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
@@ -226,6 +226,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   // Browse products: everything on sale, a page at a time, searchable and filtered by category.
   // Auto-lock after the set minutes without use (Checkout rules); the sale on screen is kept.
   const [locked, setLocked] = useState(false);
+  const [dropping, setDropping] = useState(false);
   useEffect(() => {
     const minutes = rules.security?.lockAfterMinutes ?? 0;
     if (!minutes) return;
@@ -503,6 +504,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
         .then((ok) => (ok ? toast.success('Cash drawer opened') : toast.error('This computer has no route to the cash drawer: choose its printer in Hardware → This computer.')))
         .catch(toast.error);
     } },
+    ...(shift && can('cash.movement') ? [{ key: 'drop', label: 'Drop cash', icon: 'wallet', tone: 'text-amber-700 bg-amber-50', onClick: () => { setPanel(null); setDropping(true); } }] : []),
     { key: 'display', label: 'Customer display', icon: 'expand', tone: 'text-sky-700 bg-sky-50', onClick: () => { setPanel(null); openCustomerDisplay(); } },
     { key: 'clear', label: 'Clear sale', icon: 'x', tone: 'text-ink-600 bg-ink-100', onClick: () => { setPanel(null); clearCart(active); }, disabled: !cart.lines.length, lock: needsApproval('clear') },
   ];
@@ -635,6 +637,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
         </button>
       </aside>
 
+      {dropping && shift && <CashDropModal shift={shift} tillId={till._id} onClose={() => { setDropping(false); setTimeout(() => searchRef.current?.focus(), 30); }} onDone={() => { pickup.refetch(); }} />}
       {locked && <TillLock name={me!.user.name} onUnlocked={() => { setLocked(false); setTimeout(() => searchRef.current?.focus(), 30); }} />}
       {weighing && counterScale && (
         <WeighModal scale={counterScale} product={weighing} pricePerKgCents={weighing.prices?.retail} onClose={() => { setWeighing(null); searchRef.current?.focus(); }}
@@ -1344,6 +1347,59 @@ export function OverrideModal({ permission, message, onClose, onApproved, title 
         <ErrorBox error={error} />
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Cash drop: the cashier enters the amount taken to the safe; a supervisor approves with staff card, fingerprint
+ * or PIN; the drawer opens, the amount comes off the expected cash and a numbered slip can be printed.
+ */
+function CashDropModal({ shift, tillId, onClose, onDone }: { shift: any; tillId: string; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const { me } = useAuth();
+  const [amount, setAmount] = useState<number | null>(null);
+  const [note, setNote] = useState('');
+  const [approving, setApproving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [done, setDone] = useState<any>(null);
+  const submit = async (token: string) => {
+    setApproving(false);
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ data: any }>(`/shifts/${shift._id}/drop`, { body: { amountCents: amount, note: note.trim() || undefined, overrideToken: token } });
+      setDone(r.data);
+      onDone();
+      openCashDrawer({ tillId, reason: `Cash drop ${r.data.number}` }).catch(() => undefined);
+      toast.success(`Cash drop ${r.data.number}: ${money(r.data.amountCents)} recorded`);
+    } catch (e) { setError(e); } finally { setBusy(false); }
+  };
+  const printSlip = () => {
+    const d = done;
+    const esc = (t: string) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    void printHtmlString(`<!doctype html><html><head><style>@page{size:80mm auto;margin:4mm}body{font:12px monospace;width:72mm}h2{text-align:center;margin:0 0 6px}.r{display:flex;justify-content:space-between}</style></head><body><h2>CASH DROP</h2><div class="r"><span>No.</span><b>${esc(d.number)}</b></div><div class="r"><span>Date</span><span>${esc(new Date(d.at).toLocaleString())}</span></div><div class="r"><span>Shift</span><span>${esc(shift.number)}</span></div><div class="r"><span>Cashier</span><span>${esc(me!.user.name)}</span></div><div class="r"><span>Approved by</span><span>${esc(d.supervisorName ?? '')}</span></div><hr><div class="r" style="font-size:16px"><span>Amount</span><b>${esc(money(d.amountCents))}</b></div>${d.reason ? `<p>${esc(d.reason)}</p>` : ''}<br><p>Cashier: ____________</p><p>Supervisor: ____________</p></body></html>`);
+  };
+  return (
+    <>
+      <Modal open onClose={onClose} title="Drop cash" icon="wallet" subtitle="Cash taken from this drawer to the safe or office. A supervisor approves it." size="sm"
+        footer={done ? <><Button variant="secondary" onClick={printSlip}><Icon name="printer" className="h-4 w-4" />Print slip</Button><Button onClick={onClose}>Done</Button></>
+          : <><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} disabled={!amount || amount <= 0} onClick={() => setApproving(true)}>Continue</Button></>}>
+        {done ? (
+          <div className="space-y-2 text-center" data-testid="drop-done">
+            <PaySuccess amountCents={done.amountCents} title={`Cash drop ${done.number}`} />
+            <p className="text-sm text-ink-600">Approved by {done.supervisorName}. Taken off the cash expected in the drawer.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <Field label="Amount to drop"><MoneyInput autoFocus value={amount} onChange={setAmount} aria-label="Amount to drop" onKeyDown={(e) => { if (e.key === 'Enter' && amount && amount > 0) setApproving(true); }} /></Field>
+            <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Safe drop, bag 12" /></Field>
+            <ErrorBox error={error} />
+          </div>
+        )}
+      </Modal>
+      {approving && amount && <OverrideModal permission="shifts.manage" allowLogin title="Approve cash drop" message={`Cash drop of ${money(amount)} from ${me!.user.name}'s drawer`} onClose={() => setApproving(false)} onApproved={(token) => void submit(token)} />}
+    </>
   );
 }
 

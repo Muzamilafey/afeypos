@@ -103,3 +103,26 @@ test('AI business assistant answers from the business data (built-in answers, no
   await expect(page.getByText('AI provider (owners and administrators)')).toBeVisible();
   await page.screenshot({ path: 'test-results/assistant.png', fullPage: true });
 });
+
+test('drop cash: amount, supervisor approval, recorded and taken off the drawer', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+  await page.goto('/pos');
+  await expect(page.getByLabel('Scan or search products')).toBeVisible();
+  await page.getByRole('button', { name: /more/i }).first().click();
+  await page.getByRole('button', { name: /Drop cash/ }).click();
+  const dlg = page.getByRole('dialog', { name: 'Drop cash' });
+  await dlg.getByLabel('Amount to drop').fill('100');
+  await dlg.getByRole('button', { name: 'Continue' }).click();
+  const appr = page.getByRole('dialog', { name: 'Approve cash drop' });
+  await appr.getByRole('radio', { name: 'Username / email' }).click();
+  await appr.getByLabel('Username or email').fill('amina@mandera.test');
+  await appr.getByLabel('PIN or password').fill('Mandera2026');
+  await appr.getByRole('button', { name: 'Confirm' }).click();
+  await expect(page.getByTestId('drop-done')).toContainText(/Cash drop DRP-/);
+  await page.screenshot({ path: 'test-results/cash-drop.png' });
+  await page.getByRole('button', { name: 'Done' }).click();
+});

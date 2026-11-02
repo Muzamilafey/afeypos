@@ -91,6 +91,28 @@ export async function recordCashMovement(req: Request, shiftId: Types.ObjectId, 
   return m;
 }
 
+/**
+ * Cash drop: cash taken from the drawer to the safe or the office during the shift. Always needs a supervisor
+ * (card, fingerprint or PIN), never more than the cash in the drawer; it lowers the expected cash and is
+ * numbered, recorded and audited with who approved it.
+ */
+export async function recordCashDrop(req: Request, shiftId: Types.ObjectId, amountCents: number, overrideToken: string | undefined, note?: string, denominations?: Record<string, number>) {
+  return withTransaction(async () => {
+    const shift = await Shift.findOne({ _id: shiftId, status: 'open' });
+    if (!shift) throw new AppError(409, 'SHIFT_NOT_OPEN', 'Shift is not open');
+    if (String(shift.userId) !== String(req.auth!.userId) && !can(req, 'shifts.manage')) throw forbidden('Not your shift');
+    const supervisorId = await consumeOverride(overrideToken, 'shifts.manage', String(req.tenant!._id), String(req.auth!.userId));
+    if (!supervisorId) throw new AppError(403, 'OVERRIDE_REQUIRED', 'Supervisor approval required: cash drop', { permission: 'shifts.manage' });
+    if (denominations) checkCount(req, amountCents, denominations, 'cash drop');
+    const summary = await shiftSummary(shift._id);
+    if (amountCents > summary.expectedCashCents) throw new AppError(422, 'DROP_MORE_THAN_DRAWER', 'That is more than the cash in the drawer');
+    const number = await nextNumber('cashdrop', 'DRP');
+    const [m] = await CashMovement.create([{ shiftId, tillId: shift.tillId, type: 'drop', amountCents: -amountCents, reason: note || 'Cash drop', userId: req.auth!.userId, supervisorId: new Types.ObjectId(supervisorId), number, denominations }]);
+    await audit(req, { action: 'shift.cash_drop', entity: 'Shift', entityId: shiftId, supervisorId, details: { number, amountCents, note: note ?? null, tillId: shift.tillId ? String(shift.tillId) : null } });
+    return m;
+  });
+}
+
 export async function closeShift(req: Request, shiftId: Types.ObjectId, countedCashCents: number, notes?: string, denominations?: Record<string, number>, overrideToken?: string) {
   const rules = checkoutRulesOf(req).shifts;
   checkCount(req, countedCashCents, denominations, 'counted cash');
