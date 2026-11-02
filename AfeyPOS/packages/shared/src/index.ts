@@ -11,3 +11,4 @@ export * from './banks.js';
 export * from './loyalty.js';
 export * from './cash.js';
 export * from './terminals.js';
+export * from './barcodeEngine.js';

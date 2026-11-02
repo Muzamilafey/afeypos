@@ -61,6 +61,7 @@ describe('inventory catalogue admin', () => {
     expect(ok.products[0]).toMatchObject({ _id: p._id, unitCode: 'pc' });
     const bad = (await cashier.get('/barcodes/verify?code=6001234567890')).body.data;
     expect(bad).toMatchObject({ checkDigitValid: false, products: [] });
-    expect((await cashier.get('/barcodes/verify?code=HELLO-1')).body.data.format).toBe('Code 128 / text');
+    expect((await cashier.get('/barcodes/verify?code=HELLO-1')).body.data.format).toBe('Code 39');
+    expect((await cashier.get('/barcodes/verify?code=hello%231')).body.data.format).toBe('Code 128');
   });
 });

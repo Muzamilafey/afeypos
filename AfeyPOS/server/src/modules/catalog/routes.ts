@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Types } from 'mongoose';
-import { normalizeIsbn, PRICE_LISTS, parseVariableWeightBarcode, PRODUCT_FIELDS, type VariableWeightConfig } from '@afeypos/shared';
+import { decodeScaleBarcode, detectBarcode, gtinAliases, normalizeIsbn, PRICE_LISTS, PRODUCT_FIELDS } from '@afeypos/shared';
+import { scaleFormatsFor } from './barcodes.js';
 import { Brand, Category, CustomerPrice, Product, Promotion, StockLevel, UnitOfMeasure, Warehouse } from '../../models/index.js';
 import { escapeRegex, idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { requireModule, requirePermission } from '../../http/auth.js';
@@ -206,28 +207,22 @@ router.delete('/units/:id', requirePermission('products.manage'), async (req, re
 });
 
 /**
- * Barcode check: is the code well formed (EAN-13, EAN-8, UPC-A check digit), is it a scale barcode, and which
+ * Barcode check: which symbology (EAN-13/8, UPC-A/E, GTIN-14, Code 39/128) and is its check digit right, is it a scale barcode, and which
  * product (and unit) it belongs to. Used by Barcode verify before printing labels or receiving stock.
  */
 router.get('/barcodes/verify', requirePermission('products.read'), async (req, res) => {
   const { code } = parse(z.object({ code: z.string().trim().min(1).max(64) }), req.query);
-  const digits = /^\d+$/.test(code);
-  const gtinOk = (c: string) => {
-    const d = c.split('').map(Number);
-    const check = d.pop()!;
-    const sum = d.reverse().reduce((a, n, i) => a + n * (i % 2 === 0 ? 3 : 1), 0);
-    return (10 - (sum % 10)) % 10 === check;
-  };
-  const format = !digits ? 'Code 128 / text' : code.length === 13 ? 'EAN-13' : code.length === 8 ? 'EAN-8' : code.length === 12 ? 'UPC-A' : code.length === 14 ? 'GTIN-14' : 'Numeric';
-  const checkDigit = digits && [8, 12, 13, 14].includes(code.length) ? gtinOk(code) : null;
-  const isbn = normalizeIsbn(code);
-  const scale = req.capabilities!.modules.includes('weighedItems') ? parseVariableWeightBarcode(code, req.tenant!.settings!.variableWeight as unknown as VariableWeightConfig) : null;
-  const matches = await Product.find({ $or: [{ 'barcodes.code': code }, { sku: code }, { plu: code }, ...(isbn && isbn !== code ? [{ 'barcodes.code': isbn }] : [])] }, { name: 1, sku: 1, barcodes: 1, baseUnit: 1, prices: 1, active: 1 }).limit(5).lean();
+  const info = detectBarcode(code);
+  const isbn = info.isbn ?? normalizeIsbn(code);
+  const scale = decodeScaleBarcode(code, scaleFormatsFor(req));
+  const aliases = gtinAliases(code);
+  const matches = await Product.find({ $or: [{ 'barcodes.code': { $in: [code, ...aliases] } }, { sku: code }, { plu: code }, ...(isbn && isbn !== code ? [{ 'barcodes.code': isbn }] : [])] }, { name: 1, sku: 1, barcodes: 1, baseUnit: 1, prices: 1, active: 1 }).limit(5).lean();
   const scaleProduct = !matches.length && scale ? await Product.findOne({ plu: { $in: [scale.itemCode, String(Number(scale.itemCode))] } }, { name: 1, sku: 1, baseUnit: 1, prices: 1, active: 1 }).lean() : null;
   res.json({ data: {
-    code, format, checkDigitValid: checkDigit, isbn: isbn && isbn !== code ? isbn : null, scale: scale ? { ...scale, product: scaleProduct } : null,
-    products: matches.map((p) => ({ ...p, unitCode: p.barcodes?.find((b) => b.code === code)?.unitCode ?? p.baseUnit })),
-    duplicate: matches.filter((p) => p.barcodes?.some((b) => b.code === code)).length > 1,
+    code, format: info.format, checkDigitValid: info.checkDigitValid, restricted: info.restricted, warnings: info.warnings, gtin13: info.gtin13,
+    isbn: isbn && isbn !== code ? isbn : null, scale: scale ? { ...scale, product: scaleProduct } : null,
+    products: matches.map((p) => ({ ...p, unitCode: p.barcodes?.find((b) => b.code === code || aliases.includes(b.code))?.unitCode ?? p.baseUnit })),
+    duplicate: matches.filter((p) => p.barcodes?.some((b) => b.code === code || aliases.includes(b.code))).length > 1,
   } });
 });
 
@@ -268,14 +263,22 @@ router.get('/products/lookup', requirePermission('products.read'), async (req, r
   const { code, warehouseId } = parse(z.object({ code: z.string().trim().min(1).max(64), warehouseId: objectId.optional() }), req.query);
   let product = await Product.findOne({ 'barcodes.code': code, active: true }).lean();
   let unitCode = product?.barcodes.find((b) => b.code === code)?.unitCode;
-  let weighed: { qty?: number; priceCents?: number } | undefined;
-  if (!product && req.capabilities!.modules.includes('weighedItems')) {
-    const parsed = parseVariableWeightBarcode(code, req.tenant!.settings!.variableWeight as unknown as VariableWeightConfig);
+  if (!product) {
+    // The same GTIN as another scanner sends it (UPC-A with/without the leading 0, UPC-E).
+    const aliases = gtinAliases(code);
+    if (aliases.length) {
+      product = await Product.findOne({ 'barcodes.code': { $in: aliases }, active: true }).lean();
+      unitCode = product?.barcodes.find((b) => aliases.includes(b.code))?.unitCode;
+    }
+  }
+  let weighed: { qty?: number; priceCents?: number; format?: string } | undefined;
+  if (!product) {
+    const parsed = decodeScaleBarcode(code, scaleFormatsFor(req));
     if (parsed) {
       product = await Product.findOne({ plu: String(Number(parsed.itemCode)), active: true }).lean() ?? await Product.findOne({ plu: parsed.itemCode, active: true }).lean();
       if (product) {
         unitCode = product.baseUnit;
-        weighed = parsed.weight !== undefined ? { qty: parsed.weight } : { priceCents: parsed.priceCents };
+        weighed = parsed.weight !== undefined ? { qty: parsed.weight, format: parsed.formatName } : { priceCents: parsed.priceCents, format: parsed.formatName };
       }
     }
   }

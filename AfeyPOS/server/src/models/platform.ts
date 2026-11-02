@@ -31,6 +31,10 @@ const tenantSettingsSchema = new Schema(
       valueType: { type: String, enum: ['weight', 'price'], default: 'weight' },
       valueDecimals: { type: Number, default: 3 },
     },
+    /** Scale label layouts (see ScaleBarcodeFormat in shared); when empty the single variableWeight layout applies. */
+    scaleBarcodeFormats: { type: [Schema.Types.Mixed], default: undefined },
+    /** GS1 restricted-circulation prefix for internal (in-store) EAN-13 codes; default "04". */
+    internalBarcodePrefix: String,
     /** Loyalty program (see LOYALTY_DEFAULTS in shared). */
     loyalty: {
       name: String,

@@ -9,7 +9,7 @@ import { AppError } from '../../lib/errors.js';
  */
 const HQ_OWNED: [RegExp, string][] = [
   [/^\/(products|products-import|categories|brands|promotions|customer-prices)(\/|$)/, 'products, prices and promotions'],
-  [/^\/settings\/(business|modules|users|branches|warehouses|tills|integrations|notifications)(\/|$)/, 'settings, staff, branches and integrations'],
+  [/^\/settings\/(business|scale-barcodes|modules|users|branches|warehouses|tills|integrations|notifications)(\/|$)/, 'settings, staff, branches and integrations'],
   [/^\/suppliers(\/[a-f0-9]{24})?$/, 'suppliers'],
   [/^\/auth\/(password\/change|pin|2fa)(\/|$)/, 'staff passwords and PINs'],
   [/^\/(hr|accounting)(\/|$)/, 'HR, payroll and accounts'],
