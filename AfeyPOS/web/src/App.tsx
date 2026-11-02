@@ -28,6 +28,7 @@ import { SyncPage } from './pages/settings/Sync';
 import { ReceiptSettingsPage } from './pages/settings/Receipts';
 import { CheckoutRulesPage } from './pages/settings/CheckoutRules';
 import { CardTerminalsPage } from './pages/settings/CardTerminals';
+import { CashPaymentsPage, MpesaLogsPage, MpesaReceivedPage } from './pages/PaymentLedgers';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
 import { BarcodeVerifyPage, BrandsPage, CategoriesPage, StockAlertsPage, UnitsPage } from './pages/inventory/Catalog';
 import { ImportProductsPage } from './pages/inventory/ImportProducts';
@@ -97,6 +98,9 @@ export function App() {
         <Route path="reports/:view" element={<Gate module="reports"><ReportsPage /></Gate>} />
         <Route path="expenses" element={<Gate perm="expenses.manage"><ExpensesPage /></Gate>} />
         <Route path="payments/mpesa" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaPage /></Gate>} />
+        <Route path="payments/mpesa/received" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaReceivedPage /></Gate>} />
+        <Route path="payments/mpesa/logs" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaLogsPage /></Gate>} />
+        <Route path="payments/cash" element={<Gate perm="payments.reconcile"><CashPaymentsPage /></Gate>} />
         <Route path="payments/online" element={<Gate perm="payments.reconcile" module="payments"><OnlinePaymentsPage /></Gate>} />
         <Route path="online-orders" element={<Gate perm="orders.manage" module="onlineStore"><OnlineOrdersPage /></Gate>} />
         <Route path="settings/online-shop" element={<Gate perm="settings.manage" module="onlineStore"><StoreSettingsPage /></Gate>} />
