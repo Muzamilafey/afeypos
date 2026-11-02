@@ -115,6 +115,13 @@ export function CheckoutRulesPage() {
           </div>
         </Card>
 
+        <Card title={<span className="flex items-center gap-2"><Icon name="tag" className="h-4 w-4 text-amber-500" />Retail or wholesale</span>}>
+          <div className="divide-y divide-ink-100 dark:divide-ink-800">
+            <Toggle label="Show a Retail / Wholesale switch at checkout" help="Off: every sale at the till uses retail prices (customers set to wholesale still get theirs). On: the cashier can switch a sale to wholesale prices; products without a wholesale price stay at retail." checked={rules.pricing.wholesaleAtTill} onChange={(v) => set('pricing', { wholesaleAtTill: v })} />
+            {rules.pricing.wholesaleAtTill && <Toggle label="Wholesale needs a supervisor" help="A supervisor approves wholesale sales on the till (staff card + PIN, fingerprint or email + PIN)." checked={rules.pricing.wholesaleNeedsApproval} onChange={(v) => set('pricing', { wholesaleNeedsApproval: v })} />}
+          </div>
+        </Card>
+
         <Card title={<span className="flex items-center gap-2"><Icon name="users" className="h-4 w-4 text-amber-500" />Customer &amp; loyalty at checkout</span>}>
           <p className="mb-2 text-xs text-ink-500">Whether the till collects the buyer's phone number, so loyalty points have an owner. Turned off, the till never asks and sales belong to nobody.</p>
           <div className="grid gap-2 sm:grid-cols-2" data-testid="customer-rules">

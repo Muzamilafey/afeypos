@@ -98,3 +98,27 @@ test('weighing scales: register, verify with a test weight, send prices, weigh a
   await weigh.getByLabel('Weight from the scale').press('Enter');
   await expect(page.getByTestId('cart-total')).toHaveText(/1,000\.00/);
 });
+
+test('checkout rules turn the Retail / Wholesale switch on at the till', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+  await page.goto('/pos');
+  await expect(page.getByLabel('Scan or search products')).toBeVisible();
+  await expect(page.getByTestId('price-list-switch')).toHaveCount(0);
+
+  await page.goto('/settings/checkout-rules');
+  await page.getByLabel('Show a Retail / Wholesale switch at checkout').check({ force: true });
+  await page.getByRole('button', { name: 'Save rules' }).click();
+  await expect(page.getByText('Checkout rules saved')).toBeVisible();
+
+  await page.goto('/pos');
+  const sw = page.getByTestId('price-list-switch');
+  await expect(sw).toBeVisible();
+  await expect(sw.getByRole('button', { name: 'retail' })).toHaveAttribute('aria-pressed', 'true');
+  await sw.getByRole('button', { name: 'wholesale' }).click();
+  await expect(sw.getByRole('button', { name: 'wholesale' })).toHaveAttribute('aria-pressed', 'true');
+  await page.screenshot({ path: 'test-results/pos-wholesale.png' });
+});

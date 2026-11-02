@@ -227,6 +227,8 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   const scaleQ = useQuery({ queryKey: ['till-scale', till._id], queryFn: () => api<{ data: any[] }>('/scales', { query: { tillId: till._id } }).then((r) => r.data), staleTime: 60_000 });
   const counterScale = (scaleQ.data ?? []).find((x) => x.role !== 'label' && x.status === 'verified' && !x.simulated && (x.adapter === 'keyboard' || (x.adapter === 'bridge-serial' && bridgeConfigured())));
   const [weighing, setWeighing] = useState<Product | null>(null);
+  // Retail / Wholesale switch at the till, when the checkout rules allow it.
+  const showWholesale = rules.pricing.wholesaleAtTill && caps.priceLists.includes('wholesale');
   const [browseQ, setBrowseQ] = useState('');
   const [browsePage, setBrowsePage] = useState(1);
   const BROWSE_PER_PAGE = 48;
@@ -524,7 +526,17 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
           <Icon name="cart" className="h-5 w-5 text-brand-500" />
           <h2 className="text-[15px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-white">Transaction lines</h2>
           <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-bold text-brand-600 dark:bg-brand-500/15 dark:text-brand-200">{fmtQty(totals.items)} {totals.items === 1 ? 'ITEM' : 'ITEMS'}</span>
-          {rules.customer.phone !== 'off' && <button type="button" onClick={() => setCustomerOpen(true)} className="ml-auto flex max-w-[45%] items-center gap-1.5 truncate rounded-full bg-ink-50 px-3 py-1 text-xs font-semibold text-ink-600 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300"><Icon name="user" className="h-3.5 w-3.5" /><span className="truncate">{cart.customer ? cart.customer.name : 'Walk-in customer (F4)'}</span></button>}
+          {showWholesale && (
+            <div role="group" aria-label="Price list" className="ml-auto flex rounded-full bg-ink-100 p-0.5 text-xs font-bold dark:bg-ink-800" data-testid="price-list-switch">
+              {(['retail', 'wholesale'] as const).map((pl) => (
+                <button key={pl} type="button" aria-pressed={cart.priceList === pl} onClick={() => { if (cart.priceList !== pl) requoteAll({ ...cart, priceList: pl }); searchRef.current?.focus(); }}
+                  className={cx('rounded-full px-3 py-1 capitalize transition', cart.priceList === pl ? (pl === 'wholesale' ? 'bg-amber-500 text-white' : 'bg-brand-500 text-white') : 'text-ink-600 hover:text-ink-900 dark:text-ink-300')}>
+                  {pl}{pl === 'wholesale' && rules.pricing.wholesaleNeedsApproval ? ' 🔒' : ''}
+                </button>
+              ))}
+            </div>
+          )}
+          {rules.customer.phone !== 'off' && <button type="button" onClick={() => setCustomerOpen(true)} className={cx(showWholesale ? '' : 'ml-auto', 'flex max-w-[45%] items-center gap-1.5 truncate rounded-full bg-ink-50 px-3 py-1 text-xs font-semibold text-ink-600 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300')}><Icon name="user" className="h-3.5 w-3.5" /><span className="truncate">{cart.customer ? cart.customer.name : 'Walk-in customer (F4)'}</span></button>}
           <span className="text-xs font-semibold text-ink-400">{cart.label}</span>
         </div>
         {error ? <div className="px-5 pb-2"><ErrorBox error={error} /></div> : null}

@@ -167,6 +167,11 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
   if (!customer && typedPhone && phoneRule !== 'off') customer = await customerByPhone(typedPhone, rules.customer.createFromPhone, userId);
   const priceList = (input.priceList ?? (customer?.priceList as PriceListKey | undefined) ?? caps.checkout.defaultPriceList) as PriceListKey;
   if (!caps.priceLists.includes(priceList)) throw badRequest(`Price list ${priceList} is not enabled`);
+  // Wholesale chosen at the till (not the customer's own price list, nor a quotation/order already priced) follows the checkout rules.
+  if (input.priceList === 'wholesale' && customer?.priceList !== 'wholesale' && !input.salesDocumentId) {
+    if (!rules.pricing.wholesaleAtTill) throw unprocessable('Wholesale sales are turned off at the till (Settings → Checkout rules)', 'WHOLESALE_OFF');
+    if (rules.pricing.wholesaleNeedsApproval) await authz.require('sales.price.override', 'sell at wholesale prices');
+  }
 
   // ---- price every line ----
   const priced = [];
