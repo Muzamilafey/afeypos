@@ -18,11 +18,12 @@ import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
 import { MpesaPaid, MpesaPanel, needsConfirm, type MpesaAccount } from '../components/MpesaPayment';
 import { CashVisual, MpesaMark, PaySuccess, PrintingVisual } from '../components/PayVisuals';
+import { WeighModal } from '../components/Weigh';
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
   type?: 'stock' | 'service' | 'non_stock'; trackStock?: boolean;
-  taxRateBp: number | null; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>;
+  taxRateBp: number | null; soldByWeight?: boolean; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>;
 }
 interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean }
 interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string }
@@ -222,6 +223,10 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   });
 
   // Browse products: everything on sale, a page at a time, searchable and filtered by category.
+  // The verified counter scale on this till (simulated scales never weigh real sales).
+  const scaleQ = useQuery({ queryKey: ['till-scale', till._id], queryFn: () => api<{ data: any[] }>('/scales', { query: { tillId: till._id } }).then((r) => r.data), staleTime: 60_000 });
+  const counterScale = (scaleQ.data ?? []).find((x) => x.role !== 'label' && x.status === 'verified' && !x.simulated && (x.adapter === 'keyboard' || (x.adapter === 'bridge-serial' && bridgeConfigured())));
+  const [weighing, setWeighing] = useState<Product | null>(null);
   const [browseQ, setBrowseQ] = useState('');
   const [browsePage, setBrowsePage] = useState(1);
   const BROWSE_PER_PAGE = 48;
@@ -252,6 +257,11 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
 
   const addProduct = useCallback(async (product: Product, opts: { unitCode?: string; qty?: number; priceCents?: number } = {}) => {
     setError(null);
+    // Weighed items go on this till's scale first (unless a scale label already carried the weight or price).
+    if (product.soldByWeight && counterScale && opts.qty === undefined && opts.priceCents === undefined && (opts.unitCode ?? product.baseUnit) === product.baseUnit) {
+      setWeighing(product);
+      return;
+    }
     const c0 = currentCart();
     const unitCode = opts.unitCode ?? product.baseUnit;
     const existing = c0.lines.find((l) => l.product._id === product._id && l.unitCode === unitCode && !product.trackSerials && opts.qty === undefined && opts.priceCents === undefined);
@@ -271,8 +281,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     } catch (e) {
       setError(e);
     }
-     
-  }, [quote, update]);
+  }, [quote, update, counterScale]);
 
   const lookupAndAdd = async (code: string) => {
     try {
@@ -588,6 +597,10 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
         </button>
       </aside>
 
+      {weighing && counterScale && (
+        <WeighModal scale={counterScale} product={weighing} pricePerKgCents={weighing.prices?.retail} onClose={() => { setWeighing(null); searchRef.current?.focus(); }}
+          onAdd={(kg) => { const p = weighing; setWeighing(null); addProduct(p, { qty: kg }); searchRef.current?.focus(); }} />
+      )}
       {panel?.kind === 'line' && selected && (
         <LineModal line={selected} focus={panel.focus} allowFraction={caps.checkout.allowFractionalQty && selected.product.allowFractional} canDiscount={can('sales.discount')}
           onClose={() => { setPanel(null); searchRef.current?.focus(); }} onSave={(patch) => { setLine(selected.key, patch); setPanel(null); searchRef.current?.focus(); }} onRemove={() => { removeLine(selected.key); setPanel(null); }} />

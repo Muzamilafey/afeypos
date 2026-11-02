@@ -65,6 +65,7 @@ const productSchema = z.object({
   maxStock: z.number().min(0).default(0),
   binLocation: z.string().trim().max(40).optional(),
   supplierId: objectId.nullish(),
+  scaleIds: z.array(objectId).max(50).optional(),
   label: z.object({ copies: z.number().int().min(1).max(50), showPrice: z.boolean(), template: z.string().max(40) }).partial().optional(),
   plu: z.string().trim().regex(/^\d{1,6}$/).nullish(),
   parentId: objectId.nullish(),

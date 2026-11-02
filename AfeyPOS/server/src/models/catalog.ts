@@ -80,6 +80,8 @@ const productSchema = new Schema(
     /** Shelf / bin location in the store, e.g. "A3-2". */
     binLocation: String,
     supplierId: { type: ObjectId, ref: 'Supplier' },
+    /** Label scales this product is sent to (when a scale only takes assigned products). */
+    scaleIds: { type: [ObjectId], default: undefined },
     /** Shelf label and scale label preferences. */
     label: { copies: { type: Number, default: 1 }, showPrice: { type: Boolean, default: true }, template: String },
     parentId: { type: ObjectId, ref: 'Product' },

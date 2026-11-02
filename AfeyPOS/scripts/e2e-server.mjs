@@ -26,6 +26,8 @@ const child = spawn(process.execPath, [path.join(root, 'server', 'dist', 'server
   env: {
     ...process.env,
     NODE_ENV: 'development',
+    // The whole suite signs in more often than one shop's tills would.
+    AUTH_RATE_LIMIT: '1000',
     DEPLOYMENT_MODE: process.env.E2E_MODE ?? 'local',
     PORT: port,
     HOST: '127.0.0.1',

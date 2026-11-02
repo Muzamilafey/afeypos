@@ -398,6 +398,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'storeStudio', label: 'Store studio', path: '/settings/store-studio', icon: 'sparkles', module: 'onlineStore', permission: 'settings.manage', group: 'admin' },
   { key: 'integrations', label: 'Integrations', path: '/settings/integrations', icon: 'plug', permission: 'integrations.manage', group: 'admin' },
   { key: 'hardware', label: 'Hardware', path: '/settings/hardware', icon: 'printer', module: 'hardware', permission: 'hardware.manage', group: 'admin' },
+  { key: 'weighingScales', label: 'Weighing scales', path: '/settings/hardware/scales', icon: 'activity', module: 'hardware', permission: 'hardware.manage', group: 'admin' },
 ];
 
 export function navigationFor(caps: Pick<Capabilities, 'modules'>, permissions: ReadonlySet<Permission>): NavItem[] {

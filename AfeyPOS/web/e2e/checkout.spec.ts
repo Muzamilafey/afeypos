@@ -26,7 +26,7 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await page.getByRole('link', { name: 'Products', exact: true }).click();
   await page.getByRole('button', { name: 'New product' }).click();
   // The product wizard: name, how it sells, units, pricing, SKU, stock, hardware, review.
-  const next = () => page.getByRole('button', { name: 'Next' }).click();
+  const next = () => page.getByRole('button', { name: 'Next', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('Fresh milk 500ml');
   await next();
   await expect(page.getByRole('button', { name: /By weight/ })).toBeVisible();

@@ -125,6 +125,14 @@ export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
       if (!cfg.scale) throw Object.assign(new Error('Scale not configured'), { status: 404 });
       return readScale(cfg.scale);
     },
+    /** Tare/zero only with the command from the scale's manual; otherwise the cashier presses the key on the scale. */
+    'POST /scale/tare': async (b) => {
+      if (!cfg.scale) throw Object.assign(new Error('Scale not configured'), { status: 404 });
+      const cmd = b.zero ? cfg.scale.zeroCommand : cfg.scale.tareCommand;
+      if (!cmd) throw Object.assign(new Error(`Press ${b.zero ? 'ZERO' : 'TARE'} on the scale (no command set for this model)`), { status: 409 });
+      await writeSerial(cfg.scale, Buffer.from(cmd.replace(/\\r/g, '\r').replace(/\\n/g, '\n'), 'ascii'));
+      return { ok: true };
+    },
     /** Capture for enrolment: returns a signed template the manager submits to the server. */
     'POST /fingerprint/enroll-capture': async (b) => {
       const dev = cfg.biometricDevice;

@@ -52,6 +52,8 @@ const schema = z.object({
   UPLOAD_DIR: z.string().default('./data/uploads'),
   BACKUP_DIR: z.string().default('./data/backups'),
   BACKUP_INTERVAL_HOURS: z.coerce.number().default(24),
+  /** Sign-in attempts per address per 15 minutes. */
+  AUTH_RATE_LIMIT: z.coerce.number().int().min(5).default(30),
   BACKUP_RETENTION: z.coerce.number().int().default(14),
   JOBS_ENABLED: bool(true),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),

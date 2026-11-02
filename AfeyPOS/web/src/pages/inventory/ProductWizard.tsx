@@ -78,6 +78,8 @@ export function ProductWizardPage() {
   const [labelCopies, setLabelCopies] = useState('1');
   const [labelPrice, setLabelPrice] = useState(true);
   const [online, setOnline] = useState(false);
+  const [scaleIds, setScaleIds] = useState<string[]>([]);
+  const labelScales = useQuery({ queryKey: ['scales'], queryFn: () => api<{ data: any[] }>('/scales').then((r) => r.data.filter((x) => x.role !== 'counter')), enabled: caps.modules.includes('hardware') });
   const [acceptWarnings, setAcceptWarnings] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -181,7 +183,7 @@ export function ProductWizardPage() {
         branchPrices: Object.entries(branchPrices).filter(([, v]) => v != null).map(([branchId, v]) => ({ branchId, retail: toStored(v) })),
         trackStock: type === 'stock' && trackStock, trackBatches, trackSerials, allowFractional: fractional && !trackSerials, soldByWeight: weighed,
         reorderLevel: Number(reorderLevel) || 0, reorderQty: Number(reorderQty) || 0, maxStock: Number(maxStock) || 0, binLocation: binLocation || undefined,
-        supplierId: supplierId || null, plu: plu || null, label: { copies: Number(labelCopies) || 1, showPrice: labelPrice }, online: online ? { enabled: true } : undefined,
+        supplierId: supplierId || null, plu: plu || null, scaleIds: scaleIds.length ? scaleIds : undefined, label: { copies: Number(labelCopies) || 1, showPrice: labelPrice }, online: online ? { enabled: true } : undefined,
       };
       const wh = warehouseId || defaultWh?._id;
       if (type === 'stock' && Number(openingQty) > 0 && wh) {
@@ -419,6 +421,16 @@ export function ProductWizardPage() {
             <div className="pt-6"><Checkbox label="Show the price on labels" checked={labelPrice} onChange={setLabelPrice} /></div>
             {caps.modules.includes('onlineStore') && <div className="pt-6"><Checkbox label="Sell on the online shop" checked={online} onChange={setOnline} /></div>}
           </div>
+          {plu && (labelScales.data ?? []).length > 0 && (
+            <div className="mt-4">
+              <div className="label">Label scales</div>
+              <div className="flex flex-wrap gap-3">
+                {(labelScales.data ?? []).map((sc) => sc.settings?.syncAll === false
+                  ? <Checkbox key={sc._id} label={sc.name} checked={scaleIds.includes(sc._id)} onChange={(v) => setScaleIds((x) => (v ? [...x, sc._id] : x.filter((y) => y !== sc._id)))} />
+                  : <span key={sc._id} className="text-sm text-ink-500">{sc.name}: gets every PLU</span>)}
+              </div>
+            </div>
+          )}
           {weighed && <p className="mt-3 text-xs text-ink-500">After saving, send the PLU and price to your scales from Hardware → Weighing scales. Scales that cannot be programmed from here get a file for the scale's own software.</p>}
         </Card>
       )}

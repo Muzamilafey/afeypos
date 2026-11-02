@@ -24,7 +24,8 @@ export interface BridgeConfig {
   biometricDevice?: { deviceId: string; deviceKey: string };
   printers: Record<string, PrinterConfig>;
   display?: SerialConfig | null;
-  scale?: SerialConfig | null;
+  /** tareCommand / zeroCommand: the exact text from the scale's manual (e.g. "T\r\n"); leave out if unknown. */
+  scale?: (SerialConfig & { tareCommand?: string; zeroCommand?: string }) | null;
   /** zkteco / secugen / helper need options.helperPath (the vendor helper program, see bridge/helpers). */
   fingerprint?: { vendor: 'simulator' | 'zkteco' | 'secugen' | 'helper'; options?: Record<string, unknown> };
 }

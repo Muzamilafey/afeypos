@@ -13,3 +13,4 @@ export * from './cash.js';
 export * from './terminals.js';
 export * from './barcodeEngine.js';
 export * from './pricing.js';
+export * from './scales.js';

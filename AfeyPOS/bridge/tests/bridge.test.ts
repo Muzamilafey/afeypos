@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { createBridgeServer, hmac } from '../src/server.js';
-import { displayFrame, parseScaleFrame } from '../src/adapters/serial.js';
+import { combineScaleFrames, displayFrame, parseScaleFrame } from '../src/adapters/serial.js';
 import { HelperProcessAdapter, SimulatorAdapter, createFingerprintAdapter } from '../src/adapters/fingerprint.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,9 +109,15 @@ describe('device bridge', () => {
   });
 
   it('parses scale frames and formats pole display text', () => {
-    expect(parseScaleFrame('ST,GS,+  1.250kg')).toEqual({ weightKg: 1.25, stable: true });
+    expect(parseScaleFrame('ST,GS,+  1.250kg')).toEqual({ weightKg: 1.25, stable: true, kind: 'gross' });
     expect(parseScaleFrame('US,GS,+  0.400kg')?.stable).toBe(false);
     expect(parseScaleFrame('  350 g')?.weightKg).toBe(0.35);
+    expect(parseScaleFrame('ST,NT,+  1.000kg')).toEqual({ weightKg: 1, stable: true, kind: 'net' });
+    expect(combineScaleFrames(['ST,GS,+  1.250kg', 'ST,TR,+  0.250kg', 'ST,NT,+  1.000kg'])).toMatchObject({ grossKg: 1.25, tareKg: 0.25, netKg: 1, stable: true });
+    expect(combineScaleFrames(['ST,GS,+  1.250kg', 'ST,NT,+  1.000kg'])).toMatchObject({ tareKg: 0.25, netKg: 1 });
+    expect(combineScaleFrames(['  0.750 kg'])).toMatchObject({ grossKg: 0.75, tareKg: 0, netKg: 0.75 });
+    expect(combineScaleFrames(['US,GS,+  0.400kg'])?.stable).toBe(false);
+    expect(combineScaleFrames(['hello'])).toBeNull();
     expect(displayFrame('Total', 'KES 130.00').length).toBe(41);
   });
 });
