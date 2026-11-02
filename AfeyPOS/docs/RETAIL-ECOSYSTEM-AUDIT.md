@@ -121,3 +121,134 @@ newest-wins replication, single owner per warehouse). The PWA keeps the shell. N
 8. AI Business Assistant.
 
 Each step ships with server tests (and e2e where there is UI) and keeps the existing suites green.
+
+## Deliverables
+
+### New modules
+
+| Module | What it adds |
+|---|---|
+| `server/src/modules/purchasing/intelligence.ts` | Suggested POs, supplier prices per product, supplier performance |
+| `server/src/modules/inventory/remote.ts` | Opening stock entered at HQ for branch servers (applied by the branch) |
+| `server/src/modules/assistant/*` | AI Business Assistant: tools, providers, built-in answers, routes |
+| `packages/shared/src/hardwareCatalog.ts` | Hardware compatibility catalogue |
+
+Pages:
+
+- `web/src/pages/settings/HardwareCentre.tsx`
+- `web/src/pages/CustomerDisplay.tsx`
+- `web/src/pages/Assistant.tsx`
+
+### Existing modules reused and extended
+
+checkout rules, audit, sales checkout, inventory transfers, goods receiving, loyalty, reports (ReportActions
+export), hardware devices, M-Pesa intents, device bridge.
+
+### Database changes
+
+All changes are backward compatible: new optional fields and new collections only.
+
+New fields:
+
+- `Supplier.leadTimeDays`
+- `GoodsReceipt.lines.damagedQty / shortQty / note`
+- `StockTransfer.approvedBy / approvedAt`
+- `AuditLog.origin / seq / sig`
+- `PaymentIntent.lateConfirmedAt`
+- `HardwareDevice.catalogId / manufacturer / model / lastSuccessAt / lastError`
+- `LoyaltyTransaction.kind` adds the value `expire`
+
+New collections:
+
+- `RemoteStockRequest`
+- `AssistantConfig`
+- `AssistantRequest`
+
+New checkout rules:
+
+- `items.maxQtyPerLine`
+- `security.lockAfterMinutes`
+- `transfers.approvalRequired`
+- `pricing.*`
+- `kra.*`
+
+Loyalty setting: `pointsExpireMonths`.
+
+### API endpoints added
+
+**Purchasing**
+
+- `POST /purchase-orders/suggest`
+- `GET /products/:id/supplier-prices`
+- `GET /reports/supplier-performance`
+
+**Stock and audit**
+
+- `POST /inventory/transfers/:id/approve`
+- `GET /audit/verify`
+
+**Till**
+
+- `POST /auth/unlock`
+
+**M-Pesa**
+
+- `POST /payments/intents/:id/recheck`
+
+**Hardware**
+
+- `GET /hardware/catalog`
+- `GET /hardware/health`
+- `POST /hardware/devices/:id/test-result`
+
+**Assistant**
+
+- `GET /assistant/status`
+- `POST /assistant/ask`
+- `GET /assistant/config`
+- `PUT /assistant/config`
+- `GET /assistant/log`
+
+### Permissions
+
+- New: `sales.qty.override` and `assistant.use`.
+- Both are given to branch managers by default; owners and administrators have every permission.
+
+### Environment variables
+
+- No new required variables.
+- Optional: `AUTH_RATE_LIMIT` (sign-ins per 15 minutes, default 30).
+- AI provider keys are entered in the app, not in `.env`.
+
+### Tests
+
+- **Server (vitest):** 349 tests.
+- **Web unit:** 10 tests.
+- **Browser end to end (Playwright):** 27 tests.
+- **Simulated adapters only:** the scale simulator, the terminal simulator and a fake Anthropic client. No real
+  hardware or API calls are made in tests.
+
+### Manual tests that need real devices
+
+Each needs the physical device:
+
+1. **Counter scale.** Test with a known weight (Weighing scales → Test).
+2. **Label scale.** Import the PLU file with the maker's software, then confirm the import.
+3. **Barcode scanner.** Device compatibility → Test, then scan.
+4. **Receipt or label printer.** Use the network test, or print a test page through the device bridge.
+5. **Cash drawer.** Open it from the test, then confirm.
+6. **VFD customer display.** Use the bridge display test.
+7. **Fingerprint readers and bank terminals.** These need the maker's SDK or the provider's integration (see
+   their docs).
+
+### Known limitations
+
+- **Hardware statuses.** No physical device model is marked "verified". The only "verified" entries are the
+  simulators and the software features (browser label printing, the second-screen customer display).
+- **Label scales.** These are not programmed over the maker's own protocol; prices go through a confirmed
+  PLU file.
+- **Forecasting.** Forecasts are statistical (moving averages); there is no machine-learning model yet.
+- **AI assistant.** It reads only through its fixed tools, so a question outside them gets "not available".
+  Net profit needs the accounting P&L.
+- **Head-office stock.** Head office can enter opening stock for branch servers. Other stock changes for a
+  branch server's stores are still made on that branch.

@@ -228,3 +228,44 @@ const backupRecordSchema = new Schema(
   { timestamps: false },
 );
 export const BackupRecord = model('BackupRecord', backupRecordSchema);
+
+/**
+ * AI business assistant settings (one per business). The provider API key is encrypted and never returned.
+ * Ordinary POS work never depends on it.
+ */
+const assistantConfigSchema = new Schema(
+  {
+    enabled: { type: Boolean, default: false },
+    provider: { type: String, enum: ['anthropic', 'openai', 'gemini'], default: 'anthropic' },
+    model: String,
+    keyEnc: { type: String, select: false },
+    /** Questions per user per day, and per business per day. */
+    userDailyLimit: { type: Number, default: 50 },
+    dailyLimit: { type: Number, default: 500 },
+    updatedBy: ObjectId,
+  },
+  { timestamps: true },
+);
+export const AssistantConfig = tenantModel('AssistantConfig', assistantConfigSchema);
+
+/** One question to the assistant: who asked, which tools it used, tokens, and the outcome. */
+const assistantRequestSchema = new Schema(
+  {
+    userId: { type: ObjectId, required: true },
+    question: String,
+    answer: String,
+    mode: { type: String, enum: ['ai', 'builtin'] },
+    provider: String,
+    model: String,
+    tools: { type: [{ name: String, ok: Boolean, error: String, _id: false }], default: [] },
+    inputTokens: Number,
+    outputTokens: Number,
+    ok: Boolean,
+    error: String,
+    at: { type: Date, default: () => new Date() },
+  },
+  { timestamps: false },
+);
+assistantRequestSchema.index({ tenantId: 1, at: -1 });
+assistantRequestSchema.index({ tenantId: 1, userId: 1, at: -1 });
+export const AssistantRequest = tenantModel('AssistantRequest', assistantRequestSchema);

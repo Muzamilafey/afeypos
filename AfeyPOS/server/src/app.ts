@@ -23,6 +23,7 @@ import { hideCostsUnlessPermitted } from './http/costVisibility.js';
 import { catalogRoutes } from './modules/catalog/routes.js';
 import { barcodeRoutes } from './modules/catalog/barcodes.js';
 import { scaleRoutes } from './modules/scales/routes.js';
+import { assistantRoutes } from './modules/assistant/routes.js';
 import { inventoryRoutes } from './modules/inventory/routes.js';
 import { partyRoutes } from './modules/parties/routes.js';
 import { purchasingRoutes } from './modules/purchasing/routes.js';
@@ -161,7 +162,7 @@ export function createApp() {
   // After sign-in: the rule depends on who is asking (owners and administrators are not restricted).
   tenant.use(branchReadOnly);
   tenant.use(hideCostsUnlessPermitted);
-  for (const r of [salesRoutes, documentRoutes, barcodeRoutes, scaleRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, expenseRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, loyaltyRoutes, onlineOrderRoutes, terminalRoutes, locationDeleteRoutes, ledgerRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
+  for (const r of [salesRoutes, documentRoutes, barcodeRoutes, scaleRoutes, assistantRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, expenseRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, loyaltyRoutes, onlineOrderRoutes, terminalRoutes, locationDeleteRoutes, ledgerRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
     tenant.use(r);
   }
   v1.use(tenant);

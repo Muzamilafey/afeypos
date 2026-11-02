@@ -86,3 +86,20 @@ test('device compatibility: honest statuses, guided set-up and a real scan test'
   await expect(health.getByRole('row', { name: /Honeywell/ })).toContainText('Working');
   await page.screenshot({ path: 'test-results/device-compatibility.png', fullPage: true });
 });
+
+test('AI business assistant answers from the business data (built-in answers, no AI provider)', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('link', { name: 'AI Assistant', exact: true }).click();
+  await expect(page.getByText('Built-in answers (no AI set up)')).toBeVisible();
+  await page.getByRole('button', { name: 'Which products are almost out of stock?' }).click();
+  const chat = page.getByTestId('assistant-chat');
+  await expect(chat).toContainText(/reorder level|No product is at or below/);
+  await page.getByLabel('Ask a question').fill('What is my current inventory value?');
+  await page.getByLabel('Ask a question').press('Enter');
+  await expect(chat).toContainText('at cost');
+  await expect(page.getByText('AI provider (owners and administrators)')).toBeVisible();
+  await page.screenshot({ path: 'test-results/assistant.png', fullPage: true });
+});

@@ -11,7 +11,7 @@
  */
 import { Types, type Model } from 'mongoose';
 import {
-  AttendanceRecord, AuditLog, CustomRole, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
+  AssistantConfig, AttendanceRecord, AuditLog, CustomRole, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
   IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
   SalesDocument, SerialItem, Shift, StockAdjustment, StockBatch, StockLevel, StockMovement, Stocktake, StockTransfer, Supplier,
   SupplierQuotation, SupplierReturn, RemoteStockRequest, Tenant, Till, UnitOfMeasure, User, Voucher, LoyaltyTransaction, Warehouse, PaymentTerminal, TerminalTransaction,
@@ -61,6 +61,8 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: Promotion, dir: 'both', field: 'updatedAt' },
   { model: Supplier, dir: 'both', field: 'updatedAt' },
   { model: NotificationTemplate, dir: 'down', field: 'updatedAt' },
+  // AI assistant settings (key encrypted with the shared ENCRYPTION_KEY) so branch servers answer too.
+  { model: AssistantConfig, dir: 'down', field: 'updatedAt' },
   { model: IntegrationConfig, dir: 'down', field: 'updatedAt', downFilter: (b) => ({ $or: [{ branchIds: { $size: 0 } }, { branchIds: { $in: ids(new Set([b.branchId])) } }] }) },
 
   // ---- edited on both sides ----

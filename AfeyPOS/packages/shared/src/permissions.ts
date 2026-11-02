@@ -71,6 +71,7 @@ export const PERMISSIONS = [
   'reports.read',
   'reports.financial',
   'audit.read',
+  'assistant.use',
   'commissions.read',
 ] as const;
 
@@ -106,7 +107,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'purchasing.read',
     'sales.create', 'sales.read', 'sales.read.all', 'sales.discount', 'sales.discount.override', 'sales.price.override', 'sales.void', 'sales.items.remove', 'sales.qty.override', 'vouchers.manage', 'loyalty.manage', 'sales.return', 'returns.approve', 'sales.credit',
     'quotations.manage', 'shifts.open', 'shifts.manage', 'cash.movement', 'payments.reconcile', 'terminals.refund', 'terminals.reconcile', 'expenses.manage',
-    'reports.read', 'commissions.read', 'biometrics.enroll', 'hardware.manage', 'hr.manage', 'crm.manage', 'orders.manage',
+    'reports.read', 'assistant.use', 'commissions.read', 'biometrics.enroll', 'hardware.manage', 'hr.manage', 'crm.manage', 'orders.manage',
   ],
   inventory_manager: [
     'products.read', 'products.manage', 'products.cost', 'inventory.read', 'inventory.adjust', 'inventory.adjust.approve', 'inventory.transfer',
@@ -224,6 +225,7 @@ export const PERMISSION_INFO: Record<Permission, { label: string; group: (typeof
   'reports.read': { label: 'See sales and stock reports', group: 'Reports' },
   'reports.financial': { label: 'See profit, tax and financial reports', group: 'Reports', sensitive: true },
   'audit.read': { label: 'See the audit trail', group: 'Reports', sensitive: true },
+  'assistant.use': { label: 'Ask the AI business assistant (answers only from what the user may see)', group: 'Reports' },
   'commissions.read': { label: 'See commissions', group: 'Reports' },
 };
 

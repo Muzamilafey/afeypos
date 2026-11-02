@@ -375,6 +375,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'reportCashFlow', label: 'Cash Flow Movement', path: '/reports/cash-flow', icon: 'wallet', module: 'reports', permission: 'reports.financial', group: 'reports' },
   { key: 'reportStockAnalysis', label: 'Stock analysis', path: '/reports/stock-analysis', icon: 'trendUp', module: 'reports', permission: 'inventory.read', group: 'reports' },
   { key: 'reportTransfers', label: 'Stock Transfer Report', path: '/reports/stock-transfers', icon: 'chart', module: 'stockTransfers', permission: 'inventory.read', group: 'reports' },
+  { key: 'assistant', label: 'AI Assistant', path: '/assistant', icon: 'sparkles', permission: 'assistant.use', group: 'reports' },
   { key: 'reports', label: 'More reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
   { key: 'expenses', label: 'Expenses', path: '/expenses', icon: 'wallet', module: 'expenses', permission: 'expenses.manage', group: 'finance' },
   { key: 'mpesa', label: 'M-Pesa', path: '/payments/mpesa', icon: 'phone', module: 'mpesa', permission: 'payments.reconcile', group: 'finance' },
