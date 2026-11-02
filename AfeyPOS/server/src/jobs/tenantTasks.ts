@@ -1,4 +1,6 @@
-import { formatMoney } from '@afeypos/shared';
+import { formatMoney, mergeLoyalty } from '@afeypos/shared';
+import { expireLoyaltyPoints } from '../modules/loyalty/service.js';
+import { logger } from '../lib/logger.js';
 import { Customer, LedgerEntry, Sale, Tenant } from '../models/index.js';
 import { enqueue, registerJob } from './queue.js';
 import { runAsPlatform, runInTenant } from '../lib/context.js';
@@ -22,6 +24,7 @@ registerJob('tenants.dailyTasks', async () => {
       if (hour === 9 && t.settings?.creditReminders?.enabled) await enqueue('customers.creditReminders', { day }, { dedupeKey: `credit-reminders:${t._id}:${day}` });
       // Bills that come every month (rent, electricity) are recorded on the day they are due.
       if (hour === 7) await enqueue('expenses.recurring', {}, { dedupeKey: `recurring-expenses:${t._id}:${day}` });
+      if (hour === 2 && mergeLoyalty(t.settings?.loyalty).pointsExpireMonths > 0) await enqueue('loyalty.expire', {}, { dedupeKey: `loyalty-expire:${t._id}:${day}` });
     });
   }
 });
@@ -72,4 +75,11 @@ registerJob('customers.creditReminders', async (_payload, job) => {
     if (!c?.phone || !c.active) continue;
     await notify({ channel: 'sms', to: c.phone, templateKey: 'credit_reminder', data: { business: tenant.name, customer: c.name, balance: formatMoney(c.balanceCents, tenant.settings?.currency ?? 'KES') }, dedupeKey: `credit-reminder:${c._id}:${week}`, ref: { type: 'Customer', id: c._id } });
   }
+});
+
+registerJob('loyalty.expire', async (_payload, job) => {
+  const tenant = await runAsPlatform(() => Tenant.findById(job.tenantId, { settings: 1 }).lean());
+  const months = mergeLoyalty(tenant?.settings?.loyalty).pointsExpireMonths;
+  const r = await expireLoyaltyPoints(months);
+  if (r.points) logger.info({ tenantId: String(job.tenantId), ...r }, 'loyalty points expired');
 });

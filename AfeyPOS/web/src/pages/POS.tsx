@@ -19,6 +19,7 @@ import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
 import { MpesaPaid, MpesaPanel, needsConfirm, type MpesaAccount } from '../components/MpesaPayment';
 import { CashVisual, MpesaMark, PaySuccess, PrintingVisual } from '../components/PayVisuals';
 import { WeighModal } from '../components/Weigh';
+import { openCustomerDisplay, useCustomerDisplayFeed, type DisplayState } from './CustomerDisplay';
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
@@ -223,6 +224,18 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   });
 
   // Browse products: everything on sale, a page at a time, searchable and filtered by category.
+  // Auto-lock after the set minutes without use (Checkout rules); the sale on screen is kept.
+  const [locked, setLocked] = useState(false);
+  useEffect(() => {
+    const minutes = rules.security?.lockAfterMinutes ?? 0;
+    if (!minutes) return;
+    let last = Date.now();
+    const bump = () => { last = Date.now(); };
+    const events = ['pointerdown', 'keydown', 'touchstart', 'wheel'] as const;
+    events.forEach((e) => window.addEventListener(e, bump, true));
+    const t = setInterval(() => { if (Date.now() - last >= minutes * 60_000) setLocked(true); }, 5000);
+    return () => { events.forEach((e) => window.removeEventListener(e, bump, true)); clearInterval(t); };
+  }, [rules.security?.lockAfterMinutes]);
   // The verified counter scale on this till (simulated scales never weigh real sales).
   const scaleQ = useQuery({ queryKey: ['till-scale', till._id], queryFn: () => api<{ data: any[] }>('/scales', { query: { tillId: till._id } }).then((r) => r.data), staleTime: 60_000 });
   const counterScale = (scaleQ.data ?? []).find((x) => x.role !== 'label' && x.status === 'verified' && !x.simulated && (x.adapter === 'keyboard' || (x.adapter === 'bridge-serial' && bridgeConfigured())));
@@ -453,6 +466,16 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   const taxLabel = settings.pricesIncludeTax === false ? 'Tax' : `Tax${settings.defaultTaxRateBp ? ` (${settings.defaultTaxRateBp / 100}%)` : ''}`;
   // Only the ways to pay the owner allows (Checkout rules); a method that is off opens the first allowed one.
   const allowed = (m: string) => paymentMethodAllowed(rules, m);
+  // The customer-facing screen follows the basket, the payment and the finished sale.
+  const displayState = useMemo<DisplayState>(() => {
+    if (lastSale) return { status: 'paid', lines: [], discountCents: 0, taxCents: 0, totalCents: lastSale.totalCents, paidCents: lastSale.totalCents, changeCents: lastSale.changeCents, payment: paymentLabel(([...(lastSale.payments ?? [])].sort((a: any, b: any) => b.amountCents - a.amountCents)[0]?.method) ?? ''), at: Date.now() };
+    return {
+      status: !cart.lines.length ? 'idle' : paying ? 'paying' : 'basket',
+      lines: cart.lines.map((l) => ({ name: l.product.name, qty: l.qty, unit: l.unitCode, unitPriceCents: l.unitPriceCents, totalCents: lineAmount(l.qty, l.unitPriceCents) - l.discountCents, discountCents: l.discountCents })),
+      discountCents: totals.discount, taxCents: totals.tax, totalCents: totals.total, message: paying ? `Paying by ${paymentLabel(paying)}…` : undefined, at: Date.now(),
+    };
+  }, [cart.lines, totals, paying, lastSale]);
+  useCustomerDisplayFeed(displayState);
   const pay = (method: string) => cart.lines.length && !(needsAge && !cart.ageVerified) && setPaying(allowed(method) ? method : rules.paymentMethods[0]);
   const cantPay = !cart.lines.length || (needsAge && !cart.ageVerified);
   // Main tiles: ways to pay and the sale's customer. Editing the sale is under More.
@@ -480,6 +503,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
         .then((ok) => (ok ? toast.success('Cash drawer opened') : toast.error('This computer has no route to the cash drawer: choose its printer in Hardware → This computer.')))
         .catch(toast.error);
     } },
+    { key: 'display', label: 'Customer display', icon: 'expand', tone: 'text-sky-700 bg-sky-50', onClick: () => { setPanel(null); openCustomerDisplay(); } },
     { key: 'clear', label: 'Clear sale', icon: 'x', tone: 'text-ink-600 bg-ink-100', onClick: () => { setPanel(null); clearCart(active); }, disabled: !cart.lines.length, lock: needsApproval('clear') },
   ];
 
@@ -611,6 +635,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
         </button>
       </aside>
 
+      {locked && <TillLock name={me!.user.name} onUnlocked={() => { setLocked(false); setTimeout(() => searchRef.current?.focus(), 30); }} />}
       {weighing && counterScale && (
         <WeighModal scale={counterScale} product={weighing} pricePerKgCents={weighing.prices?.retail} onClose={() => { setWeighing(null); searchRef.current?.focus(); }}
           onAdd={(kg) => { const p = weighing; setWeighing(null); addProduct(p, { qty: kg }); searchRef.current?.focus(); }} />
@@ -766,7 +791,15 @@ function SaleRow({ line, selected, allowFraction, big, onSelect, onChange, onRem
         <div className="text-[15px] font-extrabold uppercase text-ink-900 dark:text-white">{line.product.name}</div>
         <div className="mt-0.5 text-xs font-medium uppercase tracking-wide text-ink-400">SKU: {line.product.sku}{line.promotion && <span className="ml-2 normal-case text-emerald-600">promo</span>}{line.wholesaleQty && <span className="ml-2 normal-case text-amber-600">wholesale price</span>}{line.unitPriceCents !== line.quotedCents && <span className="ml-2 normal-case text-amber-600">price changed</span>}</div>
       </td>
-      <td className="px-3 text-center"><span className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] font-bold uppercase text-ink-600 dark:border-ink-700">{line.unitCode}</span></td>
+      <td className="px-3 text-center" onClick={(e) => e.stopPropagation()}>
+        {line.product.units.length > 1 ? (
+          // Sold in several units (piece, pack, carton...): switch here; the line is re-priced for that unit.
+          <select aria-label={`Unit of ${line.product.name}`} value={line.unitCode} onFocus={onSelect} onChange={(e) => onChange({ unitCode: e.target.value })}
+            className="cursor-pointer rounded-full border border-brand-300 bg-brand-50 px-2 py-1 text-[11px] font-bold uppercase text-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 dark:border-brand-700 dark:bg-brand-500/15 dark:text-brand-200">
+            {line.product.units.map((u) => <option key={u.code} value={u.code}>{u.code}{u.factor !== 1 ? ` (${u.factor} ${line.product.baseUnit})` : ''}</option>)}
+          </select>
+        ) : <span className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] font-bold uppercase text-ink-600 dark:border-ink-700">{line.unitCode}</span>}
+      </td>
       <td className="px-3 text-right font-mono tabular-nums">{money(line.unitPriceCents)}</td>
       <td className="px-3" onClick={(e) => e.stopPropagation()}>
         <div className="mx-auto flex w-fit items-center rounded-full border border-ink-200 bg-white shadow-sm dark:border-ink-700 dark:bg-ink-900">
@@ -1311,6 +1344,39 @@ export function OverrideModal({ permission, message, onClose, onApproved, title 
         <ErrorBox error={error} />
       </div>
     </Modal>
+  );
+}
+
+/** Full-screen lock: only the signed-in cashier's PIN, password or card opens it; others sign in as themselves. */
+function TillLock({ name, onUnlocked }: { name: string; onUnlocked: () => void }) {
+  const { logout } = useAuth();
+  const [secret, setSecret] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const unlock = async () => {
+    if (!secret) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api('/auth/unlock', { body: { secret } });
+      onUnlocked();
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not unlock');
+      setSecret('');
+    } finally { setBusy(false); }
+  };
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Till locked" className="fixed inset-0 z-[200] flex items-center justify-center bg-ink-950/85 backdrop-blur-sm" data-testid="till-lock">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl dark:bg-ink-900">
+        <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-brand-50 text-brand-600 dark:bg-brand-500/15"><Icon name="lock" className="h-7 w-7" /></div>
+        <h2 className="text-lg font-bold">Till locked</h2>
+        <p className="mt-1 text-sm text-ink-500">{name}: enter your PIN or password, or scan your staff card. The sale on screen is kept.</p>
+        <Input autoFocus type="password" className="mt-4 text-center text-lg tracking-widest" aria-label="PIN, password or card" value={secret} onChange={(e) => setSecret(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void unlock(); } }} />
+        {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
+        <Button className="mt-4 w-full" loading={busy} onClick={unlock}>Unlock</Button>
+        <button type="button" className="mt-3 text-xs text-ink-500 underline" onClick={() => logout()}>Not {name}? Sign in as yourself</button>
+      </div>
+    </div>
   );
 }
 

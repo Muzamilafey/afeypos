@@ -139,6 +139,31 @@ router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor 
   res.json({ overrideToken: token, supervisor: { id: sup._id, name: sup.name } });
 });
 
+/**
+ * Unlocks a till that locked itself after a while unused: only the signed-in user's own PIN, password or staff
+ * card does. Someone else must sign in instead (Switch user), so sales stay with the right cashier.
+ */
+router.post('/unlock', authLimiter, authenticate, signedIn('unlocks the till'), async (req, res) => {
+  const body = parse(z.object({ secret: z.string().max(200).optional(), cardCode: z.string().trim().max(40).optional() }).refine((b) => b.secret || b.cardCode, 'Enter your PIN or password, or scan your card'), req.body);
+  const me = await User.findById(req.auth!.userId).select('+passwordHash +pinHash').where({ status: 'active' });
+  if (!me) throw unauthorized();
+  let ok = false;
+  if (body.cardCode) {
+    const holder = await authenticateCard(req, body.cardCode).catch(() => null);
+    ok = Boolean(holder && String(holder._id) === String(me._id));
+  } else if (body.secret) {
+    ok = (me.passwordHash ? await verifyPassword(body.secret, me.passwordHash) : false) || (me.pinHash ? await verifyPassword(body.secret, me.pinHash) : false);
+    // A card scanned into the same box.
+    if (!ok && body.secret.length >= 6) {
+      const holder = await authenticateCard(req, body.secret).catch(() => null);
+      ok = Boolean(holder && String(holder._id) === String(me._id));
+    }
+  }
+  await audit(req, { action: ok ? 'auth.till_unlocked' : 'auth.till_unlock_failed', entity: 'User', entityId: me._id, details: { by: body.cardCode ? 'card' : 'pin/password' } });
+  if (!ok) throw unauthorized(body.cardCode ? 'That card is not yours: sign in as that person instead' : 'Wrong PIN or password');
+  res.json({ ok: true });
+});
+
 /** Exchanges a one-time fingerprint login token (from /biometrics/verify) for a session. */
 router.post('/biometric-login', authLimiter, async (req, res) => {
   const body = parse(z.object({ loginToken: z.string() }), req.body);

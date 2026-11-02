@@ -25,6 +25,7 @@ const programSchema = z.object({
   maxRedeemBp: z.number().int().min(0).max(10000),
   welcomeBonus: z.number().int().min(0).max(1_000_000),
   tierMultipliersBp: z.record(z.string().max(30), z.number().int().min(0).max(100_000)),
+  pointsExpireMonths: z.number().int().min(0).max(120),
 }).partial();
 
 router.get('/loyalty/program', requireModule('loyalty'), requirePermission('customers.read'), async (req, res) => {

@@ -56,6 +56,7 @@ function ProgramForm({ data, onSaved }: { data: { program: LoyaltyProgram; tiers
           <Field label="Fewest points per payment" hint="0 = any amount"><Input inputMode="numeric" value={String(p.minRedeemPoints)} onChange={(e) => set({ minRedeemPoints: Math.max(0, Math.floor(Number(e.target.value) || 0)) })} /></Field>
           <Field label="Most of a sale paid with points (%)"><Input inputMode="decimal" value={pct(p.maxRedeemBp)} onChange={(e) => set({ maxRedeemBp: Math.round(Math.min(100, Math.max(0, Number(e.target.value) || 0)) * 100) })} /></Field>
           <Field label="Welcome bonus (points)" hint="Given once when a customer gets a card"><Input inputMode="numeric" value={String(p.welcomeBonus)} onChange={(e) => set({ welcomeBonus: Math.max(0, Math.floor(Number(e.target.value) || 0)) })} /></Field>
+          <Field label="Points expire after (months)" hint="Points not used this long after being earned expire, oldest first. 0 = never."><Input inputMode="numeric" value={String(p.pointsExpireMonths ?? 0)} onChange={(e) => set({ pointsExpireMonths: Math.max(0, Math.min(120, Math.floor(Number(e.target.value) || 0))) })} /></Field>
         </div>
         <p className="mt-3 rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">Example: a {money(100000)} purchase earns <b>{example} points</b>, worth <b>{money(example * p.pointValueCents)}</b> on the next visit ({((example * p.pointValueCents) / 1000).toFixed(1)}% back).</p>
       </Card>
@@ -143,7 +144,7 @@ function MemberDrawer({ member, program, onClose, onChanged }: { member: any; pr
       toast.success('Points adjusted');
     } catch (e) { setError(e); }
   };
-  const KIND: Record<string, string> = { earn: 'Earned', redeem: 'Paid with', bonus: 'Bonus', adjust: 'Adjusted', reverse: 'Reversed' };
+  const KIND: Record<string, string> = { earn: 'Earned', redeem: 'Paid with', bonus: 'Bonus', adjust: 'Adjusted', reverse: 'Reversed', expire: 'Expired' };
   return (
     <Modal open variant="drawer" size="lg" onClose={onClose} title={member.name} icon="star" subtitle={member.loyaltyCardNo ? `Card ${member.loyaltyCardNo}` : 'No card yet'}>
       <div className="space-y-4">

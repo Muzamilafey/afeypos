@@ -30,6 +30,7 @@ import { ReceiptSettingsPage } from './pages/settings/Receipts';
 import { CheckoutRulesPage } from './pages/settings/CheckoutRules';
 import { CardTerminalsPage } from './pages/settings/CardTerminals';
 import { ScalesPage } from './pages/settings/Scales';
+import { CustomerDisplayPage } from './pages/CustomerDisplay';
 import { CashPaymentsPage, MpesaLogsPage, MpesaReceivedPage } from './pages/PaymentLedgers';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
 import { BarcodeVerifyPage, BrandsPage, CategoriesPage, StockAlertsPage, UnitsPage } from './pages/inventory/Catalog';
@@ -57,6 +58,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/customer-display" element={<CustomerDisplayPage />} />
       <Route path="/register" element={<Navigate to="/setup" replace />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />

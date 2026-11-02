@@ -23,7 +23,7 @@ export async function customerTier(customerId: unknown, tiers: { name?: string |
 }
 
 /** Changes a customer's points and records why. A negative change never takes the balance below zero. */
-export async function changePoints(input: { customerId: unknown; points: number; kind: 'earn' | 'redeem' | 'bonus' | 'adjust' | 'reverse'; saleId?: unknown; saleNumber?: string; branchId?: unknown; note?: string; userId?: unknown }) {
+export async function changePoints(input: { customerId: unknown; points: number; kind: 'earn' | 'redeem' | 'bonus' | 'adjust' | 'reverse' | 'expire'; saleId?: unknown; saleNumber?: string; branchId?: unknown; note?: string; userId?: unknown }) {
   if (!input.points) return null;
   const filter: Record<string, unknown> = { _id: input.customerId };
   if (input.points < 0) filter.loyaltyPoints = { $gte: -input.points };
@@ -84,4 +84,30 @@ export async function refundVoucher(code: string, amountCents: number, saleId: u
     { code: code.trim().toUpperCase(), status: { $ne: 'cancelled' } },
     { $inc: { balanceCents: amountCents }, $set: { status: 'active' }, $pull: { redemptions: { saleId } } },
   );
+}
+
+/**
+ * Points expiry, oldest first: a customer keeps at most the points earned in the last `months` months
+ * (earned, bonus and positive adjustments); anything older and still unspent is written off with a history line.
+ */
+export async function expireLoyaltyPoints(months: number, now = new Date()) {
+  if (!months) return { customers: 0, points: 0 };
+  const cutoff = new Date(now);
+  cutoff.setMonth(cutoff.getMonth() - months);
+  const holders = await Customer.find({ loyaltyPoints: { $gt: 0 } }, { loyaltyPoints: 1 }).lean();
+  let customers = 0;
+  let points = 0;
+  for (const c of holders) {
+    const recent = await LoyaltyTransaction.aggregate([
+      { $match: { customerId: c._id, at: { $gte: cutoff }, points: { $gt: 0 }, kind: { $in: ['earn', 'bonus', 'adjust', 'reverse'] } } },
+      { $group: { _id: null, n: { $sum: '$points' } } },
+    ]);
+    const keep = recent[0]?.n ?? 0;
+    const expire = Math.floor((c.loyaltyPoints ?? 0) - keep);
+    if (expire <= 0) continue;
+    await changePoints({ customerId: c._id, points: -expire, kind: 'expire', note: `Points older than ${months} months expired` });
+    customers++;
+    points += expire;
+  }
+  return { customers, points };
 }
