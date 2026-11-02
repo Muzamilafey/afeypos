@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, newRequestId } from '../lib/api';
 import { dateTime, money, mpesaPayer } from '../lib/format';
-import { Button, cx, ErrorBox, Field, Input, Select, Spinner } from './ui';
+import { Button, cx, ErrorBox, Field, Input, Select } from './ui';
 import { Icon } from './icons';
+import { MpesaMark, MpesaWaiting, PaySuccess } from './PayVisuals';
 
 type Mode = 'stk' | 'paybill' | 'code';
 
@@ -126,7 +127,6 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
     })();
   }, [watchTill, c2bOn, amount, tillId, configId, pending, mine?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const current = modes.find((m) => m.key === mode)!;
   const field = 'h-12 text-base';
 
   return (
@@ -145,9 +145,10 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
 
       <div className="space-y-3 p-4">
         {autoWatch && (
-          <div className="flex flex-wrap items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-100" data-testid="mpesa-watching">
-            <Spinner className="h-4 w-4" />
-            <span>Watching the {mine.accountReference ? 'Paybill' : 'Till'} <b className="tabular-nums">{mine.shortCode}</b>{mine.accountReference ? <> · account <b className="tracking-wider">{mine.accountReference}</b></> : null} for {money(mine.amountCents)}: the customer can just pay, and the sale finishes by itself.</span>
+          <div data-testid="mpesa-watching">
+            <MpesaWaiting compact title="Waiting for payment">
+              {mine.accountReference ? 'Paybill' : 'Till'} <b className="tabular-nums">{mine.shortCode}</b>{mine.accountReference ? <> · Account <b className="tracking-wider">{mine.accountReference}</b></> : null} · <b className="tabular-nums">{money(mine.amountCents)}</b>
+            </MpesaWaiting>
           </div>
         )}
         {!pending && accounts.length > 1 && (
@@ -156,14 +157,14 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
               options={accounts.map((a) => ({ value: a.id, label: `${a.name} · ${a.payTo.type === 'till' ? 'Till' : 'Paybill'} ${a.payTo.number}${a.environment === 'sandbox' ? ' (test)' : ''}` }))} />
           </Field>
         )}
-        {!pending && <p className="text-sm text-ink-500 dark:text-ink-400">{current.hint}</p>}
 
         {pending && mine.source === 'stk' && (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-900/30 dark:text-amber-100"><Spinner className="h-4 w-4" />Waiting for the customer to enter their M-Pesa PIN…
-            <span className="ml-auto flex gap-1">
+          <div>
+            <MpesaWaiting title="Waiting for the customer’s PIN"><b className="tabular-nums">{money(mine.amountCents)}</b>{mine.phone ? <> · {String(mine.phone).replace(/^254/, '0').replace(/(\d{4})\d{3}(\d{3})/, '$1***$2')}</> : null}</MpesaWaiting>
+            <div className="mt-2 flex justify-center gap-1">
               <Button size="sm" variant="ghost" onClick={async () => setIntent((await api<{ data: any }>(`/payments/intents/${mine.id}/query`, { body: {} })).data)}>Check status</Button>
               <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
-            </span>
+            </div>
           </div>
         )}
         {pending && mine.awaiting === 'expected' && (
@@ -179,14 +180,14 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
               )}
               <div><div className="text-xs uppercase opacity-70">Amount</div><div className="text-xl font-semibold tabular-nums">{money(mine.amountCents)}</div></div>
             </div>
-            <div className="flex flex-wrap items-center gap-2 text-sm"><Spinner className="h-4 w-4" />Waiting for the payment to arrive…
-              <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
-            </div>
+            <MpesaWaiting compact title="Waiting for payment" />
+            <div className="flex justify-center"><Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button></div>
           </div>
         )}
         {pending && mine.awaiting === 'verify' && (
-          <div className="flex flex-wrap items-center gap-2 text-sm"><Spinner className="h-4 w-4" />Checking {mine.accountReference} with M-Pesa…
-            <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
+          <div>
+            <MpesaWaiting compact title={<>Checking <span className="font-mono">{mine.accountReference}</span></>} />
+            <div className="flex justify-center"><Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button></div>
           </div>
         )}
 
@@ -243,9 +244,9 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
 export function MpesaPaid({ intent }: { intent: { paidAmountCents?: number; amountCents: number; receiptNumber?: string; payerName?: string; phone?: string } }) {
   const who = mpesaPayer(intent);
   return (
-    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100" role="status" data-testid="mpesa-paid">
-      <div className="font-semibold">M-Pesa payment received: {money(intent.paidAmountCents ?? intent.amountCents)}</div>
-      <div className="mt-0.5">{who ? <>From <b>{who}</b></> : 'From an M-Pesa customer'}{intent.receiptNumber ? <> · Receipt <span className="font-mono">{intent.receiptNumber}</span></> : null}</div>
-    </div>
+    <PaySuccess testId="mpesa-paid" title="Paid with M-Pesa" amountCents={intent.paidAmountCents ?? intent.amountCents} logo={<MpesaMark className="h-8" />}
+      label={`M-Pesa payment received: ${money(intent.paidAmountCents ?? intent.amountCents)}`}>
+      {who ? <b>{who}</b> : 'M-Pesa customer'}{intent.receiptNumber ? <> · <span className="font-mono">{intent.receiptNumber}</span></> : null}
+    </PaySuccess>
   );
 }

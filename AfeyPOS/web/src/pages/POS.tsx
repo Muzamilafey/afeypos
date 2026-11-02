@@ -17,6 +17,7 @@ import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput,
 import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
 import { MpesaPaid, MpesaPanel, type MpesaAccount } from '../components/MpesaPayment';
+import { CashVisual, MpesaMark, PaySuccess, PrintingVisual } from '../components/PayVisuals';
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
@@ -1074,6 +1075,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
               <Field label="Amount"><MoneyInput value={amount} onChange={setAmount} onKeyDown={(e) => { if (e.key === 'Enter' && method !== 'cash' && method !== 'mpesa' && method !== 'gateway') { e.preventDefault(); addPayment(); } }} /></Field>
               {method === 'cash' && (
                 <>
+                  <CashVisual dueCents={Math.min(amount ?? remaining, remaining)} tenderedCents={tendered} />
                   <Field label="Cash received" hint="Enter completes the sale; leave empty for the exact amount"><MoneyInput value={tendered} onChange={setTendered} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onCashEnter(); } }} /></Field>
                   <div className="flex flex-wrap gap-2">{[remaining, ...[50000, 100000, 200000].filter((v) => v > remaining)].slice(0, 4).map((v) => <Button key={v} size="sm" variant="secondary" onClick={() => setTendered(v)}>{money(v)}</Button>)}</div>
                 </>
@@ -1287,6 +1289,8 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
   // eTIMS signs in the background; give it a few seconds so the printed receipt carries the KRA signature.
   const [sale, setSale] = useState<any>(initial);
   const [waited, setWaited] = useState(!initial.etims || initial.etims.status !== 'pending');
+  // The way most of the sale was paid, for the success animation.
+  const paidWith = [...(initial.payments ?? [])].sort((a: any, b: any) => b.amountCents - a.amountCents)[0]?.method as string | undefined;
   useEffect(() => {
     if (waited) return;
     let n = 0;
@@ -1312,15 +1316,24 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
       .catch((e: any) => { drawerOpened.current = false; toast.error(`The cash drawer did not open (${e?.message ?? 'printer not reached'}). Open it with More → Open drawer.`); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  const [printState, setPrintState] = useState<{ state: 'printing' | 'done' | 'browser' | 'failed'; message?: string } | null>(null);
   const print = async () => {
+    setPrintState({ state: 'printing' });
     try {
       // The drawer already opened with the sale: the receipt must not kick it again.
       const how = await printReceipt(sale._id, { tillId, openDrawer: !drawerOpened.current && cashSale });
-      if (how === 'printer') toast.success('Receipt printed');
+      setPrintState({ state: how === 'printer' ? 'done' : 'browser' });
     } catch (e: any) {
+      setPrintState({ state: 'failed', message: `${e?.message ?? 'error'}: used the print window instead` });
       toast.error(`Printer not reached (${e?.message ?? 'error'}): used the print window instead`);
     }
   };
+  // The finished animation stays a moment, then makes room.
+  useEffect(() => {
+    if (!printState || printState.state === 'printing') return;
+    const t = setTimeout(() => setPrintState(null), printState.state === 'failed' ? 8000 : 3500);
+    return () => clearTimeout(t);
+  }, [printState]);
   useEffect(() => {
     if (waited && getWorkstation().autoPrint) print();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1328,9 +1341,11 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
   return (
     <Modal open onClose={onClose} title={`Sale ${sale.number} complete`} size="sm" footer={<Button size="lg" className="w-full" onClick={onClose} autoFocus>New sale</Button>}>
       <div className="text-center">
-        <div className="text-sm text-ink-500">Total</div>
-        <div className="text-3xl font-semibold">{money(sale.totalCents)}</div>
-        {sale.changeCents > 0 && <div className="mt-2 text-xl font-semibold text-emerald-700">Change: {money(sale.changeCents)}</div>}
+        <PaySuccess amountCents={sale.totalCents}
+          title={paidWith === 'mpesa' ? 'Paid with M-Pesa' : paidWith === 'cash' ? 'Paid in cash' : paidWith === 'card' ? 'Paid by card' : 'Paid'}
+          logo={paidWith === 'mpesa' ? <MpesaMark className="h-8" /> : undefined}>
+          {sale.changeCents > 0 && <div className="pay-pop mt-1 text-xl font-semibold text-emerald-700" style={{ animationDelay: '0.45s' }}>Change: {money(sale.changeCents)}</div>}
+        </PaySuccess>
         {sale.etims && (
           <div className="mt-2 text-xs">
             {sale.etims.status === 'signed'
@@ -1341,8 +1356,9 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
         )}
       </div>
       <div className="mt-4 space-y-2">
+        {printState && <PrintingVisual state={printState.state} message={printState.message} />}
         <div className="grid grid-cols-2 gap-2">
-          <Button variant="secondary" onClick={print}><Icon name="printer" className="h-4 w-4" />Print receipt</Button>
+          <Button variant="secondary" disabled={printState?.state === 'printing'} onClick={print}><Icon name="printer" className="h-4 w-4" />Print receipt</Button>
           <Button variant="secondary" aria-expanded={receiptHtml !== null} onClick={() => (receiptHtml !== null ? setReceiptHtml(null) : api<Response>(`/sales/${sale._id}/receipt?format=html`, { raw: true }).then((r) => r.text()).then(setReceiptHtml).catch(toast.error))}><Icon name="eye" className="h-4 w-4" />{receiptHtml !== null ? 'Hide receipt' : 'View receipt'}</Button>
         </div>
         {receiptHtml !== null && <iframe title="Receipt" srcDoc={receiptHtml} sandbox="allow-same-origin" className="h-[50vh] w-full rounded-md border border-ink-100 bg-[#e9ebee] dark:border-ink-800" />}
