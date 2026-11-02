@@ -16,7 +16,7 @@ import { CashCount, cashCountTotal, type CashCounts } from '../components/CashCo
 import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
-import { MpesaPaid, MpesaPanel, type MpesaAccount } from '../components/MpesaPayment';
+import { MpesaPaid, MpesaPanel, needsConfirm, type MpesaAccount } from '../components/MpesaPayment';
 import { CashVisual, MpesaMark, PaySuccess, PrintingVisual } from '../components/PayVisuals';
 
 interface Product {
@@ -911,7 +911,11 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
     const t = setInterval(async () => { try { setStk((await api<{ data: any }>(`/payments/intents/${stk.id}`)).data); } catch { /* keep waiting */ } }, 3000);
     return () => clearInterval(t);
   }, [stk]);
+  // A Till payment matched by amount waits for the cashier's "Continue" (it may be another customer's).
+  const [confirmedIds, setConfirmedIds] = useState<string[]>([]);
+  const confirmedNow = useRef<string | null>(null);
   useEffect(() => {
+    if (stk?.status === 'succeeded' && needsConfirm(stk) && !confirmedIds.includes(stk.id)) return;
     if (stk?.status === 'succeeded' && !payments.some((p) => p.paymentIntentId === stk.id)) {
       const isMpesa = (stk.provider ?? 'mpesa') === 'mpesa';
       const label = isMpesa ? 'M-Pesa' : paymentLabel('gateway', stk.provider);
@@ -922,9 +926,11 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
       toast.success(`${label} payment confirmed: ${money(stk.paidAmountCents ?? stk.amountCents)}${who ? ` from ${who}` : ''}`);
       if (isMpesa) setMpesaDone(stk);
       // The money is in and it covers the sale: finish it and print, with nothing to press (Checkout rules).
-      if (isMpesa && checkoutRules.mpesa.autoComplete && Math.min(free, total) >= total - payments.reduce((a, p) => a + p.amountCents, 0)) autoFinish.current = true;
+      // "Continue" on a found payment finishes the sale, like the automatic completion does.
+      const covers = Math.min(free, total) >= total - payments.reduce((a, p) => a + p.amountCents, 0);
+      if (isMpesa && covers && (checkoutRules.mpesa.autoComplete || confirmedNow.current === stk.id)) autoFinish.current = true;
     }
-  }, [stk, payments, toast, total, checkoutRules.mpesa.autoComplete]);
+  }, [stk, payments, toast, total, checkoutRules.mpesa.autoComplete, confirmedIds]);
 
   // Completing runs once the confirmed payment is in the list, so the sale carries it.
   const autoFinish = useRef(false);
@@ -1081,7 +1087,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
                 </>
               )}
               {method === 'mpesa' && (
-                <MpesaPanel amount={amount} tillId={till._id} accounts={mpesaAccounts.data ?? []} watchTill={checkoutRules.mpesa.watchTillPayments} intent={stk} setIntent={setStk} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
+                <MpesaPanel confirmedIds={confirmedIds} onConfirm={(i) => { confirmedNow.current = i.id; setConfirmedIds((c) => (c.includes(i.id) ? c : [...c, i.id])); }} amount={amount} tillId={till._id} accounts={mpesaAccounts.data ?? []} watchTill={checkoutRules.mpesa.watchTillPayments} intent={stk} setIntent={setStk} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
                   onUse={(i) => { setMpesaDone(i); setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - (i.allocatedCents ?? 0), remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}${mpesaPayer(i) ? ` · ${mpesaPayer(i)}` : ''}` }]); }} />
               )}
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}

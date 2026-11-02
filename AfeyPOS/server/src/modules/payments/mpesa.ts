@@ -13,7 +13,7 @@ import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
 import { IntegrationConfig, MpesaEvent, PaymentIntent, Tenant, Till, type PaymentIntentDoc } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
-import { requirePermission } from '../../http/auth.js';
+import { assertBranchAccess, requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { safeEqual } from '../../lib/crypto.js';
@@ -372,7 +372,7 @@ router.get('/payments/mpesa/accounts', requirePermission('sales.create'), async 
  * to type, so the payment matches this sale exactly. Buy Goods: matched by amount (see handleC2B).
  */
 router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (req, res) => {
-  const body = parse(z.object({ clientRequestId: z.string().min(8).max(100), amountCents: positiveCents.refine((v) => v >= 100 && v % 100 === 0, 'M-Pesa amounts must be whole shillings'), tillId: objectId, configId: objectId.optional() }), req.body);
+  const body = parse(z.object({ clientRequestId: z.string().min(8).max(100), amountCents: positiveCents.refine((v) => v >= 100 && v % 100 === 0, 'M-Pesa amounts must be whole shillings'), tillId: objectId, configId: objectId.optional(), skipReceipts: z.array(z.string().trim().toUpperCase().max(20)).max(20).optional() }), req.body);
   const existing = await PaymentIntent.findOne({ clientRequestId: body.clientRequestId }).lean();
   if (existing) {
     res.json({ data: presentIntent(existing), replay: true });
@@ -391,6 +391,7 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   const [intent] = await PaymentIntent.create([{
     source: 'c2b', awaiting: 'expected', status: 'pending', clientRequestId: body.clientRequestId, amountCents: body.amountCents,
     accountReference: to.type === 'paybill' ? account : undefined, shortCode: to.number, branchId: till.branchId, tillId: till._id, configId: cfg._id, initiatedBy: req.auth!.userId,
+    ...(body.skipReceipts?.length ? { skipReceipts: body.skipReceipts } : {}),
   }]);
   // Waiting payments that never arrive expire like prompts do.
   const timeout = Math.max(600, req.tenant!.settings?.stkPendingTimeoutSeconds ?? 0);
@@ -400,6 +401,31 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   const paidEarlier = await matchExpectedToReceived(intent).catch((err) => { logger.warn({ err }, 'matching an earlier M-Pesa payment failed'); return false; });
   const fresh = paidEarlier ? (await PaymentIntent.findById(intent._id).lean())! : intent;
   res.status(201).json({ data: { ...presentIntent(fresh), payTo: to } });
+});
+
+/**
+ * "Not this payment": the cashier says a payment the till matched by amount is not this customer's. It goes back to
+ * being an unused payment (for the right sale, or to be found by its code) and this wait ends; the till then waits
+ * again, skipping it.
+ */
+router.post('/payments/intents/:id/not-mine', requirePermission('sales.create'), async (req, res) => {
+  const i = await PaymentIntent.findById(idParam(req.params.id));
+  if (!i || i.source !== 'c2b' || i.awaiting !== 'expected' || i.status !== 'succeeded' || !i.receiptNumber) throw notFound('Matched M-Pesa payment');
+  if (i.tillId) {
+    const till = await Till.findById(i.tillId, { branchId: 1 }).lean();
+    if (till) assertBranchAccess(req, till.branchId);
+  }
+  const receipt = i.receiptNumber;
+  const freed = await PaymentIntent.updateOne({ _id: i._id, status: 'succeeded', allocatedCents: 0 }, { $set: { status: 'cancelled', resultDesc: `Not this customer's payment (${receipt}): put back by the cashier` }, $unset: { receiptNumber: 1 } });
+  if (!freed.modifiedCount) throw unprocessable('This payment is already on a sale', 'MPESA_ALREADY_USED');
+  const cfg = i.configId ? await IntegrationConfig.findById(i.configId, { branchIds: 1 }).lean() : null;
+  const [back] = await PaymentIntent.create([{
+    source: 'c2b', status: 'succeeded', amountCents: i.paidAmountCents ?? i.amountCents, paidAmountCents: i.paidAmountCents ?? i.amountCents, receiptNumber: receipt,
+    phone: i.phone, payerName: i.payerName, transactionDate: i.transactionDate, shortCode: i.shortCode, configId: i.configId, branchId: cfg?.branchIds?.[0], completedAt: i.completedAt ?? new Date(),
+  }]);
+  await MpesaEvent.updateMany({ paymentIntentId: i._id }, { $set: { paymentIntentId: back._id, outcome: 'recorded' } });
+  await audit(req, { action: 'mpesa.match_rejected', entity: 'PaymentIntent', entityId: back._id, details: { receipt, amountCents: back.paidAmountCents } });
+  res.json({ data: { released: true, receipt } });
 });
 
 registerJob('mpesa.expireExpected', async ({ intentId }: { intentId: string }) => {
@@ -637,7 +663,7 @@ export async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: stri
     const waiting = { configId: { $in: await siblingConfigIds(cfg) }, source: 'c2b', awaiting: 'expected', status: 'pending' };
     let expected = billRef ? await PaymentIntent.findOne({ ...waiting, accountReference: billRef }) : null;
     if (!expected && cfg.settings?.type === 'till') {
-      const candidates = await PaymentIntent.find({ ...waiting, amountCents: cents, createdAt: { $gt: new Date(Date.now() - 30 * 60_000) } }).limit(2);
+      const candidates = await PaymentIntent.find({ ...waiting, amountCents: cents, skipReceipts: { $ne: transId }, createdAt: { $gt: new Date(Date.now() - 30 * 60_000) } }).limit(2);
       if (candidates.length === 1) expected = candidates[0];
     }
     try {
@@ -788,7 +814,7 @@ export async function matchExpectedToReceived(expected: PaymentIntentDoc): Promi
   const since = new Date(new Date(expected.createdAt as unknown as Date).getTime() - EARLIER_PAYMENT_WINDOW_MS);
   const filter: Record<string, unknown> = {
     configId: { $in: await siblingConfigIds(cfg) }, source: 'c2b', awaiting: { $exists: false }, status: 'succeeded', allocatedCents: 0,
-    allocatedTo: { $exists: false }, onlineOrderId: { $exists: false }, receiptNumber: { $type: 'string' }, completedAt: { $gte: since },
+    allocatedTo: { $exists: false }, onlineOrderId: { $exists: false }, receiptNumber: { $type: 'string', ...(expected.skipReceipts?.length ? { $nin: expected.skipReceipts } : {}) }, completedAt: { $gte: since },
   };
   if (cfg.settings?.type === 'till') filter.paidAmountCents = expected.amountCents;
   else if (expected.accountReference) filter.accountReference = expected.accountReference;

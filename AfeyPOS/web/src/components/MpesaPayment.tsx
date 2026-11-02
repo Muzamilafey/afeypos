@@ -24,7 +24,10 @@ const MODES: { key: Mode; label: string; hint: string; icon: string }[] = [
  */
 export interface MpesaAccount { id: string; name: string; environment: string; isDefault: boolean; payTo: { type: 'paybill' | 'till'; number: string }; stk: boolean; c2b?: boolean }
 
-export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, intent, setIntent, usedIds, onUse }: {
+/** A payment the till matched by amount only (Buy Goods): the cashier confirms it is this customer's before it counts. */
+export const needsConfirm = (i: any) => Boolean(i && (i.provider ?? 'mpesa') === 'mpesa' && i.status === 'succeeded' && i.source === 'c2b' && i.awaiting === 'expected' && !i.accountReference);
+
+export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, intent, setIntent, usedIds, onUse, confirmedIds = [], onConfirm }: {
   amount: number | null;
   tillId: string;
   /** Every M-Pesa account this till may use; the cashier picks one when there is more than one. */
@@ -35,6 +38,9 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   setIntent: (i: any) => void;
   usedIds: string[];
   onUse: (i: any) => void;
+  /** Payments matched by amount that the cashier already confirmed ("Continue"). */
+  confirmedIds?: string[];
+  onConfirm?: (i: any) => void;
 }) {
   const [chosenMode, setMode] = useState<Mode>('stk');
   const [accountId, setAccountId] = useState('');
@@ -52,6 +58,33 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   const mine = intent && (intent.provider ?? 'mpesa') === 'mpesa' ? intent : null;
   // The background watch runs quietly beside the normal choices; only a payment the cashier started takes over.
   const watching = useRef<{ amount: number; id: string } | null>(null);
+  // Payments the cashier said are not this customer's: the next wait skips them.
+  const skipped = useRef<string[]>([]);
+  const askConfirm = needsConfirm(mine) && !confirmedIds.includes(mine.id);
+  const notMine = () => call(async () => {
+    const receipt = mine.receiptNumber;
+    await api(`/payments/intents/${mine.id}/not-mine`, { body: {} });
+    if (receipt) skipped.current = [...skipped.current, receipt];
+    // Wait again: the watch restarts by itself; a manual wait is started again here.
+    const manual = !watching.current?.id || watching.current.id !== mine.id;
+    watching.current = null;
+    setIntent(null);
+    if (manual && !watchTill) {
+      setIntent((await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, skipReceipts: skipped.current } })).data);
+    }
+  });
+  // Enter = Continue, wherever the focus is.
+  useEffect(() => {
+    if (!askConfirm) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || e.repeat) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onConfirm?.(mine);
+    };
+    window.addEventListener('keydown', h, true);
+    return () => window.removeEventListener('keydown', h, true);
+  }, [askConfirm, mine?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const autoWatch = Boolean(mine && mine.status === 'pending' && watching.current?.id && watching.current.id === mine.id);
   const pending = mine?.status === 'pending' && !autoWatch;
   const whole = amount !== null && amount % 100 === 0;
@@ -73,7 +106,7 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   });
   const expect = () => call(async () => {
     await stopWatch();
-    setIntent((await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId } })).data);
+    setIntent((await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, skipReceipts: skipped.current.length ? skipped.current : undefined } })).data);
   });
   const lookup = () => call(async () => {
     setFound(null);
@@ -117,7 +150,7 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
       // Drop the previous wait (the cart changed), then wait for the new amount.
       if (started?.id) await api(`/payments/intents/${started.id}/cancel`, { body: {} }).catch(() => undefined);
       try {
-        const r = await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId } });
+        const r = await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, skipReceipts: skipped.current.length ? skipped.current : undefined } });
         watching.current = { amount, id: r.data.id };
         setIntent(r.data);
       } catch {
@@ -231,7 +264,20 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
           </div>
         )}
 
-        {mine && mine.status === 'succeeded' && <MpesaPaid intent={mine} />}
+        {askConfirm && (
+          <div className="space-y-3" data-testid="mpesa-confirm">
+            <PaySuccess title="M-Pesa payment found" amountCents={mine.paidAmountCents ?? mine.amountCents} logo={<MpesaMark className="h-8" />}>
+              {mpesaPayer(mine) ? <b>{mpesaPayer(mine)}</b> : 'M-Pesa customer'}{mine.receiptNumber ? <> · <span className="font-mono">{mine.receiptNumber}</span></> : null}
+              {mine.transactionDate || mine.completedAt ? <div className="text-xs">Paid {dateTime(mine.transactionDate ?? mine.completedAt)}</div> : null}
+            </PaySuccess>
+            <p className="text-center text-sm text-ink-600 dark:text-ink-300">Is this the customer’s payment?</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button variant="secondary" className="h-12" loading={busy} onClick={notMine}>Not this payment</Button>
+              <Button className="h-12" autoFocus onClick={() => onConfirm?.(mine)}><Icon name="check" className="h-4 w-4" />Continue<kbd className="ml-2 rounded border border-white/40 px-1.5 py-0.5 text-[10px] font-semibold">Enter</kbd></Button>
+            </div>
+          </div>
+        )}
+        {mine && mine.status === 'succeeded' && !askConfirm && <MpesaPaid intent={mine} />}
         {mine && ['failed', 'cancelled', 'expired'].includes(mine.status) && <ErrorBox error={`M-Pesa ${mine.status}: ${mine.resultDesc ?? ''}. Nothing was taken; try again or use another method.`} />}
         {amount !== null && !whole && <p className="text-xs text-amber-600">M-Pesa accepts whole shillings only.</p>}
         <ErrorBox error={error} />

@@ -45,4 +45,24 @@ describe('the customer paid the Till before the cashier chose M-Pesa', () => {
     await pay(330, 2);
     expect((await wait(33000)).body.data.status).toBe('pending');
   });
+
+  it('"Not this payment": it goes back unused, the next wait skips it, and another payment is still found', async () => {
+    const wrong = await pay(440, 1);
+    const first = await wait(44000);
+    expect(first.body.data).toMatchObject({ status: 'succeeded', receiptNumber: wrong });
+    const r = await t.client.post(`/payments/intents/${first.body.data.id}/not-mine`, {});
+    expect(r.body.data).toMatchObject({ released: true, receipt: wrong });
+    // Back as an unused payment with its receipt (for the right sale, or to be found by its code).
+    const back = (await t.client.get(`/payments/intents?q=${wrong}`)).body.data;
+    expect(back).toHaveLength(1);
+    expect(back[0]).toMatchObject({ status: 'succeeded', allocatedCents: 0, receiptNumber: wrong });
+    // Waiting again, skipping it: not offered again.
+    const again = await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 44000, tillId: till, skipReceipts: [wrong] });
+    expect(again.body.data.status).toBe('pending');
+    // The customer's own payment arrives: matched to the wait.
+    const right = await pay(440);
+    expect((await t.client.get(`/payments/intents/${again.body.data.id}`)).body.data).toMatchObject({ status: 'succeeded', receiptNumber: right });
+    // A payment already used on a sale cannot be put back.
+    expect((await t.client.post(`/payments/intents/${back[0].id}/not-mine`, {})).status).toBe(404);
+  });
 });

@@ -179,8 +179,10 @@ if (-not $SkipFirewall) {
 
 Step 'Waiting for the server to start'
 $ok = $false
-for ($i = 0; $i -lt 30; $i++) {
-  try { $h = Invoke-RestMethod "http://127.0.0.1:$usePort/health" -TimeoutSec 2; if ($h.status -eq 'ok') { $ok = $true; break } } catch { Start-Sleep -Seconds 2 }
+# The first start after an upgrade updates the database indexes (and a branch server's first sync): up to 3 minutes.
+$until = (Get-Date).AddMinutes(3)
+while ((Get-Date) -lt $until) {
+  try { $h = Invoke-RestMethod "http://127.0.0.1:$usePort/health" -TimeoutSec 3; if ($h.status -eq 'ok') { $ok = $true; break } } catch { Start-Sleep -Seconds 3 }
 }
 if ($ok) {
   Write-Host "`nAfey POS is running." -ForegroundColor Green
@@ -188,5 +190,14 @@ if ($ok) {
   if ($useMode -eq 'branch') { Write-Host "Open http://localhost:$usePort on this computer, or $url on other tills. Within a minute the business, staff and products arrive from head office: sign in with your head-office accounts." }
   else { Write-Host "Open http://localhost:$usePort on this computer, or $url on other tills, and create the owner account." }
 } else {
-  Write-Warning "The server did not answer yet. Check: Get-ScheduledTaskInfo AfeyPOS, and docs/TROUBLESHOOTING.md"
+  Write-Warning "The server did not answer within 3 minutes. What it said:"
+  # Show the reason right here: the keeper's log and the end of the server's last error output.
+  $logs = Join-Path $InstallDir 'logs'
+  Get-Content (Join-Path $logs 'keeper.log') -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  keeper: $_" }
+  $err = Get-ChildItem $logs -Filter 'server-*.log.err' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+  if ($err) { Get-Content $err.FullName -Tail 25 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  server: $_" -ForegroundColor Yellow } }
+  $out = Get-ChildItem $logs -Filter 'server-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+  if ($out) { Get-Content $out.FullName -Tail 10 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  server: $_" } }
+  Write-Host "  Database service: $((Get-Service AfeyMongoDB -ErrorAction SilentlyContinue).Status)"
+  Write-Host "  It may still be starting: try  irm http://localhost:$usePort/health  in a minute. More: installer\windows\status.ps1"
 }

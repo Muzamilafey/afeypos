@@ -27,6 +27,8 @@ const paymentIntentSchema = new Schema(
      *  verify   = the cashier entered a receipt code and we asked Safaricom (Transaction Status API).
      */
     awaiting: { type: String, enum: ['expected', 'verify'] },
+    /** Payments the cashier said are not this customer's ("Not this payment"): never matched to this wait again. */
+    skipReceipts: { type: [String], default: undefined },
     originatorConversationId: String,
     conversationId: String,
     /** Gateway intents: our reference sent to the provider, the provider's own id, and the hosted checkout URL. */
