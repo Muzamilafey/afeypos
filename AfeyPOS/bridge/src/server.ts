@@ -89,7 +89,8 @@ export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
       biometricDevicePaired: Boolean(cfg.biometricDevice?.deviceId),
     }),
     'POST /print/raw': async (b) => {
-      const printer = cfg.printers[b.printer ?? 'receipt'];
+      // A configured printer by name, or (labels) any printer installed on this PC by its system name.
+      const printer = b.systemPrinter ? parsePrinter({ type: 'system', name: String(b.systemPrinter) }) : cfg.printers[b.printer ?? 'receipt'];
       if (!printer) throw Object.assign(new Error('Printer not configured'), { status: 404 });
       await printRaw(printer, Buffer.from(String(b.base64), 'base64'));
       return { ok: true };

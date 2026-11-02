@@ -24,6 +24,11 @@ export const printsDirectly = () => ['bridge', 'network', 'server'].includes(pri
 /** Prints an HTML page through a hidden frame (no pop-up window). With --kiosk-printing it prints silently. */
 export async function printHtml(path: string) {
   const html = await api<Response>(path, { raw: true }).then((r) => r.text());
+  return printHtmlString(html);
+}
+
+/** Prints ready-made HTML (e.g. labels) through a hidden frame: the browser's print window opens on this page. */
+export async function printHtmlString(html: string) {
   const frame = document.createElement('iframe');
   frame.setAttribute('aria-hidden', 'true');
   frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';

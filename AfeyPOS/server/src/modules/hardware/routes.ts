@@ -209,16 +209,50 @@ router.post('/hardware/printers/local/test', requirePermission('sales.create'), 
   res.json({ ok: true });
 });
 
+const labelItems = z.array(z.object({
+  name: z.string().max(60), price: z.string().max(20), unit: z.string().max(40).optional(),
+  barcode: z.string().regex(/^[A-Za-z0-9-]{1,40}$/), copies: z.number().int().min(1).max(500).default(1),
+})).min(1).max(500);
+
+/** 50 x 30 mm labels in ZPL (Zebra, 203 dpi) or TSPL (TSC, Xprinter...). */
+function labelPayload(language: 'zpl' | 'tspl', items: z.infer<typeof labelItems>) {
+  const clean = (s: string) => s.replace(/[\^~"\\]/g, '');
+  return items.map((i) =>
+    language === 'zpl'
+      ? `^XA^CI28^PW400^LL240^FO20,15^A0N,26,26^FD${clean(i.name)}^FS${i.unit ? `^FO20,45^A0N,20,20^FD${clean(i.unit)}^FS` : ''}^FO20,${i.unit ? 68 : 50}^A0N,34,34^FD${clean(i.price)}^FS^FO20,110^BY2^BCN,60,Y,N,N^FD${i.barcode}^FS^PQ${i.copies}^XZ`
+      : `SIZE 50 mm,30 mm\nGAP 2 mm,0\nCLS\nTEXT 20,10,"3",0,1,1,"${clean(i.name)}"\n${i.unit ? `TEXT 20,38,"2",0,1,1,"${clean(i.unit)}"\n` : ''}TEXT 20,${i.unit ? 58 : 45},"4",0,1,1,"${clean(i.price)}"\nBARCODE 20,100,"128",60,1,0,2,2,"${i.barcode}"\nPRINT ${i.copies}\n`,
+  ).join('\n');
+}
+
 /** Label data in ZPL or TSPL for label printers (browser labels are rendered client-side). */
 router.post('/hardware/labels', requirePermission('products.read'), async (req, res) => {
-  const body = parse(z.object({ language: z.enum(['zpl', 'tspl']), items: z.array(z.object({ name: z.string().max(60), price: z.string().max(20), barcode: z.string().regex(/^[A-Za-z0-9-]{1,40}$/), copies: z.number().int().min(1).max(500).default(1) })).min(1).max(500) }), req.body);
-  const clean = (s: string) => s.replace(/[\^~"\\]/g, '');
-  const out = body.items.map((i) =>
-    body.language === 'zpl'
-      ? `^XA^CI28^FO20,20^A0N,28,28^FD${clean(i.name)}^FS^FO20,60^A0N,36,36^FD${clean(i.price)}^FS^FO20,110^BY2^BCN,60,Y,N,N^FD${i.barcode}^FS^PQ${i.copies}^XZ`
-      : `SIZE 50 mm,30 mm\nGAP 2 mm,0\nCLS\nTEXT 20,10,"3",0,1,1,"${clean(i.name)}"\nTEXT 20,45,"4",0,1,1,"${clean(i.price)}"\nBARCODE 20,90,"128",60,1,0,2,2,"${i.barcode}"\nPRINT ${i.copies}\n`,
-  );
-  res.json({ data: { language: body.language, payload: out.join('\n') } });
+  const body = parse(z.object({ language: z.enum(['zpl', 'tspl']), items: labelItems }), req.body);
+  res.json({ data: { language: body.language, payload: labelPayload(body.language, body.items) } });
+});
+
+/** Prints labels from the server: to a printer installed on the Afey POS computer, or to a network label printer. */
+router.post('/hardware/labels/print', requirePermission('products.read'), async (req, res) => {
+  const body = parse(z.object({ language: z.enum(['zpl', 'tspl']), items: labelItems, localPrinter: z.string().trim().min(1).max(120).optional(), deviceId: objectId.optional() }).refine((b) => Boolean(b.localPrinter) !== Boolean(b.deviceId), 'Choose one printer'), req.body);
+  const data = Buffer.from(labelPayload(body.language, body.items), 'utf8');
+  const count = body.items.reduce((a, i) => a + i.copies, 0);
+  if (body.localPrinter) {
+    if (!serverHasPrinters()) throw new AppError(400, 'USE_BRIDGE', 'The online head-office server has no printers: print through this PC (print window) or its device bridge');
+    await printToLocalPrinter(body.localPrinter, data);
+  } else {
+    const d = await HardwareDevice.findById(body.deviceId).lean();
+    if (!d || d.kind !== 'label_printer') throw notFound('Label printer');
+    if (d.connection !== 'network' || !d.settings?.host) throw badRequest(`${d.name} is not a network printer: print it through this PC or the device bridge`);
+    assertNetworkPrintingAllowed(d.settings.host);
+    await sendRaw(d.settings.host, d.settings.port ?? 9100, data);
+  }
+  await audit(req, { action: 'labels.printed', details: { labels: count, printer: body.localPrinter ?? String(body.deviceId), language: body.language } });
+  res.json({ ok: true, labels: count });
+});
+
+/** Label printers configured under Hardware (for the print panel; no settings beyond name and connection). */
+router.get('/hardware/label-printers', requirePermission('products.read'), async (_req, res) => {
+  const rows = await HardwareDevice.find({ kind: 'label_printer' }, { name: 1, connection: 1, 'settings.labelLanguage': 1 }).sort({ name: 1 }).lean();
+  res.json({ data: rows.map((d) => ({ _id: d._id, name: d.name, connection: d.connection, language: d.settings?.labelLanguage ?? 'zpl', serverCanPrint: d.connection === 'network' && env().DEPLOYMENT_MODE !== 'hq' })) });
 });
 
 export const hardwareRoutes = router;

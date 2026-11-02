@@ -115,3 +115,17 @@ describe('labels per unit', () => {
     expect(look.unitCode).toBe('ctn');
   });
 });
+
+describe('label printing', () => {
+  it('builds ZPL/TSPL with the unit line and checks the chosen printer', async () => {
+    const items = [{ name: 'Juice', unit: 'Carton · 24 pc', price: 'KES 1200.00', barcode: '0400000000015', copies: 2 }];
+    const zpl = (await t.client.post('/hardware/labels', { language: 'zpl', items })).body.data.payload;
+    expect(zpl).toContain('^FDCarton · 24 pc^FS');
+    expect(zpl).toContain('^PQ2');
+    const tspl = (await t.client.post('/hardware/labels', { language: 'tspl', items })).body.data.payload;
+    expect(tspl).toContain('PRINT 2');
+    expect((await t.client.post('/hardware/labels/print', { language: 'zpl', items })).status).toBe(400);
+    expect((await t.client.post('/hardware/labels/print', { language: 'zpl', items, deviceId: '0123456789abcdef01234567' })).status).toBe(404);
+    expect((await t.client.get('/hardware/label-printers')).body.data).toEqual([]);
+  });
+});

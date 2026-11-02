@@ -155,6 +155,12 @@ test('barcode labels list each unit (piece, carton) with its own price and barco
   await rows.getByRole('button', { name: 'Make in-store barcode' }).click();
   await expect(rows).not.toContainText('No barcode for this unit');
   await expect(rows).toContainText(/04\d{11}/);
-  await expect(page.getByRole('button', { name: /Print 2 labels/ })).toBeEnabled();
+  await rows.getByLabel('Copies of Juice 300ml Carton (24)').fill('3');
+  await page.getByRole('button', { name: /Print 4 labels/ }).click();
+  const panel = page.getByTestId('print-labels-panel');
+  await expect(panel.getByLabel('Printer')).toContainText('Print window on this computer');
+  await expect(panel.getByText('Opens the print window')).toBeVisible();
+  await expect(page.frameLocator('iframe[title="Label preview"]').getByText('KES 1200.00')).toBeVisible();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Print 4 labels' })).toBeEnabled();
   await page.screenshot({ path: 'test-results/labels-units.png', fullPage: true });
 });
