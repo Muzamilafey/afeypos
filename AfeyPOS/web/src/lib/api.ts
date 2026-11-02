@@ -2,6 +2,21 @@
  * API client. The access token lives in memory only; the refresh token is an httpOnly cookie.
  * On 401 the client performs one single-flight refresh and retries the request.
  */
+/** "Validation failed" alone helps nobody: name the fields and what is wrong with each. */
+const FIELD_NAMES: Record<string, string> = {
+  barcodes: 'Barcode', sku: 'SKU / code', name: 'Name', prices: 'Price', units: 'Units', costCents: 'Cost', taxRateBp: 'VAT rate', plu: 'Scale PLU code',
+  attributes: 'Extra details', description: 'Description', images: 'Photos', etims: 'KRA eTIMS', contact: 'Contact', email: 'Email', phone: 'Phone',
+  settings: 'Settings', logoFileId: 'Logo', appIcon: 'App icon', tagline: 'Tagline', taxPin: 'KRA PIN', dailyReportEmails: 'Daily report emails',
+  stkPendingTimeoutSeconds: 'M-Pesa prompt timeout', variableWeight: 'Scale barcodes', creditReminders: 'Credit reminders', returns: 'Returns',
+  reorderLevel: 'Reorder level', reorderQty: 'Reorder qty', minOrderQty: 'Minimum order', priceTiers: 'Quantity prices', online: 'Online shop',
+};
+export function withFieldDetails(message: string, details: unknown): string {
+  if (!Array.isArray(details) || !details.length || !details.every((d) => d && typeof d.path === 'string')) return message;
+  const label = (p: string) => p.split('.').filter((x) => !/^\d+$/.test(x)).map((x) => FIELD_NAMES[x] ?? x).filter((x, i, a) => x !== a[i - 1]).slice(-2).join(' › ') || 'Form';
+  const parts = details.slice(0, 4).map((d: any) => `${label(d.path)}: ${d.message}`);
+  return `${message === 'Validation failed' ? 'Please check' : message} — ${parts.join('; ')}${details.length > 4 ? ` (+${details.length - 4} more)` : ''}`;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string, public details?: any) {
     super(message);
@@ -91,7 +106,7 @@ export async function api<T = any>(path: string, opts: RequestOptions = {}): Pro
   const data = text ? (() => { try { return JSON.parse(text); } catch { return text; } })() : null;
   if (!res.ok) {
     const e = data?.error ?? {};
-    throw new ApiError(res.status, e.code ?? 'ERROR', e.message ?? `Request failed (${res.status})`, e.details);
+    throw new ApiError(res.status, e.code ?? 'ERROR', withFieldDetails(e.message ?? `Request failed (${res.status})`, e.details), e.details);
   }
   return data as T;
 }

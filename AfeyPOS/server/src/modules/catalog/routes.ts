@@ -39,7 +39,8 @@ const productSchema = z.object({
   online: z.object({ enabled: z.boolean(), description: z.string().max(2000).optional(), featured: z.boolean().optional(), compareAtCents: z.number().int().min(0).nullable().optional(), badge: z.string().trim().max(20).optional() }).partial().optional(),
   baseUnit: z.string().trim().min(1).max(20).default('pc'),
   units: z.array(unitSchema).max(20).default([]),
-  barcodes: z.array(z.object({ code: z.string().trim().min(3).max(64), unitCode: z.string().trim().min(1).max(20) })).max(50).default([]),
+  // Short in-house codes (e.g. "67") are valid barcodes too: imports accept them, so editing must as well.
+  barcodes: z.array(z.object({ code: z.string().trim().min(1).max(64), unitCode: z.string().trim().min(1).max(20) })).max(50).default([]),
   costCents: positiveCents.default(0),
   prices: priceMap.default({}),
   priceTiers: z.array(z.object({ priceList: z.enum(PRICE_LISTS), minQty: z.number().positive(), priceCents: positiveCents })).max(20).default([]),

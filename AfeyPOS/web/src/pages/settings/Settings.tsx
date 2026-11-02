@@ -929,6 +929,24 @@ export function AccountPage() {
 export { money };
 
 /** Upload the business logo (PNG, JPEG or WEBP) shown on the sign-in and sign-up pages. Saved with the form. */
+/** Draws the picture at most `max` px wide/high and returns PNG (or WEBP when PNG is too big) as base64. */
+async function shrinkImage(file: File, max: number): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => { const i = new Image(); i.onload = () => resolve(i); i.onerror = reject; i.src = url; });
+    const scale = Math.min(1, max / Math.max(img.naturalWidth || max, img.naturalHeight || max));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round((img.naturalWidth || max) * scale));
+    canvas.height = Math.max(1, Math.round((img.naturalHeight || max) * scale));
+    canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+    let data = canvas.toDataURL('image/png');
+    if (data.length > 2_500_000 * 1.37) data = canvas.toDataURL('image/webp', 0.9);
+    return data.split(',')[1]!;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function BusinessLogoField({ fileId, onChange }: { fileId?: string; onChange: (id: string) => void }) {
   const toast = useToast();
   const [preview, setPreview] = useState<string | null>(null);
@@ -942,8 +960,14 @@ function BusinessLogoField({ fileId, onChange }: { fileId?: string; onChange: (i
     return () => { if (url) URL.revokeObjectURL(url); };
   }, [fileId]);
   const upload = async (file: File) => {
-    if (file.size > 3 * 1024 * 1024) return toast.error('The logo must be smaller than 3 MB');
-    const base64 = await new Promise<string>((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1]); r.readAsDataURL(file); });
+    if (!/^image\/(png|jpeg|webp|gif|bmp|svg\+xml)$/.test(file.type)) return toast.error('Choose a picture (PNG, JPEG or WEBP)');
+    // Big photos and logos are shrunk here first (max 1024 px, kept sharp and transparent), so the 3 MB limit never gets in the way.
+    let base64: string;
+    try {
+      base64 = await shrinkImage(file, 1024);
+    } catch {
+      return toast.error('That picture could not be read. Save it as PNG or JPEG and try again.');
+    }
     try {
       const r = await api<{ data: { id: string } }>('/files', { body: { base64, purpose: 'attachment' } });
       onChange(r.data.id);
