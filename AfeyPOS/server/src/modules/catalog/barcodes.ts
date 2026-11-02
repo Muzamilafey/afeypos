@@ -5,7 +5,7 @@ import {
   type ScaleBarcodeFormat, type VariableWeightConfig,
 } from '@afeypos/shared';
 import { Category, Counter, Product, StockLevel, Tenant } from '../../models/index.js';
-import { escapeRegex, objectId, parse } from '../../http/validate.js';
+import { escapeRegex, idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { AppError, badRequest } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
@@ -242,4 +242,28 @@ router.post('/catalog/bulk', requirePermission('products.manage'), async (req, r
   }
   if (!('dryRun' in body) || !body.dryRun) await audit(req, { action: `products.bulk_${body.action}`, entity: 'Product', details: { count: out.filter((o) => !o.result.startsWith('skipped')).length } });
   res.json({ data: out });
+});
+
+/** Gives one unit of a product (piece, pack, carton...) an in-store barcode when it has none, e.g. from Barcode labels. */
+router.post('/products/:id/unit-barcode', requirePermission('products.manage'), async (req, res) => {
+  const { unitCode } = parse(z.object({ unitCode: z.string().trim().min(1).max(20) }), req.body);
+  const p = await Product.findById(idParam(req.params.id));
+  if (!p) throw new AppError(404, 'NOT_FOUND', 'Product not found');
+  if (unitCode !== p.baseUnit && !p.units.some((u) => u.code === unitCode)) throw badRequest(`${p.name} has no unit ${unitCode}`);
+  const existing = p.barcodes.find((b) => b.unitCode === unitCode);
+  if (existing) return void res.json({ data: { code: existing.code, unitCode, created: false } });
+  const prefix = (req.tenant!.settings as { internalBarcodePrefix?: string })?.internalBarcodePrefix ?? INTERNAL_BARCODE_PREFIX;
+  const formats = scaleFormatsFor(req);
+  const e = env();
+  const branch = e.DEPLOYMENT_MODE === 'branch' && e.BRANCH_CODE ? e.BRANCH_CODE.toUpperCase().replace(/[^A-Z0-9]/g, '') : null;
+  let code = '';
+  for (let i = 0; i < 1000 && !code; i++) {
+    const c = await Counter.findOneAndUpdate({ key: branch ? `internal-barcode-${branch}` : 'internal-barcode' }, { $inc: { seq: 1 } }, { upsert: true, new: true });
+    const candidate = branch ? `AFY${branch}${String(c!.seq).padStart(6, '0')}` : internalEan13(c!.seq, prefix, formats);
+    if (!(await barcodeTaken(candidate))) code = candidate;
+  }
+  p.barcodes.push({ code, unitCode });
+  await p.save();
+  await audit(req, { action: 'product.barcode_added', entity: 'Product', entityId: p._id, details: { code, unitCode } });
+  res.status(201).json({ data: { code, unitCode, created: true } });
 });

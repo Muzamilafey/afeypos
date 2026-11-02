@@ -122,3 +122,39 @@ test('checkout rules turn the Retail / Wholesale switch on at the till', async (
   await expect(sw.getByRole('button', { name: 'wholesale' })).toHaveAttribute('aria-pressed', 'true');
   await page.screenshot({ path: 'test-results/pos-wholesale.png' });
 });
+
+test('barcode labels list each unit (piece, carton) with its own price and barcode', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+
+  await page.goto('/products/new');
+  const next = () => page.getByRole('button', { name: 'Next', exact: true }).click();
+  await page.getByLabel('Name', { exact: true }).fill('Juice 300ml');
+  await next();
+  await page.getByRole('button', { name: /Packs & cartons/ }).click();
+  await next();
+  await next();
+  await page.getByLabel('Selling price').fill('50');
+  await next();
+  await page.getByLabel('SKU / code').fill('JUICE300');
+  for (let i = 0; i < 3; i++) await next();
+  await page.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Product saved')).toBeVisible();
+
+  await page.getByRole('link', { name: 'Barcode labels', exact: true }).click();
+  await page.getByLabel('Search or scan product').fill('JUICE300');
+  await page.getByLabel('Search or scan product').press('Enter');
+  const rows = page.getByTestId('label-rows');
+  await expect(rows.getByText('Piece')).toBeVisible();
+  await expect(rows.getByText('Carton (24) (24 pc)')).toBeVisible();
+  await expect(rows).toContainText('1,200.00');
+  await expect(rows).toContainText('No barcode for this unit');
+  await rows.getByRole('button', { name: 'Make in-store barcode' }).click();
+  await expect(rows).not.toContainText('No barcode for this unit');
+  await expect(rows).toContainText(/04\d{11}/);
+  await expect(page.getByRole('button', { name: /Print 2 labels/ })).toBeEnabled();
+  await page.screenshot({ path: 'test-results/labels-units.png', fullPage: true });
+});

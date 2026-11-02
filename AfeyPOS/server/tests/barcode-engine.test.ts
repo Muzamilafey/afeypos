@@ -100,3 +100,18 @@ describe('product dashboard and bulk actions', () => {
     expect((await t.client.get(`/products/${a._id}`)).body.data.prices.retail).toBe(14300);
   });
 });
+
+describe('labels per unit', () => {
+  it('gives a unit without a barcode its own in-store code, once', async () => {
+    const p = await createProduct(t.client, { name: 'Brookside milk', sku: 'BRK-L', prices: { retail: 6500 }, units: [{ code: 'ctn', name: 'Carton', factor: 24, prices: {} }, { code: 'pack', name: 'Pack', factor: 6, prices: { retail: 37000 } }], barcodes: [{ code: '6161100100028', unitCode: 'pc' }] });
+    const a = await t.client.post(`/products/${p._id}/unit-barcode`, { unitCode: 'ctn' });
+    expect(a.status).toBe(201);
+    expect(a.body.data.code).toMatch(/^04\d{11}$/);
+    const again = await t.client.post(`/products/${p._id}/unit-barcode`, { unitCode: 'ctn' });
+    expect(again.body.data).toMatchObject({ code: a.body.data.code, created: false });
+    expect((await t.client.post(`/products/${p._id}/unit-barcode`, { unitCode: 'box' })).status).toBe(400);
+    // Scanning the carton label adds a carton at the till.
+    const look = (await t.client.get(`/products/lookup?code=${a.body.data.code}`)).body.data;
+    expect(look.unitCode).toBe('ctn');
+  });
+});

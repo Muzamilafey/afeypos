@@ -244,27 +244,81 @@ function StocktakeModal({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
+type LabelRow = { key: string; p: any; unitCode: string; unitName: string; factor: number; code: string | null; priceCents: number; copies: number; on: boolean };
+
+/** One label line per unit the product is sold in: its own barcode and its own price (unit price, else base x factor). */
+function labelRows(p: any): LabelRow[] {
+  const base = { code: p.baseUnit, name: p.baseUnit === 'pc' ? 'Piece' : p.baseUnit, factor: 1, prices: {} as Record<string, number | undefined> };
+  const units = [base, ...(p.units ?? []).filter((u: any) => u.code !== p.baseUnit)];
+  return units.map((u: any) => {
+    const own = p.barcodes?.find((b: any) => b.unitCode === u.code)?.code ?? null;
+    return {
+      key: `${p._id}:${u.code}`, p, unitCode: u.code, unitName: u.name || u.code, factor: u.factor,
+      // The base unit can always fall back to the SKU (the till finds it); other units need their own barcode.
+      code: own ?? (u.code === p.baseUnit ? p.sku : null),
+      priceCents: u.prices?.retail ?? Math.round((p.prices?.retail ?? 0) * u.factor),
+      copies: 1, on: true,
+    };
+  });
+}
+
 export function LabelsPage() {
-  const [items, setItems] = useState<{ p: any; copies: number }[]>([]);
+  const toast = useToast();
+  const { can } = useAuth();
+  const [rows, setRows] = useState<LabelRow[]>([]);
   const [error, setError] = useState<unknown>(null);
+  const upd = (key: string, patch: Partial<LabelRow>) => setRows((all) => all.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const add = (p: any) => setRows((all) => [...all.filter((r) => r.p._id !== p._id), ...labelRows(p)]);
+  const makeBarcode = async (r: LabelRow) => {
+    try {
+      const res = await api<{ data: { code: string } }>(`/products/${r.p._id}/unit-barcode`, { body: { unitCode: r.unitCode } });
+      upd(r.key, { code: res.data.code });
+      toast.success(`In-store barcode ${res.data.code} added to ${r.p.name} (${r.unitName})`);
+    } catch (e) { setError(e); }
+  };
+  const printable = rows.filter((r) => r.on && r.code && r.copies > 0);
   const print = () => {
     try {
-      const html = items.flatMap(({ p, copies }) => {
-        const code = p.barcodes?.[0]?.code ?? p.sku;
-        const svg = code128Svg(code, 40, 1.5);
-        return Array.from({ length: copies }, () => `<div class="l"><div class="n">${p.name.replace(/</g, '&lt;')}</div><div class="p">KES ${((p.prices?.retail ?? 0) / 100).toFixed(2)}</div>${svg}<div class="c">${code}</div></div>`);
+      const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      const html = printable.flatMap((r) => {
+        const svg = code128Svg(r.code!, 40, 1.5);
+        const unit = r.factor === 1 ? '' : `<div class="u">${esc(r.unitName)} · ${r.factor} ${esc(r.p.baseUnit)}</div>`;
+        return Array.from({ length: r.copies }, () => `<div class="l"><div class="n">${esc(r.p.name)}</div>${unit}<div class="p">KES ${(r.priceCents / 100).toFixed(2)}</div>${svg}<div class="c">${esc(r.code!)}</div></div>`);
       }).join('');
       const w = window.open('', '_blank');
-      w!.document.write(`<!doctype html><html><head><title>Labels</title><style>@page{size:50mm 30mm;margin:0}body{margin:0;font:10px sans-serif}.l{width:50mm;height:30mm;padding:2mm;box-sizing:border-box;page-break-after:always;text-align:center;overflow:hidden}.n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.p{font-size:14px;font-weight:700}svg{max-width:100%;height:10mm}.c{font-size:8px}</style></head><body>${html}<script>onload=()=>print()</script></body></html>`);
+      w!.document.write(`<!doctype html><html><head><title>Labels</title><style>@page{size:50mm 30mm;margin:0}body{margin:0;font:10px sans-serif}.l{width:50mm;height:30mm;padding:2mm;box-sizing:border-box;page-break-after:always;text-align:center;overflow:hidden}.n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.u{font-size:8px;font-weight:600;text-transform:uppercase}.p{font-size:14px;font-weight:700}svg{max-width:100%;height:9mm}.c{font-size:8px}</style></head><body>${html}<script>onload=()=>print()</script></body></html>`);
       w!.document.close();
     } catch (e) { setError(e); }
   };
+  const products = [...new Map(rows.map((r) => [r.p._id, r.p])).values()];
   return (
-    <div className="max-w-3xl">
-      <PageHeader title="Shelf labels & barcodes" subtitle="Prints 50 × 30 mm Code 128 labels from the browser. ZPL/TSPL output is available through the hardware API." actions={<Button onClick={print} disabled={!items.length}><Icon name="printer" className="h-4 w-4" />Print labels</Button>} />
+    <div className="max-w-4xl">
+      <PageHeader title="Shelf labels & barcodes" subtitle="Prints 50 × 30 mm Code 128 labels from the browser: one line per unit the product is sold in (piece, pack, carton). ZPL/TSPL output is available through the hardware API."
+        actions={<Button onClick={print} disabled={!printable.length}><Icon name="printer" className="h-4 w-4" />Print {printable.reduce((a, r) => a + r.copies, 0) || ''} labels</Button>} />
       <Card>
-        <ProductPicker onPick={(p) => setItems([...items, { p, copies: 1 }])} />
-        <ul className="mt-3 divide-y divide-ink-100 dark:divide-ink-800">{items.map((it, i) => <li key={i} className="flex items-center gap-2 py-2 text-sm"><span className="flex-1">{it.p.name}</span><Input className="w-20" type="number" min={1} value={it.copies} onChange={(e) => setItems(items.map((x, j) => (j === i ? { ...x, copies: Number(e.target.value) } : x)))} aria-label="Copies" /><Button variant="ghost" onClick={() => setItems(items.filter((_, j) => j !== i))}><Icon name="x" className="h-4 w-4" /></Button></li>)}</ul>
+        <ProductPicker onPick={add} />
+        <div className="mt-3 space-y-3" data-testid="label-rows">
+          {products.map((p) => (
+            <div key={p._id} className="rounded-lg border border-ink-100 dark:border-ink-800">
+              <div className="flex items-center justify-between border-b border-ink-100 px-3 py-2 dark:border-ink-800">
+                <span className="font-medium">{p.name}</span>
+                <Button size="sm" variant="ghost" aria-label={`Remove ${p.name}`} onClick={() => setRows((all) => all.filter((r) => r.p._id !== p._id))}><Icon name="x" className="h-4 w-4" /></Button>
+              </div>
+              <ul className="divide-y divide-ink-100 dark:divide-ink-800">
+                {rows.filter((r) => r.p._id === p._id).map((r) => (
+                  <li key={r.key} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+                    <Checkbox label={r.factor === 1 ? `${r.unitName}` : `${r.unitName} (${r.factor} ${p.baseUnit})`} checked={r.on} onChange={(v) => upd(r.key, { on: v })} />
+                    <span className="font-semibold tabular-nums">{money(r.priceCents)}</span>
+                    {r.code ? <span className="font-mono text-xs text-ink-500">{r.code}</span>
+                      : <span className="flex items-center gap-2 text-xs text-amber-700">No barcode for this unit{can('products.manage') && <Button size="sm" variant="secondary" onClick={() => makeBarcode(r)}>Make in-store barcode</Button>}</span>}
+                    <span className="flex-1" />
+                    <Input className="w-20" type="number" min={0} value={r.copies} onChange={(e) => upd(r.key, { copies: Math.max(0, Number(e.target.value) || 0) })} aria-label={`Copies of ${p.name} ${r.unitName}`} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
         <ErrorBox error={error} />
       </Card>
     </div>
