@@ -447,8 +447,8 @@ export function PurchasingPage({ tab }: { tab: Tab }) {
         toast.success(`Purchase order ${r.data.number} created`);
         setPoId(r.data._id);
       } else {
-        const r = await api<{ data: any }>('/goods-receipts', { body: { clientRequestId: requestId, supplierId: form.supplierId, warehouseId: whId, purchaseOrderId: form.purchaseOrderId || undefined, supplierInvoiceNo: form.supplierInvoiceNo || undefined, invoiceDate: form.invoiceDate || undefined, taxCents: form.taxCents, notes: form.notes || undefined, lines: payload }, idempotencyKey: requestId });
-        toast.success(`Goods received (${r.data.number}) and stock updated`);
+        const r = await api<{ data: any; pendingStock?: number }>('/goods-receipts', { body: { clientRequestId: requestId, supplierId: form.supplierId, warehouseId: whId, purchaseOrderId: form.purchaseOrderId || undefined, supplierInvoiceNo: form.supplierInvoiceNo || undefined, invoiceDate: form.invoiceDate || undefined, taxCents: form.taxCents, notes: form.notes || undefined, lines: payload }, idempotencyKey: requestId });
+        toast.success(r.pendingStock ? `Goods received (${r.data.number}). The stock is sent to that branch's server and shows after it syncs (usually within a minute).` : `Goods received (${r.data.number}) and stock updated`);
         if (tab !== 'receiving') nav(PATHS.receiving, { state: { openGrn: r.data._id } });
         else setGrnId(r.data._id);
       }

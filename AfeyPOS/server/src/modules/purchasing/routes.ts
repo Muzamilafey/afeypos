@@ -12,6 +12,9 @@ import { badRequest, notFound, unprocessable } from '../../lib/errors.js';
 import { nextNumber } from '../../lib/numbering.js';
 import { audit } from '../../lib/audit.js';
 import { applyMovement } from '../inventory/stock.js';
+import { requestRemoteStock } from '../inventory/remote.js';
+import { ownsWarehouse } from '../sync/ownership.js';
+import { env } from '../../config/env.js';
 import { resolveUnit } from '../catalog/units.js';
 import { allocateAgainstOpen } from '../sales/returns.js';
 import { runAsPlatform } from '../../lib/context.js';
@@ -137,6 +140,7 @@ const postGoodsReceipt = async (req: Request, res: Response) => {
     const id = new Types.ObjectId();
     const number = await nextNumber('grn', 'GRN');
     const lines = [];
+    let remote = 0;
     for (const l of body.lines) {
       const product = await Product.findById(l.productId);
       if (!product) throw notFound('Product');
@@ -150,7 +154,12 @@ const postGoodsReceipt = async (req: Request, res: Response) => {
         pl.receivedQty = roundQty((pl.receivedQty ?? 0) + baseQty / (pl.factor || 1));
       }
       if (product.trackBatches && !l.batchNo) throw badRequest(`${product.name} requires a batch number`);
-      await applyMovement({ product, productId: product._id, warehouseId: body.warehouseId, qty: baseQty, type: 'purchase_receipt', unitCostCents: baseCost, ref: { type: 'GoodsReceipt', id, number }, userId: req.auth!.userId, batchNo: l.batchNo, expiryDate: l.expiryDate, serials: l.serials, reason: body.supplierInvoiceNo ? `Invoice ${body.supplierInvoiceNo}` : undefined });
+      // At head office, a store run by a branch server gets the stock on that server (sent by sync); the receipt,
+      // order and supplier bill are recorded here as usual.
+      if (env().DEPLOYMENT_MODE === 'hq' && !(await ownsWarehouse(body.warehouseId))) {
+        await requestRemoteStock({ type: 'purchase_receipt', ref: { type: 'GoodsReceipt', id, number }, productId: product._id, warehouseId: body.warehouseId, qty: baseQty, unitCostCents: baseCost, batchNo: l.batchNo, expiryDate: l.expiryDate, serials: l.serials, reason: body.supplierInvoiceNo ? `Invoice ${body.supplierInvoiceNo}` : undefined, userId: req.auth!.userId });
+        remote++;
+      } else await applyMovement({ product, productId: product._id, warehouseId: body.warehouseId, qty: baseQty, type: 'purchase_receipt', unitCostCents: baseCost, ref: { type: 'GoodsReceipt', id, number }, userId: req.auth!.userId, batchNo: l.batchNo, expiryDate: l.expiryDate, serials: l.serials, reason: body.supplierInvoiceNo ? `Invoice ${body.supplierInvoiceNo}` : undefined });
       if (body.updateProductCost && l.unitCostCents !== undefined) await Product.updateOne({ _id: product._id }, { $set: { costCents: baseCost } });
       // Short = what the order still expected of this line after this delivery (good units only count).
       const poLine = po ? (l.poLineId ? po.lines.id(l.poLineId) : po.lines.find((x) => String(x.productId) === String(product._id))) : null;
@@ -171,9 +180,9 @@ const postGoodsReceipt = async (req: Request, res: Response) => {
     }
     const [g] = await GoodsReceipt.create([{ _id: id, number, clientRequestId: body.clientRequestId, supplierId: supplier?._id, purchaseOrderId: po?._id, warehouseId: body.warehouseId, supplierInvoiceNo: body.supplierInvoiceNo, invoiceDate: body.invoiceDate, dueDate, lines, subtotalCents: subtotal, taxCents: body.taxCents, totalCents: total, receivedBy: req.auth!.userId, notes: body.notes }]);
     await audit(req, { action: 'goods_receipt.posted', entity: 'GoodsReceipt', entityId: id, details: { number, totalCents: total, supplier: supplier?.name ?? 'none (stock received)', lines: lines.length } });
-    return g;
+    return { g, remote };
   });
-  res.status(201).json({ data: grn });
+  res.status(201).json({ data: grn.g, ...(grn.remote ? { pendingStock: grn.remote, note: 'The stock reaches that branch server at its next sync.' } : {}) });
 };
 router.post('/goods-receipts', requirePermission('inventory.receive'), idempotent('grn'), postGoodsReceipt);
 /** Inventory → Receive stock (scanned items, supplier optional); needs only the inventory module. */

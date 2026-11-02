@@ -7,6 +7,8 @@ import { applyMovement } from './stock.js';
 import { ownsWarehouse } from '../sync/ownership.js';
 
 export interface RemoteStockInput {
+  type?: 'opening' | 'purchase_receipt';
+  ref?: { type: string; id: Types.ObjectId; number?: string };
   productId: Types.ObjectId;
   warehouseId: Types.ObjectId;
   qty: number;
@@ -18,13 +20,13 @@ export interface RemoteStockInput {
   userId?: Types.ObjectId;
 }
 
-/** Head office: records opening stock for a warehouse owned by a branch server; the branch applies it on its next sync. */
+/** Head office: records stock (opening stock, goods received) for a warehouse owned by a branch server; the branch applies it on its next sync. */
 export async function requestRemoteStock(input: RemoteStockInput) {
   const w = await Warehouse.findById(input.warehouseId, { branchId: 1 }).lean();
   if (!w) throw new Error('Warehouse not found');
   const [doc] = await RemoteStockRequest.create([{
-    productId: input.productId, warehouseId: input.warehouseId, branchId: w.branchId, qty: input.qty, unitCostCents: input.unitCostCents,
-    batchNo: input.batchNo, expiryDate: input.expiryDate, serials: input.serials, reason: input.reason ?? 'Opening stock',
+    type: input.type ?? 'opening', ref: input.ref, productId: input.productId, warehouseId: input.warehouseId, branchId: w.branchId, qty: input.qty, unitCostCents: input.unitCostCents,
+    batchNo: input.batchNo, expiryDate: input.expiryDate, serials: input.serials, reason: input.reason ?? (input.type === 'purchase_receipt' ? 'Goods received at head office' : 'Opening stock'),
     requestedBy: input.userId, requestedOn: env().DEPLOYMENT_MODE,
   }]);
   return doc;
@@ -45,8 +47,8 @@ export async function processRemoteStockRequests() {
     try {
       await withTransaction(async () => {
         await applyMovement({
-          product, productId: product._id, warehouseId: r.warehouseId, qty: r.qty, type: 'opening', unitCostCents: r.unitCostCents ?? product.costCents,
-          reason: r.reason ?? 'Opening stock', ref: { type: 'Product', id: product._id, number: product.sku }, userId: r.requestedBy ?? undefined,
+          product, productId: product._id, warehouseId: r.warehouseId, qty: r.qty, type: (r.type ?? 'opening') as 'opening' | 'purchase_receipt', unitCostCents: r.unitCostCents ?? product.costCents,
+          reason: r.reason ?? 'Opening stock', ref: r.ref?.id ? { type: r.ref.type!, id: r.ref.id, number: r.ref.number ?? undefined } : { type: 'Product', id: product._id, number: product.sku }, userId: r.requestedBy ?? undefined,
           batchNo: r.batchNo ?? undefined, expiryDate: r.expiryDate ?? undefined, serials: r.serials ?? undefined,
         });
         await RemoteStockRequest.updateOne({ _id: r._id, status: 'pending' }, { $set: { status: 'applied', appliedAt: new Date() } });

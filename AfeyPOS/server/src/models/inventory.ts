@@ -148,7 +148,9 @@ const remoteStockRequestSchema = new Schema(
     productId: { type: ObjectId, ref: 'Product', required: true },
     warehouseId: { type: ObjectId, ref: 'Warehouse', required: true },
     branchId: { type: ObjectId, required: true },
-    type: { type: String, enum: ['opening'], default: 'opening' },
+    type: { type: String, enum: ['opening', 'purchase_receipt'], default: 'opening' },
+    /** The document it comes from (e.g. the goods receipt at head office). */
+    ref: { type: { type: String }, id: ObjectId, number: String },
     qty: { type: Number, required: true },
     unitCostCents: Number,
     batchNo: String,

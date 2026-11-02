@@ -238,6 +238,27 @@ describe('opening stock entered at head office for a branch server', () => {
   }, 60_000);
 });
 
+describe('goods received at head office for a branch server', () => {
+  it('records the receipt and the supplier bill at HQ, and the branch adds the stock once', async () => {
+    const supplier = (await hq.client.post('/suppliers', { name: 'Bidco' })).body.data;
+    const flour = await createProduct(hq.client, { name: 'Flour 2kg', sku: 'FLOUR2', prices: { retail: 20000 }, costCents: 15000 });
+    const po = (await hq.client.post('/purchase-orders', { supplierId: supplier._id, warehouseId: b1.warehouseId, lines: [{ productId: flour._id, qty: 10, unitCostCents: 5000 }] })).body.data;
+    const before = 0;
+    const grn = await hq.client.post('/goods-receipts', { supplierId: supplier._id, warehouseId: b1.warehouseId, purchaseOrderId: po._id, supplierInvoiceNo: 'INV-9', lines: [{ productId: flour._id, qty: 10, unitCostCents: 5000 }] });
+    expect(grn.status).toBe(201);
+    expect(grn.body.pendingStock).toBe(1);
+    expect((await hq.client.get(`/purchase-orders/${po._id}`)).body.data.status).toBe('received');
+    expect((await hq.client.get(`/suppliers/${supplier._id}`)).body.data.balanceCents).toBe(50000);
+    await runSync();
+    await runSync();
+    const after = (await branch.get(`/inventory/levels?productId=${flour._id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty;
+    expect(after).toBe(before + 10);
+    const moves = (await branch.get(`/inventory/movements?productId=${flour._id}&warehouseId=${b1.warehouseId}`)).body.data;
+    expect(moves.find((m: any) => m.type === 'purchase_receipt')?.ref?.number).toBe(grn.body.data.number);
+    expect((await hq.client.get(`/inventory/levels?productId=${flour._id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty).toBe(after);
+  }, 60_000);
+});
+
 describe('customers across branches', () => {
   it('a customer added at the branch reaches HQ, and credit sales update the HQ balance', async () => {
     await hq.client.put('/settings/modules', { enabled: ['customerCredit'] });

@@ -125,14 +125,14 @@ export function ReceiveStockPage() {
     setError(null);
     try {
       const toSave = lines.filter((l) => l.qty > 0);
-      const r = await api<{ data: { number: string } }>('/inventory/receive', {
+      const r = await api<{ data: { number: string }; pendingStock?: number }>('/inventory/receive', {
         body: {
           clientRequestId: requestId, warehouseId, supplierId: supplierId || undefined, supplierInvoiceNo: reference.trim() || undefined, notes: notes.trim() || undefined,
           lines: toSave.map((l) => ({ productId: l.productId, unitCode: l.unitCode, qty: l.qty, ...(showCost && l.unitCostCents !== undefined ? { unitCostCents: l.unitCostCents } : {}) })),
         },
         idempotencyKey: requestId,
       });
-      toast.success(`Saved ${r.data.number}: ${fmtQty(toSave.reduce((a, l) => a + l.qty, 0))} received into ${stores.find((w) => w._id === warehouseId)?.name ?? 'the store'}`);
+      toast.success(`Saved ${r.data.number}: ${fmtQty(toSave.reduce((a, l) => a + l.qty, 0))} received into ${stores.find((w) => w._id === warehouseId)?.name ?? 'the store'}${r.pendingStock ? ': that branch server adds it to stock at its next sync' : ''}`);
       setLines([]);
       setReference('');
       setNotes('');
