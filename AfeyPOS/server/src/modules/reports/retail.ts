@@ -237,7 +237,15 @@ router.get('/reports/dead-stock', requirePermission('reports.read'), async (req,
     .map((s) => {
       const prod = products.get(String(s._id));
       const last = lastSold.get(String(s._id));
-      return { productId: s._id, name: prod.name, sku: prod.sku, qty: s.qty, unit: prod.baseUnit, valueCents: Math.round(s.valueCents), retailValueCents: Math.round(s.qty * (prod.prices?.retail ?? 0)), lastSoldAt: last ?? null, daysSinceSale: last ? Math.floor((Date.now() - last.getTime()) / 86400_000) : null, inStockSince: lastIn.get(String(s._id)) ?? prod.createdAt };
+      const daysSinceSale = last ? Math.floor((Date.now() - last.getTime()) / 86400_000) : null;
+      const value = Math.round(s.valueCents);
+      // What to do with it, from how long it has stood and how much money it holds.
+      const suggestion = !last
+        ? 'Never sold: check the price and shelf place, or return it to the supplier'
+        : daysSinceSale! > 180 ? 'Clear it: discount or bundle it, or return / transfer it'
+          : value > 5_000_00 ? 'Promote it or move it to a branch that sells it'
+            : 'Watch it: put it on a promotion or at the till';
+      return { productId: s._id, name: prod.name, sku: prod.sku, qty: s.qty, unit: prod.baseUnit, valueCents: value, retailValueCents: Math.round(s.qty * (prod.prices?.retail ?? 0)), lastSoldAt: last ?? null, daysSinceSale, inStockSince: lastIn.get(String(s._id)) ?? prod.createdAt, suggestion };
     })
     .filter((r) => (r.lastSoldAt ? r.lastSoldAt < since : new Date(r.inStockSince) < since))
     .sort((a, b) => b.valueCents - a.valueCents);

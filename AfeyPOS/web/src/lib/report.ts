@@ -144,6 +144,75 @@ export async function downloadReportPdf(spec: ReportSpec) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+const baseName = (title: string) => title.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'report';
+
+function saveBlob(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/** "Ksh 1,200.00", "12.5%", "1,250" as numbers for spreadsheets; anything else stays text. */
+export function cellValue(text: string): string | number {
+  const t = text.trim();
+  const m = /^(-|−)?\s*(?:KES|Ksh|KSh)?\s*(-)?([\d,]+(?:\.\d+)?)\s*(%)?$/.exec(t);
+  if (!m || !/\d/.test(m[3])) return text;
+  const n = Number(m[3].replace(/,/g, '')) * (m[1] || m[2] ? -1 : 1);
+  if (!Number.isFinite(n)) return text;
+  return m[4] ? n / 100 : n;
+}
+
+/** Each table of the report, with its section title, as rows of cells (header first). */
+function reportTables(spec: ReportSpec) {
+  const out: { title: string; rows: string[][] }[] = [];
+  const stats = spec.sections.filter((s) => s.kind === 'stats').flatMap((s) => (s.kind === 'stats' ? s.items : []));
+  if (stats.length) out.push({ title: 'Summary', rows: [['Figure', 'Value'], ...stats.map((i) => [i.label, i.value])] });
+  spec.sections.forEach((s, i) => {
+    if (s.kind !== 'table') return;
+    out.push({ title: s.title || `Table ${i + 1}`, rows: [s.columns.map((c) => c.label), ...s.rows, ...(s.totals ?? [])] });
+  });
+  return out;
+}
+
+/** CSV of every table in the report (sections separated by a blank line and their title). */
+export function downloadReportCsv(spec: ReportSpec) {
+  const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const parts = [[spec.title], ...spec.meta.map(([k, v]) => [k, v])].map((r) => r.map(esc).join(','));
+  for (const t of reportTables(spec)) parts.push('', esc(t.title), ...t.rows.map((r) => r.map((c) => esc(String(c ?? ''))).join(',')));
+  saveBlob(new Blob(['\ufeff' + parts.join('\r\n')], { type: 'text/csv;charset=utf-8' }), `${baseName(spec.title)}.csv`);
+}
+
+/** Excel workbook: one sheet per table, amounts as numbers so they can be added up. */
+export async function downloadReportXlsx(spec: ReportSpec) {
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Afey POS';
+  const used = new Set<string>();
+  for (const t of reportTables(spec)) {
+    let name = t.title.replace(/[\\/*?:[\]]/g, ' ').slice(0, 28) || 'Sheet';
+    while (used.has(name)) name = `${name.slice(0, 25)} ${used.size}`;
+    used.add(name);
+    const ws = wb.addWorksheet(name);
+    ws.addRow([spec.title]).font = { bold: true, size: 13 };
+    for (const [k, v] of spec.meta) ws.addRow([k, v]);
+    ws.addRow([]);
+    const header = ws.addRow(t.rows[0] ?? []);
+    header.font = { bold: true };
+    for (const r of t.rows.slice(1)) {
+      const row = ws.addRow(r.map((c) => cellValue(String(c ?? ''))));
+      r.forEach((c, i) => { if (/%\s*$/.test(String(c))) row.getCell(i + 1).numFmt = '0.0%'; else if (typeof cellValue(String(c)) === 'number' && /\./.test(String(c))) row.getCell(i + 1).numFmt = '#,##0.00'; });
+    }
+    ws.columns.forEach((col, i) => { col.width = Math.min(48, Math.max(10, ...t.rows.map((r) => String(r[i] ?? '').length + 2))); });
+  }
+  const buf = await wb.xlsx.writeBuffer();
+  saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `${baseName(spec.title)}.xlsx`);
+}
+
 /** Prints an HTML page from a hidden frame: the browser's print dialog, no extra window. */
 export function printHtml(html: string) {
   const frame = document.createElement('iframe');

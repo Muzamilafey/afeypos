@@ -108,7 +108,7 @@ function TrialBalance() {
   const ref = useRef<HTMLDivElement>(null);
   return (
     <div className="max-w-4xl">
-      <div className="mb-4 flex items-end gap-2"><Field label="As at"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field><Button variant="secondary" onClick={() => download('/accounting/trial-balance', `trial-balance-${asOf}.csv`, { asOf, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>{q.data && <ReportActions target={ref} title="Trial balance" meta={[['As at', date(asOf)], ['Status', q.data.balanced ? 'Balanced' : 'OUT OF BALANCE']]} />}</div>
+      <div className="mb-4 flex items-end gap-2"><Field label="As at"><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field><Button variant="secondary" onClick={() => download('/accounting/trial-balance', `trial-balance-${asOf}.csv`, { asOf, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>{q.data && <ReportActions csv={false} target={ref} title="Trial balance" meta={[['As at', date(asOf)], ['Status', q.data.balanced ? 'Balanced' : 'OUT OF BALANCE']]} />}</div>
       {!q.data ? <Loading /> : <div className="card" ref={ref}><DataTable rows={q.data.data.map((r: any) => ({ ...r, id: r.code }))} columns={[
         { key: 'c', header: 'Account', render: (r: any) => <Link className="hover:underline" to={`/accounting/ledger/${r.code}`}>{r.code} {r.name}</Link> },
         { key: 't', header: 'Type', render: (r: any) => TYPE_LABEL[r.type] },

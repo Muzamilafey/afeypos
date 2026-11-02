@@ -279,7 +279,7 @@ export function AttendancePage() {
   const ref = useRef<HTMLDivElement>(null);
   return (
     <div>
-      <PageHeader title="Attendance" subtitle="From clock in / out with staff cards and fingerprints" actions={<><ReportActions target={ref} title="Attendance" meta={[['Month', period]]} /><Button variant="secondary" onClick={() => download('/hr/attendance', `attendance-${period}.csv`, { period, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button></>} />
+      <PageHeader title="Attendance" subtitle="From clock in / out with staff cards and fingerprints" actions={<><ReportActions target={ref} title="Attendance" meta={[['Month', period]]} csv={false} /><Button variant="secondary" onClick={() => download('/hr/attendance', `attendance-${period}.csv`, { period, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button></>} />
       <Field label="Month" className="mb-3 max-w-xs"><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} /></Field>
       <div className="card" ref={ref}><DataTable rows={(q.data ?? []).map((r) => ({ ...r, id: r.employeeNo }))} loading={q.isLoading} empty="Only employees linked to a staff login have attendance" columns={[
         { key: 'no', header: 'No.', render: (r: any) => r.employeeNo }, { key: 'n', header: 'Name', render: (r: any) => r.name },
