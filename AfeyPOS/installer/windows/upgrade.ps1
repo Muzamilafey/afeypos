@@ -6,6 +6,8 @@ Write-Host '==> Backing up before upgrade'
 # The keeper leaves the server stopped while server\.maintenance exists.
 New-Item -ItemType File -Force -Path (Join-Path $InstallDir 'server\.maintenance') | Out-Null
 Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
+# The keeper too (it can outlive its task), or it would keep the new one from starting.
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" | Where-Object { $_.CommandLine -like '*run-server.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*dist\server.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Push-Location $InstallDir
 if ($NewReleaseZip) {

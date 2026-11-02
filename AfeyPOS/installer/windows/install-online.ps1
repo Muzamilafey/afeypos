@@ -115,6 +115,8 @@ New-Item -ItemType Directory -Force -Path $app | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $app 'server') | Out-Null
 New-Item -ItemType File -Force -Path (Join-Path $app 'server\.maintenance') | Out-Null
 Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
+# The keeper too (it can outlive its task), or it would keep the new one from starting.
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" | Where-Object { $_.CommandLine -like '*run-server.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*dist\server.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 # Mirror the new version; keep the configuration, data and installed packages.
 robocopy $src $app /MIR /XD node_modules data .git logs /XF .env .maintenance /NFL /NDL /NJH /NJS /NP | Out-Null

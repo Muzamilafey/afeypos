@@ -19,7 +19,10 @@ function Log([string]$msg) {
 
 # One keeper at a time (the 5-minute trigger finds the running one and leaves).
 $mutex = New-Object System.Threading.Mutex($false, 'Global\AfeyPOSKeeper')
-if (-not $mutex.WaitOne(0)) { exit 0 }
+# A keeper that was killed leaves the lock "abandoned": that is not a running keeper, so carry on.
+$owned = $false
+try { $owned = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $owned = $true }
+if (-not $owned) { exit 0 }
 
 # The installer passes node.exe's full path (SYSTEM's PATH may not have it).
 $node = if ($Node -and (Test-Path $Node)) { $Node } else { (Get-Command node -ErrorAction SilentlyContinue).Source }
@@ -64,10 +67,15 @@ while ($true) {
   $out = Join-Path $logDir ("server-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
   Log 'starting the server'
   $started = Get-Date
-  $p = Start-Process -FilePath $node -ArgumentList '--env-file=.env', 'dist\server.js' -WorkingDirectory $serverDir -NoNewWindow -PassThru `
-    -RedirectStandardOutput $out -RedirectStandardError "$out.err"
-  $p.WaitForExit()
-  Log "the server stopped (exit code $($p.ExitCode))"
+  try {
+    $p = Start-Process -FilePath $node -ArgumentList '--env-file=.env', 'dist\server.js' -WorkingDirectory $serverDir -NoNewWindow -PassThru `
+      -RedirectStandardOutput $out -RedirectStandardError "$out.err" -ErrorAction Stop
+    $p.WaitForExit()
+    Log "the server stopped (exit code $($p.ExitCode))"
+  } catch {
+    # e.g. node.exe not found for SYSTEM: say so instead of waiting silently.
+    Log "could not start the server with $node : $($_.Exception.Message)"
+  }
 
   # Quick restarts; slow down (up to a minute) only when it keeps stopping right after starting.
   if (((Get-Date) - $started).TotalMinutes -gt 2) { $delay = 5 } else { $delay = [Math]::Min(60, $delay * 2) }

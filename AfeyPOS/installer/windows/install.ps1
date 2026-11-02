@@ -118,6 +118,8 @@ Step 'Configuring, installing and building Afey POS (a few minutes the first tim
 # An upgrade replaces files the running server uses: stop it first (and keep the keeper from restarting it).
 New-Item -ItemType File -Force -Path (Join-Path $InstallDir 'server\.maintenance') | Out-Null
 Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
+# The keeper too (it can outlive its task), or it would keep the new one from starting.
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" | Where-Object { $_.CommandLine -like '*run-server.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*dist\server.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 # scripts\setup.mjs writes server\.env (new secrets the first time, existing values kept afterwards),
