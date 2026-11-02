@@ -397,6 +397,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'sync', label: 'Branch sync', path: '/settings/sync', icon: 'refresh', module: 'multiBranch', permission: 'settings.manage', group: 'admin' },
   { key: 'onlineShop', label: 'Online shop', path: '/settings/online-shop', icon: 'store', module: 'onlineStore', permission: 'settings.manage', group: 'admin' },
   { key: 'storeStudio', label: 'Store studio', path: '/settings/store-studio', icon: 'sparkles', module: 'onlineStore', permission: 'settings.manage', group: 'admin' },
+  { key: 'fiscalDevices', label: 'Tax & fiscal devices', path: '/settings/fiscal', icon: 'shield', module: 'etims', permission: 'reports.financial', group: 'admin' },
   { key: 'integrations', label: 'Integrations', path: '/settings/integrations', icon: 'plug', permission: 'integrations.manage', group: 'admin' },
   { key: 'hardware', label: 'Hardware', path: '/settings/hardware', icon: 'printer', module: 'hardware', permission: 'hardware.manage', group: 'admin' },
   { key: 'deviceCompatibility', label: 'Device compatibility', path: '/settings/hardware/compatibility', icon: 'plug', module: 'hardware', permission: 'hardware.manage', group: 'admin' },

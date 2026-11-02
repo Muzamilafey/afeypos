@@ -32,6 +32,7 @@ import { CardTerminalsPage } from './pages/settings/CardTerminals';
 import { ScalesPage } from './pages/settings/Scales';
 import { AssistantPage } from './pages/Assistant';
 import { HardwareCentrePage } from './pages/settings/HardwareCentre';
+import { FiscalDevicesPage } from './pages/settings/FiscalDevices';
 import { CustomerDisplayPage } from './pages/CustomerDisplay';
 import { CashPaymentsPage, MpesaLogsPage, MpesaReceivedPage } from './pages/PaymentLedgers';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
@@ -141,6 +142,7 @@ export function App() {
  <Route path="assistant" element={<Gate perm="assistant.use"><AssistantPage /></Gate>} />
         <Route path="settings/hardware/scales" element={<Gate perm="hardware.manage"><ScalesPage /></Gate>} />
         <Route path="settings/hardware/compatibility" element={<Gate perm="hardware.manage"><HardwareCentrePage /></Gate>} />
+        <Route path="settings/fiscal" element={<Gate perm="reports.financial" module="etims"><FiscalDevicesPage /></Gate>} />
         <Route path="account" element={<AccountPage />} />
         <Route path="support" element={<SupportPage />} />
         <Route path="*" element={<EmptyState title="Page not found" />} />

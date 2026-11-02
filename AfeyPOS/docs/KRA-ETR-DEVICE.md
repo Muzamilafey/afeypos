@@ -125,6 +125,12 @@ receipt layout before the supplier sets the device up.
 | *"the answer has no CU invoice number"* | The program answers with other field names. Open one answer (in the outbox `done` folder, or ask the supplier) and enter the field name under **Answer field with the CU invoice number**, e.g. `result.invoiceNo`. |
 | *"ETR program refused the invoice (400): …"* | The device refused it (e.g. a missing tax rate or PIN). The reason is shown on the KRA eTIMS page; fix it, then **Retry**. |
 | Paper out / device error | Fix the device; Afey POS retries by itself. |
+| *Requires reconciliation* | The invoice was sent but the answer was lost, and the program has no status address, so Afey POS does not send it again on its own. Check the device journal, then open the sale under **Settings → Tax & fiscal devices → Fiscal transactions** and either record the CU invoice number it shows or confirm it is not there (it is then sent again). See [FISCAL-DEVICES.md](FISCAL-DEVICES.md). |
+
+**Status address.** If the maker's program documents an address that answers "was this invoice signed?" (for
+example `GET /invoice/{invoiceNumber}` returning the same answer as the invoice, or 404 when it does not have it),
+enter it as the status address. A lost answer is then looked up automatically instead of going to reconciliation.
+Only use an address the maker documents.
 
 ---
 

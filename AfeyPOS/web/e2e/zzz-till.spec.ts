@@ -140,3 +140,23 @@ test('the top bar has a Back button to the previous page', async ({ page }) => {
   await page.getByRole('button', { name: 'Previous page' }).click();
   await expect(page).toHaveURL(/\/products$/);
 });
+
+test('tax & fiscal devices: devices, transactions, reports and device finder', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+  await page.goto('/settings/fiscal');
+  await expect(page.getByRole('heading', { name: 'Tax & fiscal devices' })).toBeVisible();
+  await expect(page.getByText(/No fiscal device is set up yet|Test connection/).first()).toBeVisible();
+  await page.getByRole('tab', { name: 'Fiscal transactions' }).click();
+  await expect(page.getByLabel('Fiscal status')).toBeVisible();
+  await page.getByLabel('Fiscal status').selectOption('attention');
+  await page.getByRole('tab', { name: 'Reports' }).click();
+  await expect(page.getByTestId('fiscal-report')).toContainText('Fiscalized sales');
+  await expect(page.getByTestId('fiscal-report')).toContainText('VAT on fiscalized sales');
+  await page.screenshot({ path: 'test-results/fiscal-report.png' });
+  await page.getByRole('tab', { name: 'Find a device' }).click();
+  await expect(page.getByText('Nothing is sent to any device')).toBeVisible();
+});
