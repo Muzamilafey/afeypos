@@ -395,7 +395,11 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   // Waiting payments that never arrive expire like prompts do.
   const timeout = Math.max(600, req.tenant!.settings?.stkPendingTimeoutSeconds ?? 0);
   await enqueue('mpesa.expireExpected', { intentId: String(intent._id) }, { runAt: new Date(Date.now() + timeout * 1000), dedupeKey: `mpesa-expect:${intent._id}` });
-  res.status(201).json({ data: { ...presentIntent(intent), payTo: to } });
+  // The customer may have paid the Till already, before the cashier chose M-Pesa: an unused payment of exactly this
+  // amount in the last few minutes (and only one) completes this wait at once.
+  const paidEarlier = await matchExpectedToReceived(intent).catch((err) => { logger.warn({ err }, 'matching an earlier M-Pesa payment failed'); return false; });
+  const fresh = paidEarlier ? (await PaymentIntent.findById(intent._id).lean())! : intent;
+  res.status(201).json({ data: { ...presentIntent(fresh), payTo: to } });
 });
 
 registerJob('mpesa.expireExpected', async ({ intentId }: { intentId: string }) => {
@@ -773,11 +777,15 @@ mpesaCallbackRoutes.post('/:tenantId/:token/c2b/confirmation', async (req, res) 
  * same account number (Paybill) or the same amount (Buy Goods, one candidate only), paid after the till
  * started waiting. The unmatched record gives its receipt to the waiting one, so the payment counts once.
  */
+/** How long before the till starts waiting a payment to the Till may have been made and still be picked up. */
+export const EARLIER_PAYMENT_WINDOW_MS = 3 * 60_000;
+
 export async function matchExpectedToReceived(expected: PaymentIntentDoc): Promise<boolean> {
   if (expected.status !== 'pending' || expected.awaiting !== 'expected' || expected.source !== 'c2b') return false;
   const cfg = expected.configId ? await IntegrationConfig.findById(expected.configId).lean() : null;
   if (!cfg) return false;
-  const since = new Date(new Date(expected.createdAt as unknown as Date).getTime() - 2 * 60_000);
+  // A payment up to EARLIER_PAYMENT_WINDOW before the till started waiting still counts (paid before checkout).
+  const since = new Date(new Date(expected.createdAt as unknown as Date).getTime() - EARLIER_PAYMENT_WINDOW_MS);
   const filter: Record<string, unknown> = {
     configId: { $in: await siblingConfigIds(cfg) }, source: 'c2b', awaiting: { $exists: false }, status: 'succeeded', allocatedCents: 0,
     allocatedTo: { $exists: false }, onlineOrderId: { $exists: false }, receiptNumber: { $type: 'string' }, completedAt: { $gte: since },
