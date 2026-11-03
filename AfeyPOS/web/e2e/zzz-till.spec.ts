@@ -160,3 +160,20 @@ test('tax & fiscal devices: devices, transactions, reports and device finder', a
   await page.getByRole('tab', { name: 'Find a device' }).click();
   await expect(page.getByText('Nothing is sent to any device')).toBeVisible();
 });
+
+test('owner dashboard: accounting graphs, and every card has View all', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Data Panel Widget' })).toBeVisible();
+  const books = page.getByTestId('accounting-dashboard');
+  await expect(books).toContainText('Revenue, costs and net profit (12 months)');
+  await expect(books).toContainText('Where the money is');
+  await expect(books).toContainText('VAT to pay KRA');
+  expect(await page.getByRole('link', { name: 'View all' }).count()).toBeGreaterThan(10);
+  await page.screenshot({ path: 'test-results/owner-dashboard.png', fullPage: true });
+  await books.getByRole('link', { name: 'Balance sheet' }).click();
+  await expect(page).toHaveURL(/\/accounting\?tab=bs$/);
+  await expect(page.getByRole('tab', { name: 'Balance sheet' })).toHaveAttribute('aria-selected', 'true');
+});

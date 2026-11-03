@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, download } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { date, money, todayLocal } from '../../lib/format';
@@ -34,7 +34,9 @@ function Section({ title, rows, total, sign = 1 }: { title: string; rows: { code
 }
 
 export function AccountingPage() {
-  const [tab, setTab] = useState('pl');
+  // ?tab=bs etc. opens a statement directly (dashboard "View all" links).
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(params.get('tab') ?? 'pl');
   const { can } = useAuth();
   const toast = useToast();
   const qc = useQueryClient();

@@ -261,6 +261,86 @@ router.get('/accounting/vat', requirePermission('accounting.read'), async (req, 
   res.json({ data: { outputVatCents: output, outputOnSalesCents: o.credit, outputReversedOnReturnsCents: o.debit, inputVatCents: input, netPayableCents: output - input }, period: { from: r.from, to: r.to }, note: 'VAT on the VAT 3 return is due by the 20th of the following month. Input VAT counts only with valid supplier eTIMS invoices.' });
 });
 
+/**
+ * Accounting dashboard: the last 12 months of revenue, cost of sales, expenses and profit, cash movement,
+ * balances now (cash and bank, receivables, payables, stock, VAT, payroll owed), this month's expenses by account
+ * and VAT. All from the ledger.
+ */
+router.get('/accounting/dashboard', requirePermission('accounting.read'), async (req, res) => {
+  await postPending();
+  const tz = tzOf(req);
+  const today = localDateString(new Date(), tz);
+  const monthAt = (i: number) => new Date(Date.UTC(+today.slice(0, 4), +today.slice(5, 7) - 12 + i, 1)).toISOString().slice(0, 10);
+  const firstMonth = monthAt(0);
+  const accounts = await Account.find({}).lean();
+  const byCode = new Map(accounts.map((a) => [a.code, a]));
+  const rows = await JournalEntry.aggregate([
+    { $match: { date: { $gte: localMidnightUtc(firstMonth, tz) } } },
+    { $unwind: '$lines' },
+    { $group: { _id: { m: { $dateToString: { format: '%Y-%m', date: '$date', timezone: tz } }, c: '$lines.accountCode' }, d: { $sum: '$lines.debitCents' }, cr: { $sum: '$lines.creditCents' } } },
+  ]);
+  const months: string[] = [];
+  for (let i = 0; i < 12; i++) months.push(monthAt(i).slice(0, 7));
+  const blank = () => ({ revenueCents: 0, cogsCents: 0, otherIncomeCents: 0, expensesCents: 0, cashInCents: 0, cashOutCents: 0 });
+  const per = new Map(months.map((m) => [m, blank()]));
+  const thisMonth = today.slice(0, 7);
+  const expenseByAccount = new Map<string, number>();
+  for (const r of rows) {
+    const a = byCode.get(r._id.c);
+    const m = per.get(r._id.m);
+    if (!a || !m) continue;
+    const credit = r.cr - r.d;
+    if (a.type === 'income' && a.subtype === 'sales') m.revenueCents += credit;
+    else if (a.type === 'income') m.otherIncomeCents += credit;
+    else if (a.type === 'expense' && a.subtype === 'cogs') m.cogsCents -= credit;
+    else if (a.type === 'expense') {
+      m.expensesCents -= credit;
+      if (r._id.m === thisMonth) expenseByAccount.set(a.name, (expenseByAccount.get(a.name) ?? 0) - credit);
+    } else if (a.type === 'asset' && a.subtype === 'cash') {
+      m.cashInCents += r.d;
+      m.cashOutCents += r.cr;
+    }
+  }
+  const monthly = months.map((m) => {
+    const x = per.get(m)!;
+    const gross = x.revenueCents - x.cogsCents;
+    return { month: m, ...x, grossProfitCents: gross, netProfitCents: gross + x.otherIncomeCents - x.expensesCents };
+  });
+  // Balances now.
+  const all = await accountsWithBalances(await sums({}));
+  const bal = (f: (a: any) => boolean) => all.filter(f).reduce((s, a) => s + a.balanceCents, 0);
+  const cashAccounts = all.filter((a) => a.type === 'asset' && a.subtype === 'cash' && (a.debitCents || a.creditCents)).map((a) => ({ code: a.code, name: a.name, balanceCents: a.balanceCents }));
+  const currentAssets = bal((a) => a.type === 'asset' && a.subtype !== 'fixed_asset');
+  const currentLiabilities = bal((a) => a.type === 'liability');
+  const vatOut = all.find((a) => a.key === 'vat_output');
+  const vatIn = all.find((a) => a.key === 'vat_input');
+  const monthStart = localMidnightUtc(`${thisMonth}-01`, tz);
+  const vm = await sums({ from: monthStart });
+  const o = vm.get(vatOut?.code ?? '') ?? { debit: 0, credit: 0 };
+  const i = vm.get(vatIn?.code ?? '') ?? { debit: 0, credit: 0 };
+  const cur = monthly.at(-1)!;
+  res.json({
+    data: {
+      monthly,
+      balances: {
+        cashCents: cashAccounts.reduce((s, a) => s + a.balanceCents, 0), cashAccounts,
+        receivablesCents: bal((a) => a.subtype === 'receivable'), payablesCents: bal((a) => a.subtype === 'payable'),
+        inventoryCents: bal((a) => a.subtype === 'inventory'), payrollOwedCents: bal((a) => a.subtype === 'payroll'),
+        vatOwedCents: (vatOut?.balanceCents ?? 0) - (vatIn?.balanceCents ?? 0),
+        currentAssetsCents: currentAssets, currentLiabilitiesCents: currentLiabilities,
+        currentRatio: currentLiabilities > 0 ? Math.round((currentAssets / currentLiabilities) * 100) / 100 : null,
+      },
+      thisMonth: {
+        ...cur,
+        grossMarginBp: cur.revenueCents ? Math.round((cur.grossProfitCents / cur.revenueCents) * 10_000) : 0,
+        netMarginBp: cur.revenueCents ? Math.round((cur.netProfitCents / cur.revenueCents) * 10_000) : 0,
+        vat: { outputCents: o.credit - o.debit, inputCents: i.debit - i.credit, netPayableCents: o.credit - o.debit - (i.debit - i.credit) },
+        expensesByAccount: [...expenseByAccount.entries()].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([name, amountCents]) => ({ name, amountCents })),
+      },
+    },
+  });
+});
+
 registerJob('accounting.post', async () => {
   if (env().DEPLOYMENT_MODE === 'branch') return;
   await postPending();

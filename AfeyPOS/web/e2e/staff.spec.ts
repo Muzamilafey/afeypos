@@ -91,14 +91,14 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   await expect(page.getByLabel('PIN')).toHaveCount(0);
   await page.getByLabel('Staff card').fill(code.toLowerCase());
   await page.getByLabel('Staff card').press('Enter');
-  await expect(page.getByRole('heading', { name: 'Quick start' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /here is your day/ })).toBeVisible();
   await page.locator('[aria-haspopup="menu"]').click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
   // Fingerprint: touch only, no email.
   await page.getByRole('radio', { name: 'Fingerprint' }).click();
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Quick start' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /here is your day/ })).toBeVisible();
   await page.locator('[aria-haspopup="menu"]').click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
