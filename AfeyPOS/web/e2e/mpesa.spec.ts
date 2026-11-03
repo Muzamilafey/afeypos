@@ -104,6 +104,11 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await expect(found).toContainText('100.00');
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/pos-mpesa-code.png` });
   await found.getByRole('button', { name: 'Use this payment' }).click();
+  // Back pressed by mistake before completing: the sale remembers the payment and offers it again.
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByTestId('cart-kept-payment')).toContainText('Paid');
+  await page.getByRole('button', { name: /^Pay / }).click();
+  await expect(page.getByText(/Payment kept from before: M-Pesa UJR9NBEDFC/)).toBeVisible();
   await page.getByRole('button', { name: 'Complete sale' }).click();
   await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
   await page.getByRole('button', { name: 'New sale' }).click();

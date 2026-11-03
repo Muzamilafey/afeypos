@@ -13,7 +13,7 @@ import { connectRealtime, useRealtime } from '../lib/realtime';
 import { TxnStatus, type TerminalTxn } from './settings/CardTerminals';
 import { openCashDrawer, printHtml, printHtmlString, printReceipt } from '../lib/printing';
 import { CashCount, cashCountTotal, type CashCounts } from '../components/CashCount';
-import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
+import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useConfirm, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
 import { MpesaPaid, MpesaPanel, needsConfirm, type MpesaAccount } from '../components/MpesaPayment';
@@ -30,7 +30,9 @@ interface Product {
   taxRateBp: number | null; soldByWeight?: boolean; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>;
 }
 interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean; wholesaleQty?: boolean }
-interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string }
+interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string;
+  /** Payments taken for this sale that was not completed (e.g. Back pressed after M-Pesa confirmed), and an M-Pesa prompt still waiting. */
+  checkout?: { payments: Payment[]; pendingIntentId?: string } }
 interface Payment { method: string; amountCents: number; tenderedCents?: number; reference?: string; paymentIntentId?: string; terminalTransactionId?: string; label?: string }
 
 const newCart = (n: number, priceList: PriceListKey): Cart => ({ id: newRequestId(), label: `Sale ${n}`, lines: [], customer: null, priceList, cartDiscountCents: 0, couponCode: '', ageVerified: false });
@@ -169,6 +171,7 @@ function EndShiftModal({ shift, cartHasItems, onClose, onClosed }: { shift: any;
 function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: string; warehouseId: string; branchId: string }; shift: any; onShiftClosed: () => void }) {
   const { me, can, has } = useAuth();
   const toast = useToast();
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const caps = me!.capabilities;
   const settings = me!.tenant.settings ?? {};
@@ -396,8 +399,12 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     toast.info(`${cart.label} suspended`);
   };
   /** The cashier clears a sale (or discards a held one): recorded, and may need a supervisor. */
-  const clearCart = (i: number) => {
+  const clearCart = async (i: number) => {
     const c = carts[i];
+    // Money already received for this sale (M-Pesa, card): say so before it is put aside.
+    const received = (c?.checkout?.payments ?? []).filter((p) => p.paymentIntentId || p.terminalTransactionId);
+    if (received.length && !(await confirm({ title: 'This sale is already paid', danger: true, confirmLabel: 'Clear anyway',
+      message: <>{received.map((p) => p.label ?? paymentLabel(p.method)).join(', ')} ({money(received.reduce((a, p) => a + p.amountCents, 0))}) was received for this sale. If you clear it, the payment is not lost: it can be used on another sale with <b>Enter M-Pesa code</b>, or refunded.</> }))) return;
     if (!c?.lines.length) return removeCart(i);
     guardRemoval('clear', c.lines, () => removeCart(i));
   };
@@ -614,6 +621,12 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
             </div>
           ))}
           <div className="col-span-2 flex min-w-0 flex-col items-end justify-center bg-[#f7f8fa] px-5 py-3 dark:bg-ink-950/60 md:col-span-1">
+            {(cart.checkout?.payments.length ?? 0) > 0 && (
+              <div className="mb-1 rounded bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/10" data-testid="cart-kept-payment">
+                Paid {money(cart.checkout!.payments.reduce((a, p) => a + p.amountCents, 0))} · press Pay to finish
+              </div>
+            )}
+            {cart.checkout?.pendingIntentId && !cart.checkout.payments.length && <div className="mb-1 text-xs font-semibold text-amber-700" data-testid="cart-kept-payment">M-Pesa prompt sent · press Pay to check it</div>}
             <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-ink-500">Total payable</div>
             <div className="font-black leading-none tracking-tight text-ink-900 dark:text-white" data-testid="cart-total"><span className="whitespace-nowrap text-3xl tabular-nums 2xl:text-4xl">{money(totals.total)}</span></div>
           </div>
@@ -773,6 +786,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       {customerOpen && <CustomerPicker onClose={() => setCustomerOpen(false)} onPick={(c) => { setCustomerOpen(false); const next = { ...cart, customer: c, priceList: (c?.priceList as PriceListKey) && caps.priceLists.includes(c?.priceList as PriceListKey) ? (c!.priceList as PriceListKey) : cart.priceList }; requoteAll(next); }} />}
       {paying && (
         <PaymentModal cart={cart} total={totals.total} till={till} shift={shift} initialMethod={paying} initialVoucher={paying === 'voucher' ? voucherCode : undefined} onClose={() => setPaying(false)}
+          onKeep={(checkout) => { const id = cart.id; setCarts((cs) => cs.map((c) => (c.id === id ? { ...c, checkout } : c))); }}
           onDone={(sale) => { setPaying(false); setLastSale(sale); removeCart(active); pickup.refetch(); qc.invalidateQueries({ queryKey: ['pos-search'] }); searchRef.current?.focus(); }} />
       )}
       {startingShift && (
@@ -944,7 +958,7 @@ function LoyaltyCardModal({ onClose, onFound }: { onClose: () => void; onFound: 
   );
 }
 
-function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher, onClose, onDone }: { cart: Cart; total: number; till: { _id: string }; shift: any; initialMethod?: string; initialVoucher?: string; onClose: () => void; onDone: (sale: any) => void }) {
+function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher, onClose, onDone, onKeep }: { cart: Cart; total: number; till: { _id: string }; shift: any; initialMethod?: string; initialVoucher?: string; onClose: () => void; onDone: (sale: any) => void; onKeep: (checkout: Cart['checkout']) => void }) {
   const { has, can, me } = useAuth();
   const terminals: { name: string; bank: string; terminalId: string }[] = me?.tenant.settings?.cardTerminals ?? [];
   const [voucher, setVoucher] = useState<{ code: string; info: any | null }>({ code: initialVoucher ?? '', info: null });
@@ -952,9 +966,13 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   const toast = useToast();
   // Stable id for this payment attempt: retries after a network error replay instead of double-selling.
   const [requestId] = useState(newRequestId);
-  const [payments, setPayments] = useState<Payment[]>([]);
+  // Payments already taken for this sale (the cashier went Back before completing it) come back with it.
+  const kept = cart.checkout;
+  const [payments, setPayments] = useState<Payment[]>(() => kept?.payments ?? []);
   const checkoutRules = me?.tenant.checkoutRules ?? mergeCheckoutRules(undefined, me?.tenant.settings ?? {});
-  const [method, setMethod] = useState(initialMethod && paymentMethodAllowed(checkoutRules, initialMethod) ? initialMethod : paymentMethodAllowed(checkoutRules, 'cash') ? 'cash' : checkoutRules.paymentMethods[0]);
+  const keptMethod = kept?.pendingIntentId ? 'mpesa' : kept?.payments.at(-1)?.method;
+  const firstMethod = keptMethod && paymentMethodAllowed(checkoutRules, keptMethod) ? keptMethod : initialMethod;
+  const [method, setMethod] = useState(firstMethod && paymentMethodAllowed(checkoutRules, firstMethod) ? firstMethod : paymentMethodAllowed(checkoutRules, 'cash') ? 'cash' : checkoutRules.paymentMethods[0]);
   const paid = payments.reduce((a, p) => a + p.amountCents, 0);
   const remaining = total - paid;
   const [amount, setAmount] = useState<number | null>(remaining);
@@ -969,6 +987,41 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   const [mpesaDone, setMpesaDone] = useState<any>(null);
 
   useEffect(() => setAmount(remaining), [remaining]);
+
+  // Remember what was paid (and a prompt still waiting) on the sale, so Back by mistake loses nothing.
+  useEffect(() => {
+    const pendingIntentId = stk?.status === 'pending' ? stk.id : undefined;
+    onKeep(payments.length || pendingIntentId ? { payments, pendingIntentId } : undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payments, stk?.id, stk?.status]);
+  // On reopening: check the kept M-Pesa / online payments are still there and unused, and pick up a prompt
+  // that was still waiting (it may have been paid since).
+  useEffect(() => {
+    if (!kept) return;
+    let gone = false;
+    (async () => {
+      const checked = await Promise.all(kept.payments.map(async (p) => {
+        if (!p.paymentIntentId) return p;
+        const i = await api<{ data: any }>(`/payments/intents/${p.paymentIntentId}`).then((r) => r.data).catch(() => null);
+        if (!i || i.status !== 'succeeded') return null;
+        return p;
+      }));
+      if (gone) return;
+      const ok = checked.filter((p): p is Payment => Boolean(p));
+      // The sale may be smaller now: what is paid by M-Pesa, card or online never counts for more than the total.
+      let left = total;
+      const fitted = ok.map((p) => { const a = Math.min(p.amountCents, Math.max(0, left)); left -= a; return { ...p, amountCents: a }; }).filter((p) => p.amountCents > 0 || p.method === 'cash');
+      if (ok.length !== kept.payments.length) toast.info('A payment kept for this sale is no longer available and was removed');
+      else if (ok.length) toast.info(`Payment kept from before: ${ok.map((p) => p.label ?? paymentLabel(p.method)).join(', ')}`);
+      setPayments(fitted);
+      if (kept.pendingIntentId) {
+        const i = await api<{ data: any }>(`/payments/intents/${kept.pendingIntentId}`).then((r) => r.data).catch(() => null);
+        if (!gone && i && (i.status === 'pending' || i.status === 'succeeded')) setStk(i);
+      }
+    })();
+    return () => { gone = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Live M-Pesa / gateway status via websocket, with polling as a fallback.
   useRealtime('payment.updated', (p) => { if (stk && p.id === stk.id) setStk(p); }, [stk?.id]);
