@@ -67,7 +67,24 @@ export function POSPage() {
   return <Checkout till={till} shift={shift.data} onShiftClosed={() => shift.refetch()} />;
 }
 
-function OpenShift({ tillId, tillName, onOpened, onChangeTill }: { tillId: string; tillName: string; onOpened: () => void; onChangeTill: () => void }) {
+const MOVEMENT_LABEL: Record<string, string> = { float: 'Opening float', sale: 'Cash sales', refund: 'Cash refunds', cash_in: 'Cash added', cash_out: 'Cash paid out', drop: 'Cash drops', customer_payment: 'Customer payments', expense: 'Expenses paid' };
+const MOVEMENT_ORDER = ['float', 'sale', 'customer_payment', 'cash_in', 'refund', 'cash_out', 'expense', 'drop'];
+
+/** Who, where and when, at the top of the shift screens. */
+function ShiftHeader({ icon, tone, title, subtitle, chips }: { icon: string; tone: 'green' | 'blue'; title: string; subtitle: string; chips: string[] }) {
+  return (
+    <div className={cx('mb-5 flex flex-wrap items-center gap-4 rounded-xl px-5 py-4 text-white', tone === 'green' ? 'bg-gradient-to-r from-[#1f5a40] to-[#2f7d57]' : 'bg-gradient-to-r from-[#1f4f7a] to-[#3a7cc0]')}>
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 ring-2 ring-white/30"><Icon name={icon} className="h-6 w-6" /></span>
+      <div className="min-w-0 flex-1">
+        <h2 className="text-xl font-bold">{title}</h2>
+        <p className="text-sm opacity-85">{subtitle}</p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">{chips.map((c) => <span key={c} className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold">{c}</span>)}</div>
+    </div>
+  );
+}
+
+function OpenShift({ tillId, tillName, onOpened, onChangeTill, embedded = false }: { tillId: string; tillName: string; onOpened: () => void; onChangeTill: () => void; embedded?: boolean }) {
   const { me } = useAuth();
   const [counts, setCounts] = useState<CashCounts>({});
   const [byTotal, setByTotal] = useState(false);
@@ -80,20 +97,29 @@ function OpenShift({ tillId, tillName, onOpened, onChangeTill }: { tillId: strin
     setBusy(true); setError(null);
     try { await api('/shifts', { body: { tillId, openingFloatCents: amount, denominations: byTotal ? undefined : counts } }); onOpened(); } catch (e) { setError(e); } finally { setBusy(false); }
   };
+  const now = new Date();
   return (
-    <div className="mx-auto max-w-xl card p-6">
-      <div className="mb-4 flex items-start gap-3">
-        <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><Icon name="play" className="h-5 w-5" /></span>
-        <div><h2 className="text-lg font-bold">Start shift on {tillName}</h2><p className="text-sm text-ink-500">Count the cash in the drawer (the float) before you start selling.</p></div>
-      </div>
-      {byTotal
-        ? <Field label="Opening float"><MoneyInput value={floatCents} onChange={setFloat} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') open(); }} /></Field>
-        : <CashCount counts={counts} onChange={setCounts} autoFocus label="Opening float" />}
-      <button type="button" className="mt-2 text-xs font-semibold text-brand-600 hover:underline" onClick={() => setByTotal(!byTotal)}>{byTotal ? 'Count notes and coins instead' : 'Enter the total instead'}</button>
-      <div className="mt-4"><ErrorBox error={error} /></div>
-      <div className="mt-4 flex gap-2">
-        <Button className="flex-1" size="lg" loading={busy} onClick={open}>Start shift · {money(amount)}</Button>
-        <Button variant="secondary" size="lg" onClick={onChangeTill}>Change till</Button>
+    <div className={embedded ? '' : 'mx-auto max-w-5xl p-2'}>
+      <ShiftHeader icon="play" tone="green" title={`Start shift on ${tillName}`} subtitle="Count the cash in the drawer (the float) before you start selling."
+        chips={[me?.user.name ?? '', now.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }), now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })].filter(Boolean)} />
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className={embedded ? '' : 'card p-4'}>
+          {byTotal
+            ? <Field label="Opening float"><MoneyInput value={floatCents} onChange={setFloat} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') open(); }} /></Field>
+            : <CashCount counts={counts} onChange={setCounts} autoFocus label="Opening float" />}
+        </div>
+        <aside className="space-y-3 lg:sticky lg:top-4 lg:self-start">
+          <div className="rounded-xl border border-ink-100 bg-white p-4 shadow-sm dark:border-ink-800 dark:bg-ink-900">
+            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-500">Float to start with</div>
+            <div className="mt-1 text-3xl font-black tabular-nums text-ink-900 dark:text-white" data-testid="float-total">{money(amount)}</div>
+            <p className="mt-1 text-xs text-ink-500">{amount === 0 ? 'No float: the drawer starts empty.' : 'This is what the drawer should hold now.'}</p>
+            <Button className="mt-4 w-full" size="lg" loading={busy} onClick={open}>Start shift · {money(amount)}</Button>
+            <button type="button" className="mt-3 w-full text-center text-xs font-semibold text-brand-600 hover:underline" onClick={() => setByTotal(!byTotal)}>{byTotal ? 'Count notes and coins instead' : 'Enter the total instead'}</button>
+          </div>
+          <ErrorBox error={error} />
+          <Button variant="secondary" className="w-full" onClick={onChangeTill}>Change till</Button>
+          <p className="px-1 text-[11px] text-ink-500">Tip: type a number and press Enter to move to the next note. Arrow up / down adds or removes one.</p>
+        </aside>
       </div>
     </div>
   );
@@ -133,35 +159,64 @@ function EndShiftModal({ shift, cartHasItems, onClose, onClosed }: { shift: any;
       <Modal open onClose={onClosed} title={`Shift ${shift.number} closed`} icon="check" subtitle="The Z report was sent to the printer."
         footer={<><Button variant="secondary" onClick={() => printHtml(`/shifts/${shift._id}/report`).catch(toast.error)}><Icon name="printer" className="h-4 w-4" />Print Z report again</Button><Button autoFocus onClick={onClosed}>Done</Button></>}>
         <div className="space-y-3 text-sm">
-          <div className="flex justify-between rounded-lg bg-ink-50 px-4 py-3 dark:bg-ink-800/50"><span>Counted cash</span><b className="text-lg">{money(done.shift.countedCashCents)}</b></div>
-          {!blind && done.expectedCashCents !== undefined && <div className="flex justify-between px-4"><span>Expected</span><span>{money(done.expectedCashCents)}</span></div>}
-          {!blind && v !== undefined && <div className={cx('flex justify-between rounded-lg px-4 py-3 font-bold', v === 0 ? 'bg-emerald-50 text-emerald-800' : v < 0 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}><span>{v === 0 ? 'Balanced' : v < 0 ? 'Short' : 'Over'}</span><span>{money(v)}</span></div>}
+          <div className="rounded-xl bg-gradient-to-r from-[#1f5a40] to-[#2f7d57] px-5 py-4 text-white">
+            <div className="text-xs font-semibold uppercase tracking-wide opacity-85">Counted cash</div>
+            <div className="text-3xl font-black tabular-nums">{money(done.shift.countedCashCents)}</div>
+          </div>
+          {!blind && done.expectedCashCents !== undefined && <div className="flex justify-between px-1"><span className="text-ink-500">Expected in the drawer</span><span className="font-semibold tabular-nums">{money(done.expectedCashCents)}</span></div>}
+          {!blind && v !== undefined && <div className={cx('flex items-center justify-between rounded-lg px-4 py-3 text-base font-bold', v === 0 ? 'bg-emerald-50 text-emerald-800' : v < 0 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}><span>{v === 0 ? '✓ Balanced' : v < 0 ? 'Short' : 'Over'}</span><span className="tabular-nums">{money(Math.abs(v))}</span></div>}
           {blind && <p className="text-ink-500">The count is recorded. A supervisor reviews the difference.</p>}
         </div>
       </Modal>
     );
   }
+  const methods = Object.entries((s?.paymentsByMethod ?? {}) as Record<string, { totalCents: number; count: number }>).sort((a, b) => b[1].totalCents - a[1].totalCents);
+  const takings = s?.sales.totalCents ?? 0;
+  const moves = Object.entries((s?.cashMovements ?? {}) as Record<string, { totalCents: number; count: number }>).sort((a, b) => MOVEMENT_ORDER.indexOf(a[0]) - MOVEMENT_ORDER.indexOf(b[0]));
   return (
-    <Modal open onClose={onClose} title={`End shift ${shift.number}`} icon="clock" subtitle={`Started ${new Date(shift.openedAt).toLocaleString()} with a float of ${money(shift.openingFloatCents)}`}
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} disabled={cartHasItems} onClick={() => close()}>Close shift · {money(counted)}</Button></>}>
-      <div className="space-y-4">
-        {cartHasItems && <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">Finish or hold the current sale before ending the shift.</p>}
-        {s && (
-          <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Sales</div><b>{s.sales.count}</b></div>
-            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Takings</div><b>{money(s.sales.totalCents)}</b></div>
-            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Cash sales</div><b>{money(s.paymentsByMethod?.cash?.totalCents ?? 0)}</b></div>
-            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Expected cash</div><b>{blind ? 'Hidden' : money(s.expectedCashCents)}</b></div>
-          </div>
-        )}
-        <CashCount counts={counts} onChange={setCounts} autoFocus={!cartHasItems} label="Counted cash" />
-        {!blind && s && counted > 0 && (
-          <p className={cx('text-sm font-semibold', counted === s.expectedCashCents ? 'text-emerald-700' : counted < s.expectedCashCents ? 'text-red-600' : 'text-amber-700')}>
-            {counted === s.expectedCashCents ? 'Matches the expected cash.' : `${counted < s.expectedCashCents ? 'Short by' : 'Over by'} ${money(Math.abs(counted - s.expectedCashCents))}`}
-          </p>
-        )}
-        <Field label="Notes (optional)"><Input value={notes} maxLength={500} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. 500 note given to supervisor at 4 pm" /></Field>
-        <ErrorBox error={error} />
+    <Modal open onClose={onClose} size="xl" title={`End shift ${shift.number}`} icon="clock" subtitle={`Started ${new Date(shift.openedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })} with a float of ${money(shift.openingFloatCents)}`}
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button size="lg" loading={busy} disabled={cartHasItems} onClick={() => close()}>Close shift · {money(counted)}</Button></>}>
+      {cartHasItems && <p role="alert" className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">Finish or hold the current sale before ending the shift.</p>}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-4">
+          <CashCount counts={counts} onChange={setCounts} autoFocus={!cartHasItems} label="Counted cash" expectedCents={blind ? null : s?.expectedCashCents ?? null} columns={1} />
+          <Field label="Notes (optional)"><Input value={notes} maxLength={500} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. 500 note given to supervisor at 4 pm" /></Field>
+          <ErrorBox error={error} />
+        </div>
+        <aside className="space-y-3 lg:sticky lg:top-0 lg:self-start" data-testid="shift-summary">
+          {s && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg bg-[#9b7fd6] p-3 text-white"><div className="text-[11px] font-semibold uppercase opacity-85">Takings</div><div className="text-lg font-black tabular-nums">{money(takings)}</div></div>
+                <div className="rounded-lg bg-[#4a9be3] p-3 text-white"><div className="text-[11px] font-semibold uppercase opacity-85">Receipts</div><div className="text-lg font-black tabular-nums">{s.sales.count}</div></div>
+              </div>
+              <div className="rounded-xl border border-ink-100 p-3 dark:border-ink-800">
+                <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-ink-500">How customers paid</div>
+                {methods.length ? (
+                  <ul className="space-y-2 text-sm">
+                    {methods.map(([m, v]) => (
+                      <li key={m}>
+                        <div className="flex justify-between"><span>{paymentLabel(m)} <span className="text-xs text-ink-400">× {v.count}</span></span><span className="font-semibold tabular-nums">{money(v.totalCents)}</span></div>
+                        <div className="mt-0.5 h-1.5 rounded-full bg-ink-100 dark:bg-ink-800"><div className="h-1.5 rounded-full bg-brand-500" style={{ width: `${takings ? Math.max(2, (v.totalCents / takings) * 100) : 0}%` }} /></div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : <p className="text-sm text-ink-500">No sales in this shift.</p>}
+              </div>
+              <div className="rounded-xl border border-ink-100 p-3 dark:border-ink-800">
+                <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-ink-500">Cash in the drawer</div>
+                {blind ? <p className="text-sm text-ink-500">Count the cash: the expected amount is checked by a supervisor (blind close).</p> : (
+                  <ul className="space-y-1 text-sm">
+                    {moves.map(([k, v]) => <li key={k} className="flex justify-between"><span className="text-ink-600 dark:text-ink-300">{MOVEMENT_LABEL[k] ?? k}{v.count > 1 && k !== 'sale' ? ` (${v.count})` : ''}</span><span className={cx('tabular-nums', v.totalCents < 0 && 'text-red-600')}>{v.totalCents < 0 ? '−' : '+'} {money(Math.abs(v.totalCents))}</span></li>)}
+                    <li className="mt-1 flex justify-between border-t border-ink-100 pt-1.5 font-bold dark:border-ink-800"><span>Expected</span><span className="tabular-nums">{money(s.expectedCashCents)}</span></li>
+                    <li className="flex justify-between"><span>Counted</span><span className="tabular-nums">{money(counted)}</span></li>
+                    {counted > 0 && (() => { const d = counted - s.expectedCashCents; return <li className={cx('mt-1 flex justify-between rounded-md px-2 py-1 font-semibold', d === 0 ? 'bg-emerald-50 text-emerald-700' : d < 0 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}><span>{d === 0 ? 'Matches the expected cash.' : d < 0 ? 'Short by' : 'Over by'}</span>{d !== 0 && <span className="tabular-nums">{money(Math.abs(d))}</span>}</li>; })()}
+                  </ul>
+                )}
+              </div>
+            </>
+          )}
+        </aside>
       </div>
       {approval && <OverrideModal permission={approval.permission} message={approval.message} onClose={() => setApproval(null)} onApproved={(token) => { setApproval(null); close(token); }} />}
     </Modal>
@@ -790,8 +845,8 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
           onDone={(sale) => { setPaying(false); setLastSale(sale); removeCart(active); pickup.refetch(); qc.invalidateQueries({ queryKey: ['pos-search'] }); searchRef.current?.focus(); }} />
       )}
       {startingShift && (
-        <Modal open onClose={() => setStartingShift(false)} title="Start shift" icon="play">
-          <OpenShift tillId={till._id} tillName={till.name} onOpened={() => { setStartingShift(false); onShiftClosed(); }} onChangeTill={() => setStartingShift(false)} />
+        <Modal open onClose={() => setStartingShift(false)} title="Start shift" icon="play" size="xl">
+          <OpenShift embedded tillId={till._id} tillName={till.name} onOpened={() => { setStartingShift(false); onShiftClosed(); }} onChangeTill={() => setStartingShift(false)} />
         </Modal>
       )}
       {endingShift && shift && <EndShiftModal shift={shift} cartHasItems={cart.lines.length > 0} onClose={() => { setEndingShift(false); searchRef.current?.focus(); }} onClosed={() => { setEndingShift(false); qc.invalidateQueries({ queryKey: ['shifts'] }); onShiftClosed(); }} />}

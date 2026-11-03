@@ -110,6 +110,10 @@ test('gift vouchers and the loyalty program, from the back office to the till', 
   await expect(carol.getByText(/Shift SHF-\d+ closed/)).toBeVisible();
   await carol.getByRole('button', { name: 'Done' }).click();
   await expect(carol.getByRole('heading', { name: /Start shift on/ })).toBeVisible();
+  await carol.getByLabel(/Number of .*1,000\.00 notes/).fill('2');
+  await carol.getByRole('button', { name: /One .*50\.00 note more/ }).click();
+  await expect(carol.getByTestId('float-total')).toContainText('2,050.00');
+  if (process.env.SHOTS) await carol.screenshot({ path: `${process.env.SHOTS}/start-shift.png` });
 
   // The voucher kept its 35.00.
   await page.goto('/vouchers');
