@@ -11,6 +11,7 @@ import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, 
 import { ProductPicker } from '../components/ProductPicker';
 import { Icon } from '../components/icons';
 import { ReportActions } from '../components/ReportActions';
+import { AutoChart } from '../components/AutoChart';
 import { CustomView, loadCustomView, REPORT_VIEWS } from './reports/ReportViews';
 
 export function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void }) {
@@ -62,6 +63,9 @@ export function ReportsPage() {
   ];
   const d = q.data;
   const reportRef = useRef<HTMLDivElement>(null);
+  // Table or graph, remembered on this computer.
+  const [mode, setModeState] = useState<'table' | 'graph'>(() => { try { return localStorage.getItem('afey.reportMode') === 'graph' ? 'graph' : 'table'; } catch { return 'table'; } });
+  const setMode = (m: 'table' | 'graph') => { setModeState(m); try { localStorage.setItem('afey.reportMode', m); } catch { /* ignore */ } };
   const tabLabel = view?.title ?? tabs.find((x) => x.key === tab)?.label ?? 'Report';
   const noPeriod = view?.noPeriod ?? ['inventory', 'receivables', 'payables', 'dead', 'reorder'].includes(tab);
   const periodText = from === to ? date(from) : `${date(from)} to ${date(to)}`;
@@ -82,11 +86,18 @@ export function ReportsPage() {
         {!view?.custom && csvTabs.includes(tab) && <Button variant="secondary" onClick={() => download(csvPath[tab] ?? `/reports/${tab}`, `${tab}.csv`, { ...period, groupBy, days: deadDays, leadDays, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>}
       </>} />
       {!view && <Tabs tabs={tabs} value={tab} onChange={setTab} />}
+      <div className="mb-3 inline-flex rounded-md border border-ink-200 p-0.5 dark:border-ink-700" role="radiogroup" aria-label="Report view">
+        {(['table', 'graph'] as const).map((m) => <button key={m} type="button" role="radio" aria-checked={mode === m} onClick={() => setMode(m)} className={`rounded px-3 py-1 text-[12px] font-semibold ${mode === m ? 'bg-brand-500 text-white' : 'text-ink-600 dark:text-ink-300'}`}>{m === 'table' ? 'Table' : 'Graph'}</button>)}
+      </div>
       {!noPeriod && <div className="mb-4"><Period from={from} to={to} setFrom={setFrom} setTo={setTo} /></div>}
       {tab === 'dead' && <div className="mb-4 max-w-xs"><Field label="No sale for (days)"><Input type="number" min={1} value={deadDays} onChange={(e) => setDeadDays(Math.max(1, Number(e.target.value) || 30))} /></Field></div>}
       {tab === 'reorder' && <div className="mb-4 max-w-xs"><Field label="Supplier lead time (days)"><Input type="number" min={0} value={leadDays} onChange={(e) => setLeadDays(Math.max(0, Number(e.target.value) || 0))} /></Field></div>}
       {q.isLoading ? <Loading /> : q.error ? <ErrorBox error={q.error} /> : (
         <div ref={reportRef}>
+          {mode === 'graph' ? (d ? <div className="space-y-3">
+            {tab === 'sales' && !view?.groupBy && <Select aria-label="Group by" className="max-w-xs" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} options={['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'].map((x) => ({ value: x, label: `By ${x}` }))} />}
+            <AutoChart key={`${viewKey ?? ''}:${tab}:${groupBy}`} data={d} />
+          </div> : null) : <>
           {view?.custom && d && <CustomView custom={view.custom} d={d} />}
           {tab === 'sales' && (
             <div className="space-y-4">
@@ -132,6 +143,7 @@ export function ReportsPage() {
           {tab === 'dead' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Value tied up" value={money(d.totalValueCents)} hint={`${d.data.length} products without a sale in ${d.days} days`} tone={d.totalValueCents ? 'red' : undefined} /></div><div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.productId }))} empty="Every stocked product sold recently" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'q', header: 'On hand', className: 'num', render: (r: any) => `${qty(r.qty)} ${r.unit}` }, { key: 'v', header: 'Cost value', className: 'num', render: (r: any) => money(r.valueCents) }, { key: 'rv', header: 'Retail value', className: 'num', render: (r: any) => money(r.retailValueCents) }, { key: 'l', header: 'Last sold', render: (r: any) => (r.lastSoldAt ? `${dateTime(r.lastSoldAt)} (${r.daysSinceSale} d)` : 'Never') }, { key: 'sg', header: 'Suggested action', render: (r: any) => <span className="text-xs">{r.suggestion}</span> }]} /></div></>}
           {tab === 'reorder' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Products to reorder" value={String(d.data.length)} /><Stat label="Estimated cost" value={money(d.totalCostCents)} hint={`Sales rate of the last ${d.params.days} days, cover ${d.params.leadDays + d.params.coverDays} days`} /></div><div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.productId }))} empty="Nothing needs reordering" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 's', header: 'Last supplier', render: (r: any) => r.supplier || '—' }, { key: 'h', header: 'On hand', className: 'num', render: (r: any) => qty(r.onHand) }, { key: 'o', header: 'On order', className: 'num', render: (r: any) => qty(r.onOrder) }, { key: 'a', header: 'Sells / day', className: 'num', render: (r: any) => r.avgDailySales }, { key: 'd', header: 'Days left', className: 'num', render: (r: any) => (r.daysLeft ?? '—') }, { key: 'q', header: 'Order', className: 'num font-semibold', render: (r: any) => `${qty(r.suggestQty)} ${r.unit}` }, { key: 'c', header: 'Est. cost', className: 'num', render: (r: any) => money(r.estCostCents) }]} /></div></>}
           {tab === 'expenses' && <div className="grid gap-4 lg:grid-cols-2"><Card title="By category"><div data-lines="Category|Amount">{d.data.map((r: any) => <div data-line key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</div></Card><Card title="Cash movements"><div data-lines="Movement|Amount">{d.cashMovements.map((r: any) => <div data-line key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</div></Card></div>}
+          </>}
         </div>
       )}
     </div>

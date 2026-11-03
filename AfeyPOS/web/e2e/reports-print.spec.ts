@@ -76,6 +76,20 @@ test('the Reports menu opens each report on its own page', async ({ page }) => {
   await menu.getByRole('link', { name: 'Transaction Report', exact: true }).click();
   await expect(page.getByRole('cell', { name: /^RCP-/ }).first()).toBeVisible();
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/reports-menu.png` });
+
+  // Every report also has a graph view (remembered when moving between reports).
+  await page.getByRole('radio', { name: 'Graph' }).click();
+  for (const name of reports) {
+    await menu.getByRole('link', { name, exact: true }).click();
+    await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+    await expect(page.getByTestId('report-graph')).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  }
+  await menu.getByRole('link', { name: 'Sales Reports', exact: true }).click();
+  await expect(page.getByTestId('report-graph').locator('svg').first()).toBeVisible();
+  await page.screenshot({ path: 'test-results/report-graph.png', fullPage: true });
+  await page.getByRole('radio', { name: 'Table' }).click();
+  await expect(page.getByTestId('report-graph')).toHaveCount(0);
 });
 
 test('Stock analysis: predictions by days and months, pairs, overstock and busy days', async ({ page }) => {

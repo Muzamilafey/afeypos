@@ -71,7 +71,7 @@ export function AccountingSection() {
         </Card>
       </div>
       <div className="grid gap-3 lg:grid-cols-3">
-        <Card title="Money in and out (cash, M-Pesa, bank)" actions={<ViewAll to="/reports/cash-flow" />}>
+        <Card title="Money in and out" actions={<ViewAll to="/reports/cash-flow" />}>
           <HBars labels={labels.slice(-6)} series={[{ name: 'In', values: m.slice(-6).map((x) => x.cashInCents), color: CHART_COLORS[5] }, { name: 'Out', values: m.slice(-6).map((x) => x.cashOutCents), color: CHART_COLORS[3] }]} />
           <div className="mt-2"><Legend items={[{ name: 'In', color: CHART_COLORS[5] }, { name: 'Out', color: CHART_COLORS[3] }]} /></div>
         </Card>
