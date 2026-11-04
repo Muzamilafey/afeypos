@@ -73,6 +73,7 @@ export function CheckoutRulesPage() {
                 <Input type="number" min={0} max={240} value={rules.security.lockAfterMinutes} onChange={(e) => set('security', { lockAfterMinutes: Math.max(0, Math.min(240, Number(e.target.value) || 0)) })} />
               </Field>
             </div>
+            <Toggle label="Show products as a grid of pictures at the checkout" help="Supermarket style: the checkout page shows a grid of product pictures to tap. A product with no picture shows the business logo. Off: the usual scan-and-search checkout." checked={rules.display?.productGrid ?? false} onChange={(v) => set('display', { productGrid: v })} />
             <Toggle label="Stock transfers need a manager's approval before dispatch" help="Staff request a transfer; a manager approves it (or dispatches it themselves)." checked={rules.transfers.approvalRequired} onChange={(v) => set('transfers', { approvalRequired: v })} />
           </div>
           <p className="mt-2 text-xs text-ink-500">Supervisors are users with the permission <b>Remove scanned items</b> (Branch manager and above). Change it in <Link className="text-brand-600 hover:underline" to="/settings/roles">Roles &amp; permissions</Link>.</p>

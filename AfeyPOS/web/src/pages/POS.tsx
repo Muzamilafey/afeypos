@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { allocateProportionally, calculateTax, CARD_NETWORKS, KENYA_BANKS, lineAmount, mergeCheckoutRules, paymentMethodAllowed, roundQty, type PriceListKey } from '@afeypos/shared';
 import { ButtonArt, PosTile, type PosTileKind } from '../components/PosTiles';
-import { useTillButtons } from '../lib/tillButtons';
+import { useFileImage, useTillButtons } from '../lib/tillButtons';
+import { NumPad, typeInto } from '../components/NumPad';
 import { api, ApiError, newRequestId } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { usePublicConfig } from './Auth';
@@ -28,7 +29,7 @@ import { openCustomerDisplay, useCustomerDisplayFeed, type DisplayState } from '
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
   type?: 'stock' | 'service' | 'non_stock'; trackStock?: boolean;
-  taxRateBp: number | null; soldByWeight?: boolean; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>;
+  taxRateBp: number | null; soldByWeight?: boolean; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>; images?: string[];
 }
 interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean; wholesaleQty?: boolean }
 interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string;
@@ -224,6 +225,28 @@ function EndShiftModal({ shift, cartHasItems, onClose, onClosed }: { shift: any;
   );
 }
 
+/** A tappable product in the supermarket-style checkout grid: its photo, or the business logo when it has none. */
+function ProductGridTile({ product, logoFileId, priceCents, onAdd }: { product: Product; logoFileId?: string; priceCents?: number; onAdd: () => void }) {
+  const photo = useFileImage(product.images?.[0]);
+  const logo = useFileImage(logoFileId);
+  const img = photo ?? logo;
+  const out = (product.stock?.qty ?? 0) <= 0 && product.trackStock !== false && product.type === 'stock';
+  return (
+    <button type="button" onClick={onAdd} aria-label={`Add ${product.name}`}
+      className="group flex flex-col overflow-hidden rounded-lg border border-ink-100 bg-white text-left shadow-sm transition hover:-translate-y-px hover:border-brand-400 hover:shadow-md dark:border-ink-800 dark:bg-ink-900">
+      <div className="relative flex aspect-square items-center justify-center overflow-hidden bg-ink-50 dark:bg-ink-800">
+        {img ? <img src={img} alt="" className={cx('h-full w-full', photo ? 'object-cover' : 'scale-[0.6] object-contain opacity-60')} draggable={false} />
+          : <Icon name="box" className="h-8 w-8 text-ink-300" />}
+        {out && <span className="absolute right-1 top-1 rounded bg-red-600 px-1 text-[9px] font-bold text-white">OUT</span>}
+      </div>
+      <div className="flex flex-1 flex-col gap-0.5 p-1.5">
+        <div className="line-clamp-2 text-[11px] font-semibold leading-tight text-ink-800 dark:text-ink-100">{product.name}</div>
+        <div className="mt-auto text-xs font-black text-brand-700 dark:text-brand-300">{money(priceCents)}</div>
+      </div>
+    </button>
+  );
+}
+
 function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: string; warehouseId: string; branchId: string }; shift: any; onShiftClosed: () => void }) {
   const { me, can, has } = useAuth();
   const toast = useToast();
@@ -306,6 +329,9 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   const [weighing, setWeighing] = useState<Product | null>(null);
   // Retail / Wholesale switch at the till, when the checkout rules allow it.
   const showWholesale = rules.pricing.wholesaleAtTill && caps.priceLists.includes('wholesale');
+  // Supermarket-style product grid in the checkout page (Checkout rules > Show products as a grid).
+  const gridMode = Boolean(rules.display?.productGrid);
+  const logoFileId = me?.tenant.settings?.logoFileId as string | undefined;
   const [browseQ, setBrowseQ] = useState('');
   const [browsePage, setBrowsePage] = useState(1);
   const BROWSE_PER_PAGE = 48;
@@ -314,10 +340,12 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     queryFn: () => api<{ data: Product[]; total: number }>('/products', {
       query: { q: browseQ || undefined, categoryId: category ?? undefined, active: 'true', page: browsePage, limit: BROWSE_PER_PAGE, warehouseId: till.warehouseId },
     }),
-    enabled: panel?.kind === 'browse',
+    enabled: panel?.kind === 'browse' || gridMode,
     placeholderData: (prev) => prev,
   });
   const browseRef = useRef<HTMLInputElement>(null);
+  // In grid mode the top scan/search box also filters the grid.
+  useEffect(() => { if (gridMode) { setBrowseQ(search); setBrowsePage(1); } }, [search, gridMode]);
   const openBrowse = useCallback(() => {
     setBrowseQ('');
     setBrowsePage(1);
@@ -618,6 +646,33 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
             </button>
           )}
         </div>
+
+        {gridMode && (
+          <div className="border-b border-ink-100 dark:border-ink-800" data-testid="pos-product-grid">
+            {categories.data && categories.data.length > 0 && (
+              <div className="flex flex-nowrap gap-1.5 overflow-x-auto px-5 pt-3">
+                <button onClick={() => { setCategory(null); setBrowsePage(1); }} className={cx('shrink-0 rounded-full px-3 py-1 text-xs font-semibold', !category ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>All</button>
+                {categories.data.filter((c) => c.active !== false).map((c) => (
+                  <button key={c._id} onClick={() => { setCategory(c._id === category ? null : c._id); setBrowsePage(1); }} className={cx('shrink-0 rounded-full px-3 py-1 text-xs font-semibold', category === c._id ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>{c.name}</button>
+                ))}
+              </div>
+            )}
+            <div className="grid max-h-[38vh] grid-cols-3 gap-2 overflow-y-auto p-3 sm:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6">
+              {browse.data?.data.map((p) => <ProductGridTile key={p._id} product={p} logoFileId={logoFileId} priceCents={p.prices?.[cart.priceList] ?? p.prices?.retail} onAdd={() => addProduct(p)} />)}
+              {browse.isLoading && <div className="col-span-full py-6 text-center"><Spinner /></div>}
+              {browse.data && !browse.data.data.length && <p className="col-span-full py-6 text-center text-sm text-ink-500">{browseQ ? `Nothing matches “${browseQ}”.` : 'No products here.'}</p>}
+            </div>
+            {browse.data && browse.data.total > BROWSE_PER_PAGE && (
+              <div className="flex items-center justify-between px-5 pb-2 text-xs text-ink-500">
+                <span>Page {browsePage} of {Math.ceil(browse.data.total / BROWSE_PER_PAGE)}</span>
+                <span className="flex gap-2">
+                  <Button size="sm" variant="secondary" disabled={browsePage <= 1} onClick={() => setBrowsePage((n) => n - 1)}>Prev</Button>
+                  <Button size="sm" variant="secondary" disabled={browsePage >= Math.ceil(browse.data.total / BROWSE_PER_PAGE)} onClick={() => setBrowsePage((n) => n + 1)}>Next</Button>
+                </span>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center gap-3 px-5 pb-2 pt-4">
           <Icon name="cart" className="h-5 w-5 text-brand-500" />
@@ -1030,6 +1085,9 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   const toast = useToast();
   // Stable id for this payment attempt: retries after a network error replay instead of double-selling.
   const [requestId] = useState(newRequestId);
+  // The money field the cashier last touched, so the on-screen keypad types into it.
+  const [padTarget, setPadTarget] = useState<HTMLInputElement | null>(null);
+  const press = (k: string) => { if (padTarget) { typeInto(padTarget, k); padTarget.focus(); } };
   // Payments already taken for this sale (the cashier went Back before completing it) come back with it.
   const kept = cart.checkout;
   const [payments, setPayments] = useState<Payment[]>(() => kept?.payments ?? []);
@@ -1261,11 +1319,11 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
           </div>
           {remaining > 0 && (
             <div className="space-y-3">
-              <Field label="Amount"><MoneyInput value={amount} onChange={setAmount} onKeyDown={(e) => { if (e.key === 'Enter' && method !== 'cash' && method !== 'mpesa' && method !== 'gateway') { e.preventDefault(); addPayment(); } }} /></Field>
+              <Field label="Amount"><MoneyInput value={amount} onChange={setAmount} onFocus={(e) => setPadTarget(e.currentTarget)} onKeyDown={(e) => { if (e.key === 'Enter' && method !== 'cash' && method !== 'mpesa' && method !== 'gateway') { e.preventDefault(); addPayment(); } }} /></Field>
               {method === 'cash' && (
                 <>
                   <CashVisual dueCents={Math.min(amount ?? remaining, remaining)} tenderedCents={tendered} />
-                  <Field label="Cash received" hint="Enter completes the sale; leave empty for the exact amount"><MoneyInput value={tendered} onChange={setTendered} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onCashEnter(); } }} /></Field>
+                  <Field label="Cash received" hint="Enter completes the sale; leave empty for the exact amount"><MoneyInput value={tendered} onChange={setTendered} autoFocus onFocus={(e) => setPadTarget(e.currentTarget)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onCashEnter(); } }} /></Field>
                   <div className="flex flex-wrap gap-2">{[remaining, ...[50000, 100000, 200000].filter((v) => v > remaining)].slice(0, 4).map((v) => <Button key={v} size="sm" variant="secondary" onClick={() => setTendered(v)}>{money(v)}</Button>)}</div>
                 </>
               )}
@@ -1335,6 +1393,12 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
             <div className="flex justify-between text-lg font-semibold text-emerald-700"><span>Change</span><span className="tabular-nums" data-testid="change-due">{money(changeDue)}</span></div>
           </div>
           {shift && <p className="mt-3 text-xs text-ink-500">Shift {shift.number}</p>}
+          {remaining > 0 && (method === 'cash' || method === 'bank' || method === 'credit' || method === 'card') && (
+            <div className="mt-3 border-t border-ink-200 pt-3 dark:border-ink-700">
+              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-500">Keypad</div>
+              <NumPad onPress={press} onEnter={method === 'cash' ? onCashEnter : addPayment} enterLabel={method === 'cash' ? 'Enter' : 'Add'} />
+            </div>
+          )}
         </div>
       </div>
       {override && <OverrideModal permission={override.permission} message={override.message} onClose={() => setOverride(null)} onApproved={(token) => { setOverride(null); complete(token); }} />}

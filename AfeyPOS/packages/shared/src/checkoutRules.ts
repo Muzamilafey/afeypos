@@ -63,6 +63,11 @@ export interface CheckoutRules {
     /** When KRA has not answered in time, print the receipt without the stamp (else wait for a reprint). */
     printUnsigned: boolean;
   };
+  /** How the checkout page shows products. */
+  display: {
+    /** Show a grid of product pictures to tap (supermarket style), beside scanning. Off: the scan-first layout. */
+    productGrid: boolean;
+  };
   /** Till security. */
   security: {
     /** Lock the till after this many minutes without use; the cashier unlocks with PIN, card or password. 0 = never. */
@@ -129,6 +134,7 @@ export const CHECKOUT_RULE_DEFAULTS: CheckoutRules = {
   kra: { waitSeconds: 30, printUnsigned: true },
   security: { lockAfterMinutes: 0 },
   transfers: { approvalRequired: false },
+  display: { productGrid: false },
   customer: { phone: 'both', createFromPhone: true, awardLoyalty: true, required: false },
   cashierPages: CASHIER_PAGE_OPTIONS.map((p) => p.key),
   paymentMethods: PAYMENT_METHOD_OPTIONS.map((p) => p.key),
@@ -174,6 +180,7 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
       wholesaleByQuantity: bool(s.pricing?.wholesaleByQuantity, d.pricing.wholesaleByQuantity),
     },
     security: { lockAfterMinutes: int(s.security?.lockAfterMinutes, d.security.lockAfterMinutes, 240) },
+    display: { productGrid: bool(s.display?.productGrid, d.display.productGrid) },
     transfers: { approvalRequired: bool(s.transfers?.approvalRequired, d.transfers.approvalRequired) },
     kra: {
       waitSeconds: int(s.kra?.waitSeconds, d.kra.waitSeconds, 120),

@@ -214,3 +214,48 @@ test('till buttons: the owner changes a button\'s wording, icon and colours, and
   await expect(page.getByTestId('till-button-previews').getByRole('button', { name: 'Change Hold sale' })).toContainText('Park sale');
   await expect(page.getByRole('button', { name: 'Change Customer display' })).toContainText('Screen');
 });
+
+test('checkout grid of products and the on-screen number keypad', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+  // Turn the product grid on.
+  await page.goto('/settings/checkout-rules');
+  await page.getByText('Show products as a grid of pictures at the checkout').click();
+  await page.getByRole('button', { name: 'Save rules' }).click();
+  await expect(page.getByText('Checkout rules saved')).toBeVisible();
+
+  await page.goto('/pos');
+  const start = page.getByRole('button', { name: /^Start shift/ });
+  if (await start.isVisible().catch(() => false)) {
+    await page.getByRole('button', { name: 'Enter the total instead' }).click();
+    await page.getByLabel('Opening float').fill('500');
+    await start.click();
+  }
+  const grid = page.getByTestId('pos-product-grid');
+  await expect(grid).toBeVisible();
+  await expect(grid.getByRole('button', { name: /^Add / }).first()).toBeVisible();
+  await page.screenshot({ path: 'test-results/pos-grid.png' });
+  // Add a known product by scanning, then pay by cash with the on-screen keypad.
+  const scan = page.getByLabel('Scan or search products');
+  await scan.fill('MILK500');
+  await scan.press('Enter');
+  await expect(page.getByTestId('cart-total')).not.toHaveText(/Ksh 0\.00/);
+  await page.getByRole('button', { name: /^Pay / }).click();
+  const pad = page.getByTestId('numpad');
+  await expect(pad).toBeVisible();
+  await page.getByLabel('Cash received').click();
+  await pad.getByRole('button', { name: '1', exact: true }).click();
+  await pad.getByRole('button', { name: '0', exact: true }).first().click();
+  await pad.getByRole('button', { name: '0', exact: true }).first().click();
+  await expect(page.getByLabel('Cash received')).toHaveValue('100');
+  await page.screenshot({ path: 'test-results/pos-keypad.png' });
+
+  // Put it back for the other tests.
+  await page.goto('/settings/checkout-rules');
+  await page.getByText('Show products as a grid of pictures at the checkout').click();
+  await page.getByRole('button', { name: 'Save rules' }).click();
+  await expect(page.getByText('Checkout rules saved')).toBeVisible();
+});
