@@ -220,7 +220,7 @@ export const PERMISSION_INFO: Record<Permission, { label: string; group: (typeof
   'hr.manage': { label: 'Manage employees, leave and attendance', group: 'People', sensitive: true },
   'payroll.manage': { label: 'Prepare payroll', group: 'People', sensitive: true },
   'payroll.approve': { label: 'Approve and pay payroll', group: 'People', sensitive: true },
-  'comms.send': { label: 'Send SMS & email to customers, staff and suppliers', group: 'Customers', sensitive: true },
+  'comms.send': { label: 'Send SMS & email to customers, staff and suppliers', group: 'Customers & suppliers', sensitive: true },
   'crm.manage': { label: 'Run CRM and campaigns', group: 'Customers & suppliers' },
   'accounting.read': { label: 'See the books', group: 'Accounts', sensitive: true },
   'accounting.manage': { label: 'Post journals and close periods', group: 'Accounts', sensitive: true },
