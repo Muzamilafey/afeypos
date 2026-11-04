@@ -238,9 +238,12 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     const tax = calculateTax(amount, rate, settings.pricesIncludeTax ?? true);
     return { ...p, cartShare: cartShares[i], rate, tax };
   });
-  const totalCents = lines.reduce((a, l) => a + l.tax.gross, 0);
+  const lineTotalCents = lines.reduce((a, l) => a + l.tax.gross, 0);
   const taxCents = lines.reduce((a, l) => a + l.tax.tax, 0);
   const netCents = lines.reduce((a, l) => a + l.tax.net, 0);
+  // Round the payable to the nearest whole shilling when the rules say so; the difference is kept as rounding.
+  const roundingCents = rules.pricing.roundToWholeShilling && lineTotalCents > 0 ? Math.round(lineTotalCents / 100) * 100 - lineTotalCents : 0;
+  const totalCents = lineTotalCents + roundingCents;
 
   // ---- payments ----
   const paymentsSum = input.payments.reduce((a, p) => a + p.amountCents, 0);
@@ -445,6 +448,7 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
       discountCents: totalDiscount,
       taxCents,
       totalCents,
+      roundingCents,
       netCents,
       costCents: saleLines.reduce((a, l) => a + l.costCents, 0),
       payments,

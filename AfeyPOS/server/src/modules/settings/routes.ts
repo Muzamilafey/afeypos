@@ -139,7 +139,7 @@ const rulesSchema = z.object({
   discounts: z.object({ allowed: z.boolean(), lineLimitBp: bp, saleLimitBp: bp, maxAmountCents: positiveCents }).partial(),
   shifts: z.object({ required: z.boolean(), minOpeningFloatCents: positiveCents, blindClose: z.boolean(), closeNeedsApproval: z.boolean(), maxCashInDrawerCents: positiveCents, oneOpenShiftPerCashier: z.boolean() }).partial(),
   mpesa: z.object({ watchTillPayments: z.boolean(), autoComplete: z.boolean() }).partial(),
-  pricing: z.object({ wholesaleAtTill: z.boolean(), wholesaleNeedsApproval: z.boolean(), wholesaleByQuantity: z.boolean() }).partial(),
+  pricing: z.object({ wholesaleAtTill: z.boolean(), wholesaleNeedsApproval: z.boolean(), wholesaleByQuantity: z.boolean(), roundToWholeShilling: z.boolean() }).partial(),
   kra: z.object({ waitSeconds: z.number().int().min(0).max(120), printUnsigned: z.boolean() }).partial(),
   security: z.object({ lockAfterMinutes: z.number().int().min(0).max(240) }).partial(),
   display: z.object({ productGrid: z.boolean() }).partial(),

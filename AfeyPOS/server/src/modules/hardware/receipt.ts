@@ -24,6 +24,7 @@ interface ReceiptSale {
   grossCents?: number | null;
   discountCents?: number | null;
   taxCents?: number | null;
+  roundingCents?: number | null;
   totalCents: number;
   payments: { method: string; provider?: string | null; amountCents: number; reference?: string | null; tenderedCents?: number | null; changeCents?: number | null }[];
   changeCents?: number | null;
@@ -179,6 +180,7 @@ function buildModel(tenant: ReceiptTenant, sale: ReceiptSale, opts: ReceiptOptio
   const totals: ReceiptModel['totals'] = [];
   const subtotal = sale.grossCents ?? sale.totalCents + (sale.discountCents ?? 0);
   if (sale.discountCents) totals.push({ label: 'Subtotal', value: m(subtotal) }, { label: 'Discounts', value: `-${m(sale.discountCents)}` });
+  if (sale.roundingCents) totals.push({ label: 'Rounding', value: `${sale.roundingCents > 0 ? '+' : '-'}${m(Math.abs(sale.roundingCents))}` });
   totals.push({ label: 'TOTAL', value: m(sale.totalCents), grand: true });
   if (sale.taxCents && !s.show.taxSummary) totals.push({ label: 'Incl. VAT', value: m(sale.taxCents) });
 

@@ -465,6 +465,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   };
 
   // Totals computed with the same shared functions the server uses.
+  const roundWhole = Boolean(rules.pricing?.roundToWholeShilling);
   const totals = useMemo(() => {
     const gross = cart.lines.map((l) => lineAmount(l.qty, l.unitPriceCents));
     const disc = cart.lines.map((l, i) => Math.min(l.discountCents, gross[i]));
@@ -479,8 +480,10 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       tax += t.tax;
     });
     const discount = disc.reduce((a, b) => a + b, 0) + cartDiscount;
-    return { linesGross, discount, tax, total, items: cart.lines.reduce((a, l) => a + l.qty, 0) };
-  }, [cart, settings.defaultTaxRateBp, settings.pricesIncludeTax]);
+    // Round the payable to the nearest whole shilling when the rules say so.
+    const rounding = roundWhole && total > 0 ? Math.round(total / 100) * 100 - total : 0;
+    return { linesGross, discount, tax, total: total + rounding, rounding, items: cart.lines.reduce((a, l) => a + l.qty, 0) };
+  }, [cart, settings.defaultTaxRateBp, settings.pricesIncludeTax, roundWhole]);
 
   const suspend = () => {
     if (!cart.lines.length || !rules.items.holdAllowed) return;

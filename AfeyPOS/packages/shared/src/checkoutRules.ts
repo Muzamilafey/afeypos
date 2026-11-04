@@ -55,6 +55,8 @@ export interface CheckoutRules {
     wholesaleNeedsApproval: boolean;
     /** Products with a "wholesale from quantity" get the wholesale price on a line reaching that quantity. Off: retail only. */
     wholesaleByQuantity: boolean;
+    /** Round each sale's payable total to the nearest whole shilling (the difference is recorded as rounding). */
+    roundToWholeShilling: boolean;
   };
   /** KRA eTIMS / ETR stamp on the printed receipt. */
   kra: {
@@ -130,7 +132,7 @@ export const CHECKOUT_RULE_DEFAULTS: CheckoutRules = {
   discounts: { allowed: true, lineLimitBp: 1000, saleLimitBp: 1000, maxAmountCents: 0 },
   shifts: { required: true, minOpeningFloatCents: 0, blindClose: false, closeNeedsApproval: false, maxCashInDrawerCents: 0, oneOpenShiftPerCashier: true },
   mpesa: { watchTillPayments: true, autoComplete: true },
-  pricing: { wholesaleAtTill: false, wholesaleNeedsApproval: false, wholesaleByQuantity: true },
+  pricing: { wholesaleAtTill: false, wholesaleNeedsApproval: false, wholesaleByQuantity: true, roundToWholeShilling: false },
   kra: { waitSeconds: 30, printUnsigned: true },
   security: { lockAfterMinutes: 0 },
   transfers: { approvalRequired: false },
@@ -178,6 +180,7 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
       wholesaleAtTill: bool(s.pricing?.wholesaleAtTill, d.pricing.wholesaleAtTill),
       wholesaleNeedsApproval: bool(s.pricing?.wholesaleNeedsApproval, d.pricing.wholesaleNeedsApproval),
       wholesaleByQuantity: bool(s.pricing?.wholesaleByQuantity, d.pricing.wholesaleByQuantity),
+      roundToWholeShilling: bool(s.pricing?.roundToWholeShilling, d.pricing.roundToWholeShilling),
     },
     security: { lockAfterMinutes: int(s.security?.lockAfterMinutes, d.security.lockAfterMinutes, 240) },
     display: { productGrid: bool(s.display?.productGrid, d.display.productGrid) },

@@ -107,6 +107,8 @@ const saleSchema = new Schema(
     discountCents: { type: Number, default: 0 },
     taxCents: { type: Number, default: 0 },
     totalCents: { type: Number, required: true },
+    /** Added to make the total a whole shilling when rounding is on (positive = rounded up). */
+    roundingCents: { type: Number, default: 0 },
     netCents: Number,
     costCents: { type: Number, default: 0 },
     payments: [salePaymentSchema],

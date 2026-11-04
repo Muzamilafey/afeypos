@@ -142,6 +142,7 @@ export function CheckoutRulesPage() {
             <Toggle label="Show a Retail / Wholesale switch at checkout" help="Off: every sale at the till uses retail prices (customers set to wholesale still get theirs). On: the cashier can switch a sale to wholesale prices; products without a wholesale price stay at retail." checked={rules.pricing.wholesaleAtTill} onChange={(v) => set('pricing', { wholesaleAtTill: v })} />
             <Toggle label="Wholesale price from a quantity" help="Products with a 'wholesale from quantity' get their wholesale price by themselves when one line reaches it (e.g. 12 or more). Off: retail price whatever the quantity." checked={rules.pricing.wholesaleByQuantity} onChange={(v) => set('pricing', { wholesaleByQuantity: v })} />
             {rules.pricing.wholesaleAtTill && <Toggle label="Wholesale needs a supervisor" help="A supervisor approves wholesale sales on the till (staff card + PIN, fingerprint or email + PIN)." checked={rules.pricing.wholesaleNeedsApproval} onChange={(v) => set('pricing', { wholesaleNeedsApproval: v })} />}
+            <Toggle label="Round the total to the nearest whole shilling" help="The payable is rounded to the nearest 1 shilling (e.g. 99.90 becomes 100.00, 100.30 becomes 100.00). The difference is recorded as rounding. Useful where cents are not used and for M-Pesa, which takes whole shillings." checked={rules.pricing.roundToWholeShilling ?? false} onChange={(v) => set('pricing', { roundToWholeShilling: v })} />
           </div>
         </Card>
 
