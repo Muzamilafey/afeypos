@@ -5,6 +5,8 @@
  */
 import type { ReactNode } from 'react';
 import { cx } from './ui';
+import { Icon } from './icons';
+import { useFileImage, type TillButtonStyle } from '../lib/tillButtons';
 import '@fontsource/fraunces/900.css';
 
 export type PosTileKind = 'mpesa' | 'cash' | 'card' | 'loyalty' | 'voucher' | 'customer' | 'hold';
@@ -86,25 +88,45 @@ const THEMES: Record<PosTileKind, { bg: string; text: string; title: ReactNode; 
   hold: { bg: 'bg-white', text: 'text-[#0a0a0a]', title: <span className="text-[1.2em]">Hold sale</span>, art: <PauseArt /> },
 };
 
-export function PosTile({ kind, label, onClick, disabled, hint, title, badge, big }: { kind: PosTileKind; label: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string; badge?: string; big?: boolean }) {
-  const t = THEMES[kind];
+/** Default title text of each tile, for the settings page. */
+export const POS_TILE_NAMES: Record<PosTileKind, string> = { mpesa: 'Pay with M-Pesa', cash: 'Pay with Cash', card: 'Pay with Card', loyalty: 'Loyalty Card', voucher: 'Pay with Voucher', customer: 'Customers', hold: 'Hold sale' };
+
+export function PosTile({ kind, label, onClick, disabled, hint, title, badge, big, custom }: { kind: PosTileKind; label: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string; badge?: string; big?: boolean; custom?: TillButtonStyle }) {
+  const base = THEMES[kind];
+  const image = useFileImage(custom?.image);
+  // The owner's own icon, picture, wording and colours replace the drawing, title and colours.
+  const t = {
+    ...base,
+    ...(custom?.label ? { title: <span className="text-[1.2em]">{custom.label}</span> } : {}),
+    ...(image ? { art: <img src={image} alt="" className="h-full w-auto max-w-[7rem] object-contain" draggable={false} /> } : custom?.icon ? { art: <Icon name={custom.icon} className="h-full w-auto" /> } : {}),
+  };
+  const styled = Boolean(custom?.label || custom?.icon || custom?.image);
   return (
     <button type="button" onClick={onClick} disabled={disabled} title={title} aria-label={label}
-      className={cx('group relative flex min-h-[84px] flex-col items-center justify-center overflow-hidden rounded-lg px-2 shadow-sm transition hover:-translate-y-px hover:shadow-md focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-500/40 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-sm', t.bg, t.text, big ? 'py-5' : 'py-2')}>
+      style={{ ...(custom?.bg ? { background: custom.bg } : {}), ...(custom?.text ? { color: custom.text } : {}) }}
+      className={cx('group relative flex min-h-[84px] flex-col items-center justify-center overflow-hidden rounded-lg px-2 shadow-sm transition hover:-translate-y-px hover:shadow-md focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand-500/40 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-sm', custom?.bg ? 'ring-1 ring-inset ring-black/5' : t.bg, custom?.text ? '' : t.text, big ? 'py-5' : 'py-2')}>
       {hint && <kbd className="absolute right-1.5 top-1.5 rounded bg-black/10 px-1 font-sans text-[10px] font-semibold not-italic opacity-70">{hint}</kbd>}
-      {kind === 'voucher' && <span className="absolute -right-6 top-2 rotate-[35deg] bg-[#f39a32] px-6 py-0.5 font-sans text-[8px] font-bold tracking-[0.2em] text-white" aria-hidden="true">VOUCHER</span>}
+      {kind === 'voucher' && !styled && <span className="absolute -right-6 top-2 rotate-[35deg] bg-[#f39a32] px-6 py-0.5 font-sans text-[8px] font-bold tracking-[0.2em] text-white" aria-hidden="true">VOUCHER</span>}
       {badge && <span className="absolute left-1.5 top-1.5 rounded-full bg-white/90 px-1.5 font-sans text-[10px] font-bold text-ink-800">{badge}</span>}
-      {kind === 'card' ? (
+      {kind === 'card' && !styled ? (
         <>
           <span className="text-center leading-none" style={display}>{t.title}</span>
           <span className="mt-1.5"><CardMarks /></span>
         </>
       ) : (
         <>
-          <span className={cx('flex h-9 items-center justify-center', kind === 'mpesa' && 'h-7')}>{t.art}</span>
+          {t.art && <span className={cx('flex h-9 items-center justify-center', kind === 'mpesa' && !styled && 'h-7', image && 'h-12')}>{t.art}</span>}
           <span className="mt-1 text-center text-[15px] leading-[0.95]" style={display}>{t.title}</span>
         </>
       )}
     </button>
   );
 }
+
+/** A More-menu button's round icon, or the owner's own picture or icon for it. */
+export function ButtonArt({ look, icon, className, size }: { look?: TillButtonStyle; icon: string; className: string; size: string }) {
+  const image = useFileImage(look?.image);
+  if (image) return <img src={image} alt="" className="h-10 w-10 rounded-md object-contain" draggable={false} />;
+  return <span className={cx('flex items-center justify-center', className)}><Icon name={look?.icon || icon} className={size} /></span>;
+}
+

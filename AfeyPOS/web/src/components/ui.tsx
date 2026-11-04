@@ -187,9 +187,11 @@ export function Loading() {
  * Dialogs open as a panel from the right taking half the page (wider for "xl", like product browsing), with
  * the actions pinned at the bottom; on phones they rise as a bottom sheet. "center" keeps a centred box.
  */
-export function Modal({ open, onClose, title, subtitle, icon, children, footer, size = 'md', variant = 'drawer' }: {
+export function Modal({ open, onClose, title, subtitle, icon, children, footer, size = 'md', variant = 'drawer', dismissable = true }: {
   open: boolean; onClose: () => void; title: string; subtitle?: ReactNode; icon?: string; children: ReactNode; footer?: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl'; variant?: 'center' | 'drawer';
+  /** false = a click outside and the Escape key do not close it (only the Close / action buttons do), so money is not lost by a stray click. */
+  dismissable?: boolean;
 }) {
   const id = useId();
   const panel = useRef<HTMLDivElement>(null);
@@ -199,7 +201,7 @@ export function Modal({ open, onClose, title, subtitle, icon, children, footer, 
   closeRef.current = onClose;
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current();
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && dismissable && closeRef.current();
     window.addEventListener('keydown', h);
     // Keep the page behind still and put focus inside the dialog.
     const prev = document.body.style.overflow;
@@ -213,12 +215,12 @@ export function Modal({ open, onClose, title, subtitle, icon, children, footer, 
       document.body.style.overflow = prev;
       active?.focus?.();
     };
-  }, [open]);
+  }, [open, dismissable]);
   if (!open) return null;
   const drawer = variant === 'drawer';
   const w = drawer ? (size === 'xl' ? 'sm:w-[70vw] sm:min-w-[560px]' : 'sm:w-1/2 sm:min-w-[460px]') : { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' }[size];
   return (
-    <div className={cx('modal-backdrop fixed inset-0 z-50 flex bg-[#14171c]/55 backdrop-blur-[2px]', drawer ? 'items-end justify-end sm:items-stretch' : 'items-end justify-center sm:items-center sm:p-4')} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className={cx('modal-backdrop fixed inset-0 z-50 flex bg-[#14171c]/55 backdrop-blur-[2px]', drawer ? 'items-end justify-end sm:items-stretch' : 'items-end justify-center sm:items-center sm:p-4')} onMouseDown={(e) => { if (dismissable && e.target === e.currentTarget) onClose(); }}>
       <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={id}
         className={cx('relative flex w-full flex-col overflow-hidden bg-white shadow-2xl dark:bg-ink-900',
           drawer ? 'modal-drawer max-h-[94vh] rounded-t-xl sm:h-full sm:max-h-none sm:rounded-none' : 'modal-panel max-h-[94vh] rounded-t-xl sm:max-h-[90vh] sm:rounded-lg', w)}>

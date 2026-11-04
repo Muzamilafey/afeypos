@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { allocateProportionally, calculateTax, CARD_NETWORKS, KENYA_BANKS, lineAmount, mergeCheckoutRules, paymentMethodAllowed, roundQty, type PriceListKey } from '@afeypos/shared';
-import { PosTile, type PosTileKind } from '../components/PosTiles';
+import { ButtonArt, PosTile, type PosTileKind } from '../components/PosTiles';
+import { useTillButtons } from '../lib/tillButtons';
 import { api, ApiError, newRequestId } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { usePublicConfig } from './Auth';
@@ -227,6 +228,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   const { me, can, has } = useAuth();
   const toast = useToast();
   const confirm = useConfirm();
+  const tillButtons = useTillButtons();
   const qc = useQueryClient();
   const caps = me!.capabilities;
   const settings = me!.tenant.settings ?? {};
@@ -555,6 +557,8 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     { kind: 'hold', label: 'Hold sale', onClick: suspend, disabled: !cart.lines.length || !rules.items.holdAllowed, hint: 'F8', title: rules.items.holdAllowed ? undefined : 'Holding sales is turned off in Checkout rules' },
   ];
   const tiles = allTiles.filter((t) => !['mpesa', 'cash', 'card', 'voucher'].includes(t.kind) || allowed(t.kind));
+  // The owner's own icons, pictures, wording and colours (Settings > Till buttons).
+  const buttonLooks = tillButtons;
   const more: { key: string; label: string; icon: string; tone: string; onClick: () => void; disabled?: boolean; count?: number; lock?: boolean }[] = [
     { key: 'qty', label: 'Quantity', icon: 'plus', tone: 'text-emerald-600 bg-emerald-50', onClick: () => setPanel({ kind: 'line', focus: 'qty' }), disabled: !selected },
     { key: 'ldisc', label: 'Line discount', icon: 'percent', tone: 'text-sky-600 bg-sky-50', onClick: () => setPanel({ kind: 'line', focus: 'discount' }), disabled: !selected || !can('sales.discount') },
@@ -692,11 +696,12 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       <aside className="flex w-full flex-col gap-3 lg:w-[320px] 2xl:w-[400px]" aria-label="Sale actions">
         {pickupDue && <div role="alert" className="flex items-center gap-2 rounded-lg bg-amber-100 px-3 py-2 text-[13px] font-semibold text-amber-900 dark:bg-amber-900/40 dark:text-amber-100"><Icon name="alert" className="h-4 w-4 shrink-0" />Cash pickup due: hand cash over to a supervisor.</div>}
         <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2.5 overflow-y-auto">
-          {tiles.map((t) => <PosTile key={t.kind} {...t} big={big} />)}
-          <button type="button" onClick={() => setPanel({ kind: 'more' })} aria-haspopup="dialog"
+          {tiles.map((t) => <PosTile key={t.kind} {...t} big={big} custom={buttonLooks[t.kind]} />)}
+          <button type="button" onClick={() => setPanel({ kind: 'more' })} aria-haspopup="dialog" aria-label="More"
+            style={{ ...(buttonLooks.more?.bg ? { background: buttonLooks.more.bg } : {}), ...(buttonLooks.more?.text ? { color: buttonLooks.more.text } : {}) }}
             className="card flex min-h-[56px] items-center justify-center gap-2 transition hover:-translate-y-px hover:shadow-md">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300"><Icon name="grid" className="h-4 w-4" /></span>
-            <span className="text-[13px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-ink-100">More</span>
+            <ButtonArt look={buttonLooks.more} icon="grid" className="h-8 w-8 rounded-full bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300" size="h-4 w-4" />
+            <span className={cx('text-[13px] font-extrabold uppercase tracking-wide', !buttonLooks.more?.text && 'text-ink-800 dark:text-ink-100')}>{buttonLooks.more?.label || 'More'}</span>
             {held.length > 0 && <span className="rounded-full bg-orange-100 px-1.5 text-[11px] font-bold text-orange-700">{held.length}</span>}
           </button>
         </div>
@@ -794,14 +799,18 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       {panel?.kind === 'more' && (
         <Modal open onClose={() => setPanel(null)} title="More actions" icon="grid" subtitle={selected ? `Selected: ${selected.product.name}` : 'Scan an item first to change it.'} size="md">
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-            {more.map((t) => (
-              <button key={t.key} type="button" onClick={t.onClick} disabled={t.disabled}
-                className="relative flex min-h-[92px] flex-col items-center justify-center gap-1.5 rounded-lg border border-ink-100 bg-white p-3 transition hover:-translate-y-px hover:border-brand-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none dark:border-ink-800 dark:bg-ink-900">
-                {t.lock && <Icon name="lock" className="absolute right-2 top-2 h-3.5 w-3.5 text-ink-400" aria-label="Needs a supervisor" />}
-                <span className={cx('flex h-9 w-9 items-center justify-center rounded-full', t.tone)}><Icon name={t.icon} className="h-[18px] w-[18px]" /></span>
-                <span className="text-[12.5px] font-extrabold uppercase tracking-wide">{t.label}{t.count ? ` (${t.count})` : ''}</span>
-              </button>
-            ))}
+            {more.map((t) => {
+              const look = buttonLooks[t.key];
+              return (
+                <button key={t.key} type="button" onClick={t.onClick} disabled={t.disabled} aria-label={t.label}
+                  style={{ ...(look?.bg ? { background: look.bg } : {}), ...(look?.text ? { color: look.text } : {}) }}
+                  className="relative flex min-h-[92px] flex-col items-center justify-center gap-1.5 rounded-lg border border-ink-100 bg-white p-3 transition hover:-translate-y-px hover:border-brand-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none dark:border-ink-800 dark:bg-ink-900">
+                  {t.lock && <Icon name="lock" className="absolute right-2 top-2 h-3.5 w-3.5 text-ink-400" aria-label="Needs a supervisor" />}
+                  <ButtonArt look={look} icon={t.icon} className={cx('h-9 w-9 rounded-full', t.tone)} size="h-[18px] w-[18px]" />
+                  <span className="text-[12.5px] font-extrabold uppercase tracking-wide">{look?.label || t.label}{t.count ? ` (${t.count})` : ''}</span>
+                </button>
+              );
+            })}
           </div>
           {(needsApproval('remove') || needsApproval('clear')) && <p className="mt-3 flex items-center gap-1.5 text-xs text-ink-500"><Icon name="lock" className="h-3.5 w-3.5" />Locked actions need a supervisor's card scan.</p>}
         </Modal>
@@ -1243,7 +1252,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   });
 
   return (
-    <Modal open onClose={onClose} title={`Payment · ${money(total)}`} size="lg"
+    <Modal open onClose={onClose} title={`Payment · ${money(total)}`} size="lg" dismissable={false}
       footer={<><Button variant="secondary" onClick={onClose}>Back</Button><Button size="lg" loading={busy} disabled={!canComplete} onClick={() => complete()}>Complete sale</Button></>}>
       <div className="grid gap-4 md:grid-cols-[1fr_220px]">
         <div>

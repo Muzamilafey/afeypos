@@ -167,6 +167,36 @@ router.put('/settings/checkout-rules', requirePermission('settings.manage'), asy
   res.json({ data: presentRules(t) });
 });
 
+// ---------- till buttons: icon, picture, label and colours of the checkout buttons and More actions ----------
+const TILL_BUTTON_KEYS = [
+  'mpesa', 'cash', 'card', 'loyalty', 'voucher', 'customer', 'hold', 'more',
+  'qty', 'ldisc', 'del', 'gdisc', 'resume', 'browse', 'endshift', 'drawer', 'drop', 'display', 'clear',
+] as const;
+const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Colours are #RRGGBB');
+const tillButtonSchema = z.object({
+  /** One of the app's built-in icons. */
+  icon: z.string().regex(/^[a-z]{2,20}$/).optional(),
+  /** An uploaded picture (PNG, JPEG or WEBP) shown instead of the drawing. */
+  image: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/).optional(),
+  label: z.string().trim().max(24).optional(),
+  bg: hex.optional(),
+  text: hex.optional(),
+}).strict();
+const tillButtonsSchema = z.record(z.enum(TILL_BUTTON_KEYS), tillButtonSchema);
+
+router.get('/settings/till-buttons', requirePermission('settings.manage'), async (req, res) => {
+  res.json({ data: req.tenant!.settings?.tillButtons ?? {}, keys: TILL_BUTTON_KEYS });
+});
+
+router.put('/settings/till-buttons', requirePermission('settings.manage'), async (req, res) => {
+  const body = parse(z.object({ buttons: tillButtonsSchema }), req.body);
+  // Empty entries mean "as it comes": they are not stored.
+  const buttons = Object.fromEntries(Object.entries(body.buttons).map(([k, v]) => [k, Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined && x !== ''))]).filter(([, v]) => Object.keys(v as object).length));
+  await runAsPlatform(() => Tenant.updateOne({ _id: req.tenant!._id }, { $set: { 'settings.tillButtons': buttons } }));
+  await audit(req, { action: 'settings.till_buttons_updated', entity: 'Tenant', entityId: req.tenant!._id, details: { buttons: Object.keys(buttons) } });
+  res.json({ data: buttons });
+});
+
 /** Enable or hide modules. Disabling never deletes data. */
 router.put('/settings/modules', requirePermission('settings.manage'), async (req, res) => {
   const body = parse(z.object({ enabled: z.array(z.enum(MODULES)).default([]), disabled: z.array(z.enum(MODULES)).default([]) }), req.body);

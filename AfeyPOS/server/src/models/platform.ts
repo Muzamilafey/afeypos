@@ -21,6 +21,8 @@ const tenantSettingsSchema = new Schema(
     receipt: Schema.Types.Mixed,
     /** What cashiers may do alone (Settings > Checkout rules; see CHECKOUT_RULE_DEFAULTS in shared). */
     checkoutRules: Schema.Types.Mixed,
+    /** How the till's buttons look (Settings > Till buttons): icon, picture, label and colours per button. */
+    tillButtons: Schema.Types.Mixed,
     /** Bank card machines (PDQ) at the tills: the cashier picks one and keys in its approval code. */
     cardTerminals: { type: [{ name: String, bank: String, terminalId: String, _id: false }], default: [] },
     variableWeight: {

@@ -177,3 +177,40 @@ test('owner dashboard: accounting graphs, and every card has View all', async ({
   await expect(page).toHaveURL(/\/accounting\?tab=bs$/);
   await expect(page.getByRole('tab', { name: 'Balance sheet' })).toHaveAttribute('aria-selected', 'true');
 });
+
+test('till buttons: the owner changes a button\'s wording, icon and colours, and the till shows them', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+  await page.goto('/settings/till-buttons');
+  const previews = page.getByTestId('till-button-previews');
+  const hold = previews.getByRole('button', { name: 'Change Hold sale' });
+
+  await hold.click();
+  const dlg = page.getByRole('dialog', { name: 'Change: Hold sale' });
+  await dlg.getByLabel('Wording').fill('Park sale');
+  await dlg.getByLabel('Search icons').fill('pause');
+  await dlg.getByRole('option', { name: 'Icon pause' }).click();
+  await dlg.getByLabel('Background colour').fill('#1d4ed8');
+  await dlg.getByLabel('Text colour').fill('#ffffff');
+  await dlg.getByRole('button', { name: 'Done' }).click();
+  // The dialog's choices show on the preview at once.
+  await expect(hold).toContainText('Park sale');
+  await expect(hold).toHaveCSS('background-color', 'rgb(29, 78, 216)');
+
+  await page.getByRole('button', { name: 'Change Customer display' }).click();
+  const dlg2 = page.getByRole('dialog', { name: 'Change: Customer display' });
+  await dlg2.getByLabel('Wording').fill('Screen');
+  await dlg2.getByRole('button', { name: 'Done' }).click();
+
+  await page.getByRole('button', { name: 'Save buttons' }).click();
+  await expect(page.getByText('Till buttons saved')).toBeVisible();
+  await page.screenshot({ path: 'test-results/till-buttons-settings.png', fullPage: true });
+
+  // Saved for good: still there after a reload.
+  await page.reload();
+  await expect(page.getByTestId('till-button-previews').getByRole('button', { name: 'Change Hold sale' })).toContainText('Park sale');
+  await expect(page.getByRole('button', { name: 'Change Customer display' })).toContainText('Screen');
+});

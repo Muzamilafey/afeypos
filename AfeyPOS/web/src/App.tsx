@@ -33,6 +33,7 @@ import { ScalesPage } from './pages/settings/Scales';
 import { AssistantPage } from './pages/Assistant';
 import { HardwareCentrePage } from './pages/settings/HardwareCentre';
 import { FiscalDevicesPage } from './pages/settings/FiscalDevices';
+import { TillButtonsPage } from './pages/settings/TillButtons';
 import { CustomerDisplayPage } from './pages/CustomerDisplay';
 import { CashPaymentsPage, MpesaLogsPage, MpesaReceivedPage } from './pages/PaymentLedgers';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
@@ -128,6 +129,7 @@ export function App() {
         <Route path="audit" element={<Gate perm="audit.read"><AuditPage /></Gate>} />
         <Route path="settings" element={<Gate perm="settings.manage"><BusinessSettingsPage /></Gate>} />
         <Route path="settings/receipts" element={<Gate perm="settings.manage" module="pos"><ReceiptSettingsPage /></Gate>} />
+        <Route path="settings/till-buttons" element={<Gate perm="settings.manage" module="pos"><TillButtonsPage /></Gate>} />
         <Route path="loyalty" element={<Gate perm="customers.read" module="loyalty"><LoyaltyPage /></Gate>} />
         <Route path="vouchers" element={<Gate perm="vouchers.manage"><VouchersPage /></Gate>} />
         <Route path="settings/checkout-rules" element={<Gate perm="settings.manage" module="pos"><CheckoutRulesPage /></Gate>} />

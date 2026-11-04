@@ -1,3 +1,5 @@
+export const ICON_NAMES = () => Object.keys(paths);
+
 const paths: Record<string, string> = {
   home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',
   cart: 'M3 3h2l2.5 12h11L21 7H6M9 20a1 1 0 100-2 1 1 0 000 2zm9 0a1 1 0 100-2 1 1 0 000 2z',
