@@ -691,29 +691,6 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
           {rules.customer.phone !== 'off' && <button type="button" onClick={() => setCustomerOpen(true)} className={cx(showWholesale ? '' : 'ml-auto', 'flex max-w-[45%] items-center gap-1.5 truncate rounded-full bg-ink-50 px-3 py-1 text-xs font-semibold text-ink-600 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300')}><Icon name="user" className="h-3.5 w-3.5" /><span className="truncate">{cart.customer ? cart.customer.name : 'Walk-in customer (F4)'}</span></button>}
           <span className="text-xs font-semibold text-ink-400">{cart.label}</span>
         </div>
-        <div className="grid grid-cols-2 border-b border-ink-100 dark:border-ink-800 md:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,1.6fr)]">
-          {[
-            { k: 'Gross', v: money(totals.linesGross), c: '' },
-            { k: 'Discount', v: money(totals.discount), c: 'text-red-600' },
-            { k: taxLabel, v: money(totals.tax), c: '' },
-            { k: 'Payable', v: money(totals.total), c: 'text-brand-600', strong: true },
-          ].map((x) => (
-            <div key={x.k} className="min-w-0 border-r border-ink-100 px-4 py-3 dark:border-ink-800">
-              <div className={cx('text-[11px] font-bold uppercase tracking-[0.12em]', x.strong ? 'text-brand-600' : 'text-ink-500')}>{x.k}</div>
-              <div className={cx('mt-1 truncate font-mono text-[15px] font-semibold tabular-nums', x.c)}>{x.v}</div>
-            </div>
-          ))}
-          <div className="col-span-2 flex min-w-0 flex-col items-end justify-center bg-[#f7f8fa] px-5 py-3 dark:bg-ink-950/60 md:col-span-1">
-            {(cart.checkout?.payments.length ?? 0) > 0 && (
-              <div className="mb-1 rounded bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/10" data-testid="cart-kept-payment">
-                Paid {money(cart.checkout!.payments.reduce((a, p) => a + p.amountCents, 0))} · press Pay to finish
-              </div>
-            )}
-            {cart.checkout?.pendingIntentId && !cart.checkout.payments.length && <div className="mb-1 text-xs font-semibold text-amber-700" data-testid="cart-kept-payment">M-Pesa prompt sent · press Pay to check it</div>}
-            <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-ink-500">Total payable</div>
-            <div className="font-black leading-none tracking-tight text-ink-900 dark:text-white" data-testid="cart-total"><span className="whitespace-nowrap text-3xl tabular-nums 2xl:text-4xl">{money(totals.total)}</span></div>
-          </div>
-        </div>
         {error ? <div className="px-5 pb-2"><ErrorBox error={error} /></div> : null}
 
         <div className="min-h-0 flex-1 overflow-auto">
@@ -745,6 +722,29 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
           )}
         </div>
 
+        <div className="grid grid-cols-2 border-t border-ink-100 dark:border-ink-800 md:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,1.6fr)]">
+          {[
+            { k: 'Gross', v: money(totals.linesGross), c: '' },
+            { k: 'Discount', v: money(totals.discount), c: 'text-red-600' },
+            { k: taxLabel, v: money(totals.tax), c: '' },
+            { k: 'Payable', v: money(totals.total), c: 'text-brand-600', strong: true },
+          ].map((x) => (
+            <div key={x.k} className="min-w-0 border-r border-ink-100 px-4 py-3 dark:border-ink-800">
+              <div className={cx('text-[11px] font-bold uppercase tracking-[0.12em]', x.strong ? 'text-brand-600' : 'text-ink-500')}>{x.k}</div>
+              <div className={cx('mt-1 truncate font-mono text-[15px] font-semibold tabular-nums', x.c)}>{x.v}</div>
+            </div>
+          ))}
+          <div className="col-span-2 flex min-w-0 flex-col items-end justify-center bg-[#f7f8fa] px-5 py-3 dark:bg-ink-950/60 md:col-span-1">
+            {(cart.checkout?.payments.length ?? 0) > 0 && (
+              <div className="mb-1 rounded bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/10" data-testid="cart-kept-payment">
+                Paid {money(cart.checkout!.payments.reduce((a, p) => a + p.amountCents, 0))} · press Pay to finish
+              </div>
+            )}
+            {cart.checkout?.pendingIntentId && !cart.checkout.payments.length && <div className="mb-1 text-xs font-semibold text-amber-700" data-testid="cart-kept-payment">M-Pesa prompt sent · press Pay to check it</div>}
+            <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-ink-500">Total payable</div>
+            <div className="font-black leading-none tracking-tight text-ink-900 dark:text-white" data-testid="cart-total"><span className="whitespace-nowrap text-3xl tabular-nums 2xl:text-4xl">{money(totals.total)}</span></div>
+          </div>
+        </div>
       </section>
 
       {/* actions */}
