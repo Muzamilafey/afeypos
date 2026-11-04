@@ -252,6 +252,11 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   const toast = useToast();
   const confirm = useConfirm();
   const tillButtons = useTillButtons();
+  // An on-screen number keypad on the checkout page itself (for touch tills without a keyboard).
+  const [showKeypad, setShowKeypad] = useState(() => { try { return localStorage.getItem('afey.keypad') === '1'; } catch { return false; } });
+  const toggleKeypad = () => setShowKeypad((v) => { const n = !v; try { localStorage.setItem('afey.keypad', n ? '1' : '0'); } catch { /* ignore */ } return n; });
+  const padInto = (k: string) => { const el = document.activeElement as HTMLInputElement | null; const t = el && el.tagName === 'INPUT' ? el : searchRef.current; if (t) typeInto(t, k); };
+  const padEnter = () => { const el = document.activeElement as HTMLInputElement | null; const t = el && el.tagName === 'INPUT' ? el : searchRef.current; t?.focus(); t?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); };
   const qc = useQueryClient();
   const caps = me!.capabilities;
   const settings = me!.tenant.settings ?? {};
@@ -633,6 +638,10 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
             )}
           </div>
           <Button variant="secondary" onClick={openBrowse} title="Every product and its price (F5)"><Icon name="grid" className="h-4 w-4" />Browse<kbd className="ml-1.5 hidden rounded border border-ink-200 bg-ink-50 px-1 py-0.5 text-[10px] font-semibold text-ink-500 sm:inline dark:border-ink-700 dark:bg-ink-800">F5</kbd></Button>
+          <button type="button" aria-pressed={showKeypad} onClick={toggleKeypad} title="On-screen number keypad"
+            className={cx('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition', showKeypad ? 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-800 dark:bg-brand-950/40 dark:text-brand-200' : 'border-ink-200 text-ink-600 hover:bg-ink-50 dark:border-ink-700 dark:text-ink-300')}>
+            <Icon name="keypad" className="h-3.5 w-3.5" />Keypad
+          </button>
           <Badge tone="green">{till.name}</Badge>
           {!shift && (
             <button type="button" onClick={() => setStartingShift(true)} className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
@@ -746,6 +755,16 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
           </div>
         </div>
       </section>
+
+      {showKeypad && (
+        <div className="fixed bottom-4 left-4 z-40 w-56 rounded-xl border border-ink-200 bg-white p-2 shadow-2xl dark:border-ink-700 dark:bg-ink-900" data-testid="checkout-keypad">
+          <div className="mb-1.5 flex items-center justify-between px-1">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-ink-500">Keypad</span>
+            <button type="button" aria-label="Hide keypad" onMouseDown={(e) => e.preventDefault()} onClick={toggleKeypad} className="rounded p-0.5 text-ink-400 hover:text-ink-700"><Icon name="x" className="h-3.5 w-3.5" /></button>
+          </div>
+          <NumPad onPress={padInto} onEnter={padEnter} />
+        </div>
+      )}
 
       {/* actions */}
       <aside className="flex w-full flex-col gap-3 lg:w-[320px] 2xl:w-[400px]" aria-label="Sale actions">
@@ -1588,32 +1607,83 @@ function CashDropModal({ shift, tillId, onClose, onDone }: { shift: any; tillId:
 }
 
 /** Full-screen lock: only the signed-in cashier's PIN, password or card opens it; others sign in as themselves. */
+type UnlockMode = 'finger' | 'card' | 'pin' | 'password';
+
 function TillLock({ name, onUnlocked }: { name: string; onUnlocked: () => void }) {
-  const { logout } = useAuth();
+  const { logout, me } = useAuth();
+  // Fingerprint first when the signed-in person has one enrolled and a reader is set up; otherwise card, PIN, password.
+  const fingerOk = Boolean(me?.user.hasFingerprint) && bridgeConfigured();
+  const modes: { key: UnlockMode; label: string; icon: string }[] = [
+    ...(fingerOk ? [{ key: 'finger' as const, label: 'Fingerprint', icon: 'finger' }] : []),
+    { key: 'card', label: 'Staff card', icon: 'idcard' },
+    { key: 'pin', label: 'PIN', icon: 'keypad' },
+    { key: 'password', label: 'Password', icon: 'lock' },
+  ];
+  const [mode, setMode] = useState<UnlockMode>(modes[0]!.key);
   const [secret, setSecret] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const unlock = async () => {
-    if (!secret) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api('/auth/unlock', { body: { secret } });
-      onUnlocked();
-    } catch (e: any) {
-      setError(e?.message ?? 'Could not unlock');
-      setSecret('');
-    } finally { setBusy(false); }
+  const abort = useRef<AbortController | null>(null);
+
+  const done = () => { abort.current?.abort(); onUnlocked(); };
+  const unlockWith = async (body: Record<string, unknown>) => {
+    setBusy(true); setError(null);
+    try { await api('/auth/unlock', { body }); done(); }
+    catch (e: any) { setError(e?.message ?? 'Could not unlock'); setSecret(''); }
+    finally { setBusy(false); }
   };
+  const submitSecret = () => { if (secret) void unlockWith({ secret }); };
+  // Scan the finger as soon as the fingerprint option is shown.
+  useEffect(() => {
+    if (mode !== 'finger') return;
+    const ctrl = new AbortController();
+    abort.current = ctrl;
+    (async () => {
+      setBusy(true); setError(null);
+      try {
+        const r = await fingerprint<{ loginToken: string; user: { id: string } }>('login', {}, ctrl.signal);
+        if (ctrl.signal.aborted) return;
+        if (r.user.id !== me?.user.id) { setError('That fingerprint is not yours. Try your card, PIN or password.'); setBusy(false); return; }
+        await unlockWith({ loginToken: r.loginToken });
+      } catch (e: any) {
+        if (!ctrl.signal.aborted) { setError(e?.message ?? 'Fingerprint not recognised. Try again, or use your card, PIN or password.'); setBusy(false); }
+      }
+    })();
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
   return (
     <div role="dialog" aria-modal="true" aria-label="Till locked" className="fixed inset-0 z-[200] flex items-center justify-center bg-ink-950/85 backdrop-blur-sm" data-testid="till-lock">
       <div className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl dark:bg-ink-900">
         <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-brand-50 text-brand-600 dark:bg-brand-500/15"><Icon name="lock" className="h-7 w-7" /></div>
         <h2 className="text-lg font-bold">Till locked</h2>
-        <p className="mt-1 text-sm text-ink-500">{name}: enter your PIN or password, or scan your staff card. The sale on screen is kept.</p>
-        <Input autoFocus type="password" className="mt-4 text-center text-lg tracking-widest" aria-label="PIN, password or card" value={secret} onChange={(e) => setSecret(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void unlock(); } }} />
+        <p className="mt-1 text-sm text-ink-500">{name}: {fingerOk ? 'use your fingerprint, or your card, PIN or password' : 'scan your staff card, or use your PIN or password'}. The sale on screen is kept.</p>
+        {modes.length > 1 && (
+          <div role="radiogroup" aria-label="Unlock with" className="mt-4 grid gap-1 rounded-xl bg-ink-100 p-1 text-xs font-semibold dark:bg-ink-800" style={{ gridTemplateColumns: `repeat(${modes.length}, minmax(0, 1fr))` }}>
+            {modes.map((m) => (
+              <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} onClick={() => { setMode(m.key); setSecret(''); setError(null); }}
+                className={cx('flex flex-col items-center gap-1 rounded-lg px-1 py-2 transition', mode === m.key ? 'bg-brand-600 text-white shadow' : 'text-ink-500 hover:text-ink-700')}>
+                <Icon name={m.icon} className="h-4 w-4" /><span>{m.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {mode === 'finger' ? (
+          <div className="mt-4 rounded-xl border border-dashed border-ink-300 p-5 dark:border-ink-700">
+            <Icon name="finger" className="mx-auto h-10 w-10 text-brand-600" />
+            <p className="mt-2 text-sm text-ink-600 dark:text-ink-300">{busy ? 'Place your finger on the reader…' : 'Touch the reader to unlock.'}</p>
+            {!busy && <Button variant="secondary" size="sm" className="mt-2" onClick={() => setMode('finger')}>Scan again</Button>}
+          </div>
+        ) : (
+          <Input autoFocus type={mode === 'pin' ? 'tel' : 'password'} inputMode={mode === 'pin' ? 'numeric' : undefined}
+            className="mt-4 text-center text-lg tracking-widest" aria-label={mode === 'card' ? 'Scan your staff card' : mode === 'pin' ? 'PIN' : 'Password'}
+            placeholder={mode === 'card' ? 'Scan your staff card' : mode === 'pin' ? 'PIN' : 'Password'}
+            value={secret} onChange={(e) => setSecret(mode === 'pin' ? e.target.value.replace(/\D/g, '') : e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (mode === 'card') void unlockWith({ cardCode: secret.trim() }); else submitSecret(); } }} />
+        )}
         {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
-        <Button className="mt-4 w-full" loading={busy} onClick={unlock}>Unlock</Button>
+        {mode !== 'finger' && <Button className="mt-4 w-full" loading={busy} onClick={() => (mode === 'card' ? unlockWith({ cardCode: secret.trim() }) : submitSecret())}>Unlock</Button>}
         <button type="button" className="mt-3 text-xs text-ink-500 underline" onClick={() => logout()}>Not {name}? Sign in as yourself</button>
       </div>
     </div>

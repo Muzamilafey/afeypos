@@ -3,7 +3,7 @@ import { supervisorCoversBranch, userPermissions } from '../../lib/access.js';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { CASHIER_PAGE_OPTIONS, isPlainCashier, mergeCheckoutRules, NAVIGATION, navigationFor, type Permission } from '@afeypos/shared';
-import { AttendanceRecord, Session, Till, User, IdempotencyRecord } from '../../models/index.js';
+import { AttendanceRecord, BiometricTemplate, Session, Till, User, IdempotencyRecord } from '../../models/index.js';
 import { authenticateCard } from '../staff/cards.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { authenticate, signedIn, signShortToken, verifyShortToken } from '../../http/auth.js';
@@ -144,11 +144,17 @@ router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor 
  * card does. Someone else must sign in instead (Switch user), so sales stay with the right cashier.
  */
 router.post('/unlock', authLimiter, authenticate, signedIn('unlocks the till'), async (req, res) => {
-  const body = parse(z.object({ secret: z.string().max(200).optional(), cardCode: z.string().trim().max(40).optional() }).refine((b) => b.secret || b.cardCode, 'Enter your PIN or password, or scan your card'), req.body);
+  const body = parse(z.object({ secret: z.string().max(200).optional(), cardCode: z.string().trim().max(40).optional(), loginToken: z.string().max(2000).optional() }).refine((b) => b.secret || b.cardCode || b.loginToken, 'Enter your PIN or password, scan your card, or use your fingerprint'), req.body);
   const me = await User.findById(req.auth!.userId).select('+passwordHash +pinHash').where({ status: 'active' });
   if (!me) throw unauthorized();
   let ok = false;
-  if (body.cardCode) {
+  let by = 'pin/password';
+  if (body.loginToken) {
+    // A fingerprint verified through /biometrics/verify; it must be the same locked person.
+    by = 'fingerprint';
+    const c = verifyShortToken<{ sub: string; tid: string; jti: string }>(body.loginToken, 'bio-login');
+    ok = Boolean(c && c.sub === String(me._id) && c.tid === String(req.tenant!._id));
+  } else if (body.cardCode) {
     const holder = await authenticateCard(req, body.cardCode).catch(() => null);
     ok = Boolean(holder && String(holder._id) === String(me._id));
   } else if (body.secret) {
@@ -159,8 +165,8 @@ router.post('/unlock', authLimiter, authenticate, signedIn('unlocks the till'), 
       ok = Boolean(holder && String(holder._id) === String(me._id));
     }
   }
-  await audit(req, { action: ok ? 'auth.till_unlocked' : 'auth.till_unlock_failed', entity: 'User', entityId: me._id, details: { by: body.cardCode ? 'card' : 'pin/password' } });
-  if (!ok) throw unauthorized(body.cardCode ? 'That card is not yours: sign in as that person instead' : 'Wrong PIN or password');
+  await audit(req, { action: ok ? 'auth.till_unlocked' : 'auth.till_unlock_failed', entity: 'User', entityId: me._id, details: { by: body.cardCode ? 'card' : by } });
+  if (!ok) throw unauthorized(body.cardCode ? 'That card is not yours: sign in as that person instead' : body.loginToken ? 'That fingerprint is not yours' : 'Wrong PIN or password');
   res.json({ ok: true });
 });
 
@@ -193,7 +199,7 @@ router.get('/me', async (req, res) => {
   const u = await User.findById(a.userId).lean();
   const user = {
     id: a.userId, name: a.name, email: a.email, roles: a.roles, branchIds: a.branchIds, kind: a.kind,
-    twoFactorEnabled: Boolean(u?.twoFactor?.enabled), emailVerified: Boolean(u?.emailVerifiedAt), hasPin: Boolean(u?.pinHash), phone: u?.phone,
+    twoFactorEnabled: Boolean(u?.twoFactor?.enabled), emailVerified: Boolean(u?.emailVerifiedAt), hasPin: Boolean(u?.pinHash), hasFingerprint: await BiometricTemplate.exists({ userId: a.userId }).then(Boolean), phone: u?.phone,
   };
   // Checkout rules: pages a plain cashier may open (Checkout itself always stays).
   const rules = mergeCheckoutRules(t.settings?.checkoutRules, t.settings ?? {});

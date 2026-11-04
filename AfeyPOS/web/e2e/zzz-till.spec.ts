@@ -44,12 +44,14 @@ test('till: switch a line to cartons, the customer display follows, and the till
   await page.clock.fastForward('01:10');
   const lock = page.getByTestId('till-lock');
   await expect(lock).toBeVisible();
-  await lock.getByLabel('PIN, password or card').fill('wrong-password');
-  await lock.getByLabel('PIN, password or card').press('Enter');
+  // No fingerprint reader here, so it offers card, PIN and password; unlock with the password.
+  await lock.getByRole('radio', { name: 'Password' }).click();
+  await lock.getByLabel('Password').fill('wrong-password');
+  await lock.getByLabel('Password').press('Enter');
   await expect(lock.getByText('Wrong PIN or password')).toBeVisible();
   await page.screenshot({ path: 'test-results/till-lock.png' });
-  await lock.getByLabel('PIN, password or card').fill('Mandera2026');
-  await lock.getByLabel('PIN, password or card').press('Enter');
+  await lock.getByLabel('Password').fill('Mandera2026');
+  await lock.getByLabel('Password').press('Enter');
   await expect(lock).toHaveCount(0);
   await expect(page.getByTestId('cart-total')).toHaveText(/1,200\.00/);
 
@@ -258,4 +260,31 @@ test('checkout grid of products and the on-screen number keypad', async ({ page 
   await page.getByText('Show products as a grid of pictures at the checkout').click();
   await page.getByRole('button', { name: 'Save rules' }).click();
   await expect(page.getByText('Checkout rules saved')).toBeVisible();
+});
+
+test('checkout: the on-screen number keypad types into the scan box', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+  await page.goto('/pos');
+  const start = page.getByRole('button', { name: /^Start shift/ });
+  if (await start.isVisible().catch(() => false)) {
+    await page.getByRole('button', { name: 'Enter the total instead' }).click();
+    await page.getByLabel('Opening float').fill('500');
+    await start.click();
+  }
+  await page.getByRole('button', { name: 'Keypad', exact: true }).click();
+  const pad = page.getByTestId('checkout-keypad');
+  await expect(pad).toBeVisible();
+  const scan = page.getByLabel('Scan or search products');
+  await scan.click();
+  await pad.getByRole('button', { name: '1', exact: true }).click();
+  await pad.getByRole('button', { name: '2', exact: true }).click();
+  await pad.getByRole('button', { name: '3', exact: true }).click();
+  await expect(scan).toHaveValue('123');
+  await page.screenshot({ path: 'test-results/checkout-keypad.png' });
+  await pad.getByRole('button', { name: 'Hide keypad' }).click();
+  await expect(pad).toHaveCount(0);
 });

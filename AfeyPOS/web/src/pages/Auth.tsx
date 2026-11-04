@@ -100,17 +100,17 @@ const IconInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElem
 
 type LoginMode = 'password' | 'pin' | 'card' | 'finger';
 const MODES: { key: LoginMode; label: string; icon: string }[] = [
-  { key: 'password', label: 'Password', icon: 'lock' },
-  { key: 'pin', label: 'PIN', icon: 'keypad' },
-  { key: 'card', label: 'Staff card', icon: 'idcard' },
   { key: 'finger', label: 'Fingerprint', icon: 'finger' },
+  { key: 'card', label: 'Staff card', icon: 'idcard' },
+  { key: 'pin', label: 'PIN', icon: 'keypad' },
+  { key: 'password', label: 'Password', icon: 'lock' },
 ];
 
 export function LoginPage() {
   const { login, completeMfa, pinLogin, cardLogin, fingerprintLogin } = useAuth();
   const nav = useNavigate();
   const cfg = usePublicConfig();
-  const [mode, setMode] = useState<LoginMode>('password');
+  const [mode, setMode] = useState<LoginMode>(bridgeConfigured() ? 'finger' : 'password');
   const [email, setEmail] = useState('');
   const [secret, setSecret] = useState('');
   const [card, setCard] = useState('');
