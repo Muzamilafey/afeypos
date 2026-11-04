@@ -58,6 +58,10 @@ export const DEFAULT_TEMPLATES: Record<string, TemplateDef> = {
     sms: '{{business}}: {{message}} Reply STOP to opt out.',
     email: { subject: '{{subject}}', body: 'Hello {{customer}},\n\n{{message}}\n\n{{business}}\nTo stop these messages, reply "unsubscribe".' },
   },
+  'comm.message': {
+    sms: '{{message}}',
+    email: { subject: '{{subject}}', body: '{{message}}' },
+  },
   birthday: {
     sms: 'Happy birthday {{customer}}! {{business}} wishes you a wonderful day. {{offer}}',
     email: { subject: 'Happy birthday from {{business}}', body: 'Hello {{customer}},\n\nHappy birthday from all of us at {{business}}!\n\n{{offer}}' },

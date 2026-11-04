@@ -6,6 +6,7 @@ import { AppShell } from './layouts/AppShell';
 import { Loading, EmptyState } from './components/ui';
 import { ForgotPasswordPage, LoginPage, SetupPage, ResetPasswordPage, VerifyEmailPage } from './pages/Auth';
 import { DashboardPage } from './pages/Dashboard';
+import { CommunicationsPage } from './pages/Communications';
 import { POSPage } from './pages/POS';
 import { SaleDetailPage, SalesPage, ShiftsPage } from './pages/sales/Sales';
 import { ReturnsPage } from './pages/sales/Returns';
@@ -117,6 +118,7 @@ export function App() {
         <Route path="settings/store-studio" element={<Gate perm="settings.manage" module="onlineStore"><StoreStudioPage /></Gate>} />
         <Route path="accounting" element={<Gate perm="accounting.read" module="accounting"><AccountingPage /></Gate>} />
         <Route path="accounting/ledger/:code" element={<Gate perm="accounting.read" module="accounting"><LedgerPage /></Gate>} />
+        <Route path="communications" element={<Gate perm="comms.send"><CommunicationsPage /></Gate>} />
         <Route path="crm" element={<Gate perm="customers.read" module="crm"><CrmPage /></Gate>} />
         <Route path="payments/payouts" element={<Gate perm="payouts.request" module="mpesa"><PayoutsPage /></Gate>} />
         <Route path="hr/employees" element={<Gate perm="hr.manage" module="hr"><EmployeesPage /></Gate>} />

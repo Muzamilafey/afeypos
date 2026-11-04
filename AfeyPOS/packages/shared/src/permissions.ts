@@ -66,6 +66,7 @@ export const PERMISSIONS = [
   'accounting.read',
   'accounting.manage',
   'crm.manage',
+  'comms.send',
   'orders.manage',
   // reporting
   'reports.read',
@@ -107,7 +108,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'purchasing.read',
     'sales.create', 'sales.read', 'sales.read.all', 'sales.discount', 'sales.discount.override', 'sales.price.override', 'sales.void', 'sales.items.remove', 'sales.qty.override', 'vouchers.manage', 'loyalty.manage', 'sales.return', 'returns.approve', 'sales.credit',
     'quotations.manage', 'shifts.open', 'shifts.manage', 'cash.movement', 'payments.reconcile', 'terminals.refund', 'terminals.reconcile', 'expenses.manage',
-    'reports.read', 'assistant.use', 'commissions.read', 'biometrics.enroll', 'hardware.manage', 'hr.manage', 'crm.manage', 'orders.manage',
+    'reports.read', 'assistant.use', 'commissions.read', 'biometrics.enroll', 'hardware.manage', 'hr.manage', 'crm.manage', 'comms.send', 'orders.manage',
   ],
   inventory_manager: [
     'products.read', 'products.manage', 'products.cost', 'inventory.read', 'inventory.adjust', 'inventory.adjust.approve', 'inventory.transfer',
@@ -219,6 +220,7 @@ export const PERMISSION_INFO: Record<Permission, { label: string; group: (typeof
   'hr.manage': { label: 'Manage employees, leave and attendance', group: 'People', sensitive: true },
   'payroll.manage': { label: 'Prepare payroll', group: 'People', sensitive: true },
   'payroll.approve': { label: 'Approve and pay payroll', group: 'People', sensitive: true },
+  'comms.send': { label: 'Send SMS & email to customers, staff and suppliers', group: 'Customers', sensitive: true },
   'crm.manage': { label: 'Run CRM and campaigns', group: 'Customers & suppliers' },
   'accounting.read': { label: 'See the books', group: 'Accounts', sensitive: true },
   'accounting.manage': { label: 'Post journals and close periods', group: 'Accounts', sensitive: true },

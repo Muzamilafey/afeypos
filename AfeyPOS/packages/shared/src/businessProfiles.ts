@@ -352,6 +352,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'attendance', label: 'Attendance', path: '/hr/attendance', icon: 'clipboard', module: 'hr', permission: 'hr.manage', group: 'people' },
   { key: 'loyalty', label: 'Loyalty program', path: '/loyalty', icon: 'star', module: 'loyalty', permission: 'customers.read', group: 'parties' },
   { key: 'crm', label: 'CRM & campaigns', path: '/crm', icon: 'users', module: 'crm', permission: 'customers.read', group: 'parties' },
+  { key: 'communications', label: 'Communications', path: '/communications', icon: 'megaphone', permission: 'comms.send', group: 'parties' },
   { key: 'accounting', label: 'Accounts', path: '/accounting', icon: 'doc', module: 'accounting', permission: 'accounting.read', group: 'finance' },
   // Reports: one menu entry per report (pages/Finance.tsx ReportsPage, by path).
   { key: 'reportSales', label: 'Sales Reports', path: '/reports/sales', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
