@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -32,7 +33,9 @@ export function CommunicationsPage() {
 function Compose({ smsOn, emailOn }: { smsOn: boolean; emailOn: boolean }) {
   const toast = useToast();
   const templates = useQuery({ queryKey: ['comm-templates'], queryFn: () => api<{ data: Template[] }>('/communications/templates').then((r) => r.data) });
-  const [audience, setAudience] = useState<Audience>('customers');
+  const [params] = useSearchParams();
+  const initialAudience = (['customers', 'staff', 'suppliers'] as const).find((a) => a === params.get('audience')) ?? 'customers';
+  const [audience, setAudience] = useState<Audience>(initialAudience);
   const [channel, setChannel] = useState<'sms' | 'email'>(smsOn ? 'sms' : 'email');
   const [templateId, setTemplateId] = useState('promo');
   const [subject, setSubject] = useState('');

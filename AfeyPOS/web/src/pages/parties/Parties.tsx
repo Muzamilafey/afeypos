@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, newRequestId } from '../../lib/api';
@@ -125,6 +125,59 @@ function SupplierPurchasing({ supplierId }: { supplierId: string }) {
   );
 }
 
+function Info({ label, value }: { label: string; value: ReactNode }) {
+  if (value === undefined || value === null || value === '' ) return null;
+  return <div><dt className="text-[11px] font-bold uppercase tracking-wide text-ink-500">{label}</dt><dd className="mt-0.5 text-sm">{value}</dd></div>;
+}
+
+/** Contact and account details of the customer or supplier. */
+function ProfileCard({ kind, p }: { kind: 'customer' | 'supplier'; p: any }) {
+  return (
+    <Card title="Profile & contact" className="mt-4">
+      <dl className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        <Info label="Phone" value={p.phone} />
+        <Info label="Email" value={p.email} />
+        <Info label="Address" value={p.address} />
+        <Info label="KRA PIN" value={p.taxPin} />
+        {kind === 'customer' ? <>
+          <Info label="Type" value={p.kind?.replace('_', ' ')} />
+          <Info label="Price list" value={p.priceList} />
+          <Info label="Payment terms" value={p.paymentTermsDays ? `${p.paymentTermsDays} days` : undefined} />
+          <Info label="Loyalty card" value={p.loyaltyCardNo} />
+          <Info label="Date of birth" value={p.dateOfBirth ? date(p.dateOfBirth) : undefined} />
+          <Info label="How they found us" value={p.source} />
+          <Info label="Agreed to messages" value={p.marketingOptIn ? 'Yes' : 'No'} />
+          <Info label="Tags" value={p.tags?.length ? <span className="flex flex-wrap gap-1">{p.tags.map((t: string) => <span key={t} className="rounded-full bg-ink-100 px-2 py-0.5 text-xs dark:bg-ink-800">{t}</span>)}</span> : undefined} />
+        </> : <>
+          <Info label="Contact person" value={p.contactPerson} />
+          <Info label="Payment terms" value={p.paymentTermsDays ? `${p.paymentTermsDays} days` : undefined} />
+          <Info label="Lead time" value={p.leadTimeDays ? `${p.leadTimeDays} days` : undefined} />
+        </>}
+        <Info label="Notes" value={p.notes} />
+      </dl>
+    </Card>
+  );
+}
+
+/** Supplier reliability: on-time deliveries, fill rate, average lead time and damaged goods. */
+function SupplierReliabilityCard({ supplierId }: { supplierId: string }) {
+  const q = useQuery({ queryKey: ['supplier-performance', supplierId], queryFn: () => api<{ data: any[] }>('/reports/supplier-performance', { query: { supplierId } }).then((r) => r.data) });
+  const d = q.data?.[0];
+  if (!q.isLoading && !d) return null;
+  return (
+    <Card title="Supplier performance" className="mt-4">
+      {d ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Stat label="Orders" value={String(d.orders ?? 0)} hint={`${d.delivered ?? 0} delivered`} />
+          <Stat label="On-time deliveries" value={d.onTimePct == null ? '—' : `${d.onTimePct}%`} tone={d.onTimePct != null && d.onTimePct < 80 ? 'red' : undefined} />
+          <Stat label="Fill rate" value={d.fillRatePct == null ? '—' : `${d.fillRatePct}%`} hint="Received ÷ ordered" />
+          <Stat label="Avg lead time" value={d.avgLeadDays == null ? '—' : `${d.avgLeadDays} days`} hint={d.damagedPct ? `${d.damagedPct}% damaged` : undefined} />
+        </div>
+      ) : <Loading />}
+    </Card>
+  );
+}
+
 export function PartyDetailPage({ kind }: { kind: 'customer' | 'supplier' }) {
   const { id } = useParams();
   const qc = useQueryClient();
@@ -149,6 +202,7 @@ export function PartyDetailPage({ kind }: { kind: 'customer' | 'supplier' }) {
     <div>
       <PageHeader title={p.name} subtitle={`${p.code}${p.phone ? ' · ' + p.phone : ''}`} actions={<>
         <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
+        {(p.email || p.phone) && can('comms.send') && <Link to={`/communications?audience=${kind === 'customer' ? 'customers' : 'suppliers'}`}><Button variant="secondary">Message</Button></Link>}
         {(p.email || p.phone) && <Button variant="secondary" onClick={() => api(`/${kind === 'customer' ? 'customers' : 'suppliers'}/${id}/statement/send`, { body: {} }).then(() => toast.success('Statement queued')).catch(toast.error)}>Send statement</Button>}
         {canPay && <Button onClick={() => setPaying(true)}>{kind === 'customer' ? 'Receive payment' : 'Pay supplier'}</Button>}
       </>} />
@@ -163,6 +217,19 @@ export function PartyDetailPage({ kind }: { kind: 'customer' | 'supplier' }) {
           <div className="grid grid-cols-5 gap-2 text-sm">{[['Current', ageing.current], ['1-30', ageing.d1_30], ['31-60', ageing.d31_60], ['61-90', ageing.d61_90], ['90+', ageing.d90plus]].map(([l, v]) => <div key={l as string}><div className="label">{l}</div>{money(v as number)}</div>)}</div>
         </Card>
       )}
+      <ProfileCard kind={kind} p={p} />
+      {kind === 'customer' && (p.recentSales?.length ?? 0) > 0 && (
+        <Card title="Recent purchases" className="mt-4" actions={<Link className="text-xs text-brand-600 hover:underline" to="/sales">All sales</Link>}>
+          <DataTable rows={p.recentSales.map((r: any) => ({ ...r, id: r._id }))} columns={[
+            { key: 'n', header: 'Receipt', render: (r: any) => <Link className="font-semibold hover:text-brand-600" to={`/sales/${r._id}`}>{r.number}</Link> },
+            { key: 'd', header: 'Date', render: (r: any) => dateTime(r.completedAt) },
+            { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
+            { key: 'c', header: 'On credit', className: 'num', render: (r: any) => (r.creditCents ? money(r.creditCents) : '—') },
+            { key: 't', header: 'Total', className: 'num', render: (r: any) => money(r.totalCents) },
+          ]} />
+        </Card>
+      )}
+      {kind === 'supplier' && has('purchasing') && can('purchasing.read') && <SupplierReliabilityCard supplierId={p._id} />}
       {kind === 'customer' && has('crm') && <CustomerCrmPanel customerId={p._id} customer={p} />}
       <Card title="Account history" className="mt-4">
         <table className="min-w-full text-sm"><thead><tr><th className="th">Date</th><th className="th">Type</th><th className="th">Document</th><th className="th">Due</th><th className="th num">Amount</th><th className="th num">Balance</th></tr></thead>
