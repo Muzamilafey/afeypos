@@ -11,6 +11,7 @@ import { useLocations } from '../../lib/hooks';
 import { money } from '../../lib/format';
 import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, MoneyInput, PageHeader, Select, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { EtimsItemClassPicker } from '../../components/EtimsItemClassPicker';
 
 const STEPS = ['Identify', 'Selling method', 'Units', 'Pricing', 'Barcodes & SKU', 'Inventory', 'Hardware & labels', 'Review'] as const;
 
@@ -76,6 +77,7 @@ export function ProductWizardPage() {
   const [binLocation, setBinLocation] = useState('');
   const [supplierId, setSupplierId] = useState('');
   const [plu, setPlu] = useState('');
+  const [itemClsCd, setItemClsCd] = useState('');
   const [labelCopies, setLabelCopies] = useState('1');
   const [labelPrice, setLabelPrice] = useState(true);
   const [online, setOnline] = useState(false);
@@ -185,6 +187,7 @@ export function ProductWizardPage() {
         trackStock: type === 'stock' && trackStock, trackBatches, trackSerials, allowFractional: fractional && !trackSerials, soldByWeight: weighed,
         reorderLevel: Number(reorderLevel) || 0, reorderQty: Number(reorderQty) || 0, maxStock: Number(maxStock) || 0, binLocation: binLocation || undefined,
         supplierId: supplierId || null, plu: plu || null, scaleIds: scaleIds.length ? scaleIds : undefined, label: { copies: Number(labelCopies) || 1, showPrice: labelPrice }, online: online ? { enabled: true } : undefined,
+        etims: itemClsCd ? { itemClsCd } : undefined,
       };
       const wh = warehouseId || defaultWh?._id;
       if (type === 'stock' && Number(openingQty) > 0 && wh) {
@@ -425,6 +428,11 @@ export function ProductWizardPage() {
             <div className="pt-6"><Checkbox label="Show the price on labels" checked={labelPrice} onChange={setLabelPrice} /></div>
             {caps.modules.includes('onlineStore') && <div className="pt-6"><Checkbox label="Sell on the online shop" checked={online} onChange={setOnline} /></div>}
           </div>
+          {caps.modules.includes('etims') && (
+            <div className="mt-4 max-w-md">
+              <EtimsItemClassPicker value={itemClsCd} onChange={setItemClsCd} />
+            </div>
+          )}
           {plu && (labelScales.data ?? []).length > 0 && (
             <div className="mt-4">
               <div className="label">Label scales</div>

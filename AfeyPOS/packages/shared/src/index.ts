@@ -16,3 +16,4 @@ export * from './pricing.js';
 export * from './scales.js';
 export * from './hardwareCatalog.js';
 export * from './labelBarcode.js';
+export * from './etimsItemClasses.js';

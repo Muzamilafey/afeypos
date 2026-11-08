@@ -9,6 +9,7 @@ import { date, money, qty } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, Select, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { EtimsItemClassPicker } from '../../components/EtimsItemClassPicker';
 
 const FIELD_LABELS: Partial<Record<ProductField, string>> = {
   brand: 'Brand', dimensions: 'Dimensions', grade: 'Grade', specifications: 'Specifications', size: 'Size', color: 'Colour', material: 'Material', model: 'Model',
@@ -225,7 +226,7 @@ export function ProductEditPage() {
         {caps.modules.includes('etims') && (
           <Card title="KRA eTIMS">
             <div className="space-y-3">
-              <Field label="Item classification code" hint="KRA's code for this kind of item (from the eTIMS code list)"><Input inputMode="numeric" value={p.etims?.itemClsCd ?? ''} onChange={(e) => set('etims', { ...p.etims, itemClsCd: e.target.value.replace(/\D/g, '') })} /></Field>
+              <EtimsItemClassPicker value={p.etims?.itemClsCd ?? ''} onChange={(code) => set('etims', { ...p.etims, itemClsCd: code })} />
               <Field label="Tax type" hint="Leave as automatic to follow the VAT rate">
                 <Select value={p.etims?.taxTyCd ?? ''} onChange={(e) => set('etims', { ...p.etims, taxTyCd: e.target.value })} placeholder="Automatic (from VAT rate)"
                   options={[{ value: 'B', label: 'B: VAT 16%' }, { value: 'E', label: 'E: VAT 8%' }, { value: 'C', label: 'C: zero-rated' }, { value: 'A', label: 'A: exempt' }, { value: 'D', label: 'D: non-VAT' }]} />
