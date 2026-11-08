@@ -9,7 +9,7 @@ import { DataTable } from '../../components/DataTable';
 import { ProductPicker } from '../../components/ProductPicker';
 import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
-import { code128Svg } from '../../components/barcode';
+import { labelBarcodeSvg } from '@afeypos/shared';
 import { PrintingVisual } from '../../components/PayVisuals';
 import { bridge, bridgeConfigured } from '../../lib/bridge';
 import { printHtmlString } from '../../lib/printing';
@@ -260,12 +260,13 @@ const unitLine = (r: LabelRow) => (r.factor === 1 ? '' : `${r.unitName} · ${r.f
 /** 50 x 30 mm labels as a printable page (browser printing and the preview). */
 function labelsHtml(rows: LabelRow[], opts: { preview?: boolean } = {}) {
   const body = rows.flatMap((r) => {
-    const svg = code128Svg(r.code!, 40, 1.5);
+    // A real EAN/UPC symbol for GTIN codes, Code 128 otherwise; sized in mm to fit the 46 mm usable width and stay scannable.
+    const svg = labelBarcodeSvg(r.code!, { heightMm: 9, maxWidthMm: 46 });
     const unit = unitLine(r) ? `<div class="u">${escHtml(unitLine(r))}</div>` : '';
     const one = `<div class="l"><div class="n">${escHtml(r.p.name)}</div>${unit}<div class="p">KES ${(r.priceCents / 100).toFixed(2)}</div>${svg}<div class="c">${escHtml(r.code!)}</div></div>`;
     return Array.from({ length: opts.preview ? 1 : r.copies }, () => one);
   }).join('');
-  const style = `@page{size:50mm 30mm;margin:0}body{margin:0;font:10px sans-serif;${opts.preview ? 'background:#e9ebee;display:flex;flex-wrap:wrap;gap:8px;padding:8px' : ''}}.l{width:50mm;height:30mm;padding:2mm;box-sizing:border-box;${opts.preview ? 'background:#fff;border-radius:4px;box-shadow:0 1px 3px #0003' : 'page-break-after:always'};text-align:center;overflow:hidden}.n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.u{font-size:8px;font-weight:600;text-transform:uppercase}.p{font-size:14px;font-weight:700}svg{max-width:100%;height:9mm}.c{font-size:8px}`;
+  const style = `@page{size:50mm 30mm;margin:0}body{margin:0;font:10px sans-serif;${opts.preview ? 'background:#e9ebee;display:flex;flex-wrap:wrap;gap:8px;padding:8px' : ''}}.l{width:50mm;height:30mm;padding:2mm;box-sizing:border-box;${opts.preview ? 'background:#fff;border-radius:4px;box-shadow:0 1px 3px #0003' : 'page-break-after:always'};text-align:center;overflow:hidden}.n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.u{font-size:8px;font-weight:600;text-transform:uppercase}.p{font-size:14px;font-weight:700}svg{display:block;margin:0.5mm auto 0;max-width:100%}.c{font-size:8px}`;
   return `<!doctype html><html><head><title>Labels</title><style>${style}</style></head><body>${body}</body></html>`;
 }
 

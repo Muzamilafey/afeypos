@@ -2,7 +2,7 @@ import { Router } from 'express';
 import net from 'node:net';
 import { z } from 'zod';
 import { BiometricDevice, HardwareDevice, PaymentTerminal, Sale, Till, Tenant, WeighingScale } from '../../models/index.js';
-import { COMPAT_STATUS, CONNECTION_LABELS, HARDWARE_CATALOG, HARDWARE_CATEGORIES } from '@afeypos/shared';
+import { COMPAT_STATUS, CONNECTION_LABELS, HARDWARE_CATALOG, HARDWARE_CATEGORIES, detectBarcode } from '@afeypos/shared';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
@@ -264,13 +264,25 @@ const labelItems = z.array(z.object({
   barcode: z.string().regex(/^[A-Za-z0-9-]{1,40}$/), copies: z.number().int().min(1).max(500).default(1),
 })).min(1).max(500);
 
+/** A valid retail GTIN prints as a real EAN-13 symbol; everything else as Code 128. Returns the printer command. */
+function barcodeCommand(language: 'zpl' | 'tspl', raw: string): string {
+  const info = detectBarcode(raw);
+  const ean13 = info.format === 'EAN-13' && info.checkDigitValid ? info.code : info.format === 'UPC-A' && info.checkDigitValid ? `0${info.code}` : info.format === 'UPC-E' && info.gtin13 ? info.gtin13 : null;
+  if (language === 'zpl') {
+    // ^BE = EAN-13 (give 13 digits, the printer validates the check); ^BC = Code 128. ^BY2 = ~0.25 mm module.
+    return ean13 ? `^FO30,105^BY2^BEN,65,Y,N^FD${ean13}^FS` : `^FO20,110^BY2^BCN,60,Y,N,N^FD${raw}^FS`;
+  }
+  // TSPL: "EAN13" takes the 12-digit body (it computes the check); "128" is Code 128.
+  return ean13 ? `BARCODE 40,95,"EAN13",65,1,0,3,3,"${ean13.slice(0, 12)}"` : `BARCODE 20,100,"128",60,1,0,2,2,"${raw}"`;
+}
+
 /** 50 x 30 mm labels in ZPL (Zebra, 203 dpi) or TSPL (TSC, Xprinter...). */
 function labelPayload(language: 'zpl' | 'tspl', items: z.infer<typeof labelItems>) {
   const clean = (s: string) => s.replace(/[\^~"\\]/g, '');
   return items.map((i) =>
     language === 'zpl'
-      ? `^XA^CI28^PW400^LL240^FO20,15^A0N,26,26^FD${clean(i.name)}^FS${i.unit ? `^FO20,45^A0N,20,20^FD${clean(i.unit)}^FS` : ''}^FO20,${i.unit ? 68 : 50}^A0N,34,34^FD${clean(i.price)}^FS^FO20,110^BY2^BCN,60,Y,N,N^FD${i.barcode}^FS^PQ${i.copies}^XZ`
-      : `SIZE 50 mm,30 mm\nGAP 2 mm,0\nCLS\nTEXT 20,10,"3",0,1,1,"${clean(i.name)}"\n${i.unit ? `TEXT 20,38,"2",0,1,1,"${clean(i.unit)}"\n` : ''}TEXT 20,${i.unit ? 58 : 45},"4",0,1,1,"${clean(i.price)}"\nBARCODE 20,100,"128",60,1,0,2,2,"${i.barcode}"\nPRINT ${i.copies}\n`,
+      ? `^XA^CI28^PW400^LL240^FO20,15^A0N,26,26^FD${clean(i.name)}^FS${i.unit ? `^FO20,45^A0N,20,20^FD${clean(i.unit)}^FS` : ''}^FO20,${i.unit ? 68 : 50}^A0N,34,34^FD${clean(i.price)}^FS${barcodeCommand('zpl', i.barcode)}^PQ${i.copies}^XZ`
+      : `SIZE 50 mm,30 mm\nGAP 2 mm,0\nCLS\nTEXT 20,10,"3",0,1,1,"${clean(i.name)}"\n${i.unit ? `TEXT 20,38,"2",0,1,1,"${clean(i.unit)}"\n` : ''}TEXT 20,${i.unit ? 58 : 45},"4",0,1,1,"${clean(i.price)}"\n${barcodeCommand('tspl', i.barcode)}\nPRINT ${i.copies}\n`,
   ).join('\n');
 }
 

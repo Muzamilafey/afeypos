@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { setupApp, teardown, registerTenant, createProduct, openShift, rid, type Ctx } from './helpers.js';
 import { drainJobs } from '../src/jobs/queue.js';
 import { JournalEntry, Account } from '../src/models/index.js';
-import { runAsPlatform, runInTenant } from '../src/lib/context.js';
+import { runInTenant } from '../src/lib/context.js';
 import { Types } from 'mongoose';
 
 let ctx: Ctx;
