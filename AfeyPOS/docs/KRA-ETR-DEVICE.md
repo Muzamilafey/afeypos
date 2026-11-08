@@ -26,6 +26,7 @@ Afey POS can reach that program in one of two ways. Ask the ETR supplier which o
 |---|---|---|
 | **Its program listens on this computer** (web address) | Afey POS sends each invoice to the program's address, e.g. `http://127.0.0.1:4444/invoice`, and reads the answer. | The program's address and port (and a key, if it asks for one) |
 | **Folder exchange** | Afey POS saves each invoice as a file in the program's **inbox** folder; the program signs it and saves its answer in the **outbox** folder. | The two folders, e.g. `C:\ETR\in` and `C:\ETR\out` |
+| **Tremol control unit (ZFP Lab Server)** | For Tremol devices such as the **G03** (sold in Kenya by Total Solutions). Afey POS drives the control unit through Tremol's **ZFP Lab Server** running on this computer: it opens a receipt, adds each line and closes it, then reads the control-unit invoice number, signature and QR. | The ZFP Lab Server address (default `http://127.0.0.1:4444`), the operator number/password, and the CU serial number |
 
 How the ETR is plugged in (USB, serial cable or network) does not matter to Afey POS: the program handles it.
 
@@ -99,6 +100,38 @@ On the **shop computer's** Afey POS (e.g. `http://localhost:9999`):
 
 **Try it first with the Simulator**: it signs with made-up numbers and sends nothing to KRA, so you can check the
 receipt layout before the supplier sets the device up.
+
+---
+
+## 3b. Tremol G03 (ZFP Lab Server)
+
+The **Tremol G03** control unit (Type B / Type C, sold in Kenya by Total Solutions) is driven through Tremol's
+**ZFP Lab Server**, a small program the supplier installs on the shop computer that listens on `http://127.0.0.1:4444`
+by default.
+
+1. In the ETR form, set **How Afey POS reaches the ETR program → Tremol control unit (ZFP Lab Server)**.
+2. Fill in:
+
+   | Field | What to enter |
+   |---|---|
+   | Program address | the ZFP Lab Server address, usually `http://127.0.0.1:4444` |
+   | CU serial number | the G03's serial, e.g. `KRAMW011202207061496` |
+   | Tremol operator / cashier number | usually `1` |
+   | Tremol operator password | usually `0000` (stored as a secret) |
+
+3. **Save**, then press **Test**: Afey POS asks the ZFP Lab Server for the device version — you should see
+   *"Tremol ZFP Lab Server answers at…"*. If not, start the ZFP Lab Server and check the port.
+4. For each sale Afey POS runs the device's own command sequence — **open the receipt, add every line with its VAT
+   class, close the receipt** — then reads the control-unit invoice number, signature and QR from the device and
+   prints them, exactly like any other ETR.
+
+> **Confirm one real receipt before going live.** The exact command arguments the G03 expects can differ by firmware
+> version. Afey POS uses Tremol's documented order, and if the device rejects a command it is reported as a failed
+> fiscalisation (never a fake signature) — nothing is ever marked signed unless the device returned a real
+> control-unit number. Make one test sale, then check that invoice on the **KRA portal** to confirm it was recorded.
+> If your firmware uses a different argument order, the ETR supplier can give you the exact `OpenReceipt` /
+> `SellPLUwithSpecifiedVAT` / `CloseReceipt` signatures from the device's ZFP manual, and they can be set on the
+> device (advanced command templates) without changing Afey POS.
 
 ---
 

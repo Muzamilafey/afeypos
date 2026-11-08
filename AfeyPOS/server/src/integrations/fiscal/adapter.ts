@@ -30,7 +30,7 @@ export interface FiscalCapabilities {
   localOnly: boolean;
 }
 
-export type FiscalKind = 'oscu' | 'vscu' | 'etr_http' | 'etr_folder' | 'etr_simulator' | 'mock';
+export type FiscalKind = 'oscu' | 'vscu' | 'etr_http' | 'etr_folder' | 'etr_tremol' | 'etr_simulator' | 'mock';
 
 /** Fiscal states of a sale or credit note. "signed" is the stored value for Fiscalized (kept for older records). */
 export const FISCAL_STATUSES = ['pending', 'processing', 'signed', 'rejected', 'failed', 'awaiting_confirmation', 'device_disconnected', 'requires_reconciliation'] as const;

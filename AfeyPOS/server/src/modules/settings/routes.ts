@@ -336,7 +336,7 @@ const integrationSchema = z.object({
   environment: z.enum(['sandbox', 'production']).default('sandbox'),
   branchIds: z.array(objectId).default([]),
   tillIds: z.array(objectId).max(200).default([]),
-  settings: z.record(z.string(), z.union([z.string().max(300), z.number(), z.boolean()])).default({}),
+  settings: z.record(z.string(), z.union([z.string().max(300), z.number(), z.boolean(), z.array(z.string().max(120)).max(30)])).default({}),
   secrets: z.record(z.string(), z.string().max(4000)).optional(),
 });
 
@@ -353,9 +353,10 @@ const isSimulator = (c: { provider: string }) => c.provider === 'mock' || c.prov
 /** An ETR device is reached on the Afey POS computer: the online head office cannot reach one in a shop. */
 function assertEtrSettings(st: Record<string, unknown>) {
   const how = String(st.connection ?? 'http');
-  if (!['http', 'folder', 'simulator'].includes(how)) throw badRequest('ETR device: choose how Afey POS reaches its program');
+  if (!['http', 'folder', 'tremol', 'simulator'].includes(how)) throw badRequest('ETR device: choose how Afey POS reaches its program');
   if (how !== 'simulator' && env().DEPLOYMENT_MODE === 'hq') throw badRequest('ETR device: it is plugged into the shop computer, so set it up on that computer (the branch server), not on the online head office');
   if (how === 'http' && !/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost)/.test(String(st.url ?? ''))) throw badRequest('ETR device: enter the address of its program on this computer, e.g. http://127.0.0.1:4444');
+  if (how === 'tremol' && st.url && !/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost)/.test(String(st.url))) throw badRequest('Tremol: the ZFP Lab Server address must be on this computer or the shop network, e.g. http://127.0.0.1:4444');
   if (how === 'folder' && (!st.inbox || !st.outbox)) throw badRequest('ETR device: enter the inbox and outbox folders of its program');
 }
 

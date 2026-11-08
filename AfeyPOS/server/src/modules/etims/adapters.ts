@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { IntegrationConfig } from '../../models/index.js';
 import { EtimsClient, MockEtimsGateway, type EtimsGateway, type EtimsSale } from '../../integrations/etims/client.js';
 import { EtrGateway, type EtrConfig } from '../../integrations/etims/etr.js';
+import { TremolGateway, type TremolConfig } from '../../integrations/etims/tremol.js';
 import {
   FiscalUnsupportedError, type DeviceInfo, type DeviceStatus, type FiscalAdapter, type FiscalCapabilities, type FiscalKind, type FiscalSignature, type StatusAnswer,
 } from '../../integrations/fiscal/adapter.js';
@@ -18,13 +19,13 @@ export function fiscalKind(cfg: { provider: string; settings?: any }): FiscalKin
   if (cfg.provider === 'vscu') return 'vscu';
   if (cfg.provider === 'etr') {
     const c = cfg.settings?.connection;
-    return c === 'folder' ? 'etr_folder' : c === 'simulator' ? 'etr_simulator' : 'etr_http';
+    return c === 'folder' ? 'etr_folder' : c === 'simulator' ? 'etr_simulator' : c === 'tremol' ? 'etr_tremol' : 'etr_http';
   }
   return 'oscu';
 }
 
 export const KIND_LABEL: Record<FiscalKind, string> = {
-  oscu: 'KRA eTIMS OSCU (online)', vscu: 'KRA eTIMS VSCU (shop network)', etr_http: 'ETR device: maker\'s program (web address)', etr_folder: 'ETR device: maker\'s program (folders)', etr_simulator: 'ETR simulator', mock: 'eTIMS simulator',
+  oscu: 'KRA eTIMS OSCU (online)', vscu: 'KRA eTIMS VSCU (shop network)', etr_http: 'ETR device: maker\'s program (web address)', etr_folder: 'ETR device: maker\'s program (folders)', etr_tremol: 'ETR device: Tremol (ZFP Lab Server)', etr_simulator: 'ETR simulator', mock: 'eTIMS simulator',
 };
 
 const NONE: FiscalCapabilities = { submitInvoice: false, submitCreditNote: false, submitDebitNote: false, cancelTransaction: false, transactionStatus: false, lastFiscalReceipt: false, deviceInfo: true, initialize: false, itemRegistration: false, safeResend: false, localOnly: false };
@@ -44,6 +45,8 @@ export function fiscalCapabilities(cfg: { provider: string; settings?: any }): F
     case 'etr_http': return { ...NONE, ...sells, initialize: true, transactionStatus: Boolean(cfg.settings?.statusPath), localOnly: true };
     // The invoice file is written once; the answer file is the status.
     case 'etr_folder': return { ...NONE, ...sells, initialize: true, transactionStatus: true, safeResend: true, localOnly: true };
+    // The ZFP Lab Server drives the control unit; its last-receipt number is queried before any resend.
+    case 'etr_tremol': return { ...NONE, ...sells, initialize: true, transactionStatus: true, localOnly: true };
     case 'etr_simulator': return { ...NONE, ...sells, initialize: true, transactionStatus: true, safeResend: true };
     case 'mock': return { ...NONE, ...sells, initialize: true, itemRegistration: true, transactionStatus: true, lastFiscalReceipt: true, safeResend: true };
   }
@@ -52,6 +55,15 @@ export function fiscalCapabilities(cfg: { provider: string; settings?: any }): F
 export function etimsGateway(cfg: Cfg): EtimsGateway {
   if (cfg.provider === 'mock') return new MockEtimsGateway(String(cfg._id));
   const s = cfg.settings ?? {};
+  if (cfg.provider === 'etr' && s.connection === 'tremol') {
+    // A Tremol control unit (e.g. G03) reached through the Tremol ZFP Lab Server on this computer.
+    const tremol: TremolConfig = {
+      url: s.url, operatorNum: s.operatorNum, operatorPass: openSecrets(cfg).operatorPass ?? s.operatorPass, cuSerial: s.cuSerial,
+      timeoutSeconds: Number(s.timeoutSeconds) || undefined, openReceiptArgs: s.openReceiptArgs, sellLineArgs: s.sellLineArgs, closeReceiptArgs: s.closeReceiptArgs,
+      fieldInvoice: s.fieldInvoice, fieldSerial: s.fieldSerial, fieldQr: s.fieldQr, fieldDate: s.fieldDate,
+    };
+    return new TremolGateway(tremol, { name: s.registeredName, pin: s.tin });
+  }
   if (cfg.provider === 'etr') {
     // An ETR device on this computer, through the program that comes with it.
     const etr: EtrConfig = {
@@ -103,6 +115,7 @@ class ConfiguredAdapter implements FiscalAdapter {
     if (this.kind === 'etr_http' && !s.url) problems.push('Address of the ETR program is missing');
     if (this.kind === 'etr_http' && !s.statusPath) problems.push('No status address for the ETR program: an invoice whose answer is lost goes to reconciliation instead of being checked automatically');
     if (this.kind === 'etr_folder' && (!s.inbox || !s.outbox)) problems.push('Inbox and outbox folders are required');
+    if (this.kind === 'etr_tremol' && s.url && !/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost|\[::1\])/.test(String(s.url))) problems.push('The Tremol ZFP Lab Server address must be on this computer or the shop network (e.g. http://127.0.0.1:4444)');
     return problems;
   }
 
@@ -110,7 +123,7 @@ class ConfiguredAdapter implements FiscalAdapter {
     const s = this.cfg.settings ?? {};
     return {
       kind: this.kind, label: KIND_LABEL[this.kind], serial: s.dvcSrlNo ?? s.cuSerial ?? undefined, sdcId: s.sdcId, mrcNo: s.mrcNo, taxpayer: s.registeredName, branch: s.branchName,
-      endpoint: this.kind === 'etr_folder' ? `${s.inbox} → ${s.outbox}` : this.kind === 'etr_http' ? s.url : this.kind === 'vscu' ? s.baseUrl : this.kind === 'oscu' ? (s.baseUrl || (this.cfg.environment === 'production' ? 'KRA eTIMS (production)' : 'KRA eTIMS (sandbox)')) : 'simulator',
+      endpoint: this.kind === 'etr_folder' ? `${s.inbox} → ${s.outbox}` : this.kind === 'etr_http' ? s.url : this.kind === 'etr_tremol' ? (s.url || 'http://127.0.0.1:4444/') : this.kind === 'vscu' ? s.baseUrl : this.kind === 'oscu' ? (s.baseUrl || (this.cfg.environment === 'production' ? 'KRA eTIMS (production)' : 'KRA eTIMS (sandbox)')) : 'simulator',
     };
   }
 
@@ -132,6 +145,10 @@ class ConfiguredAdapter implements FiscalAdapter {
       case 'etr_http': {
         const r = await reachable(String(s.url ?? ''));
         return r.ok ? { state: 'online', message: `ETR program ${r.message}` } : { state: 'offline', message: `ETR program not reached (${r.message})` };
+      }
+      case 'etr_tremol': {
+        const r = await reachable(String(s.url || 'http://127.0.0.1:4444/'));
+        return r.ok ? { state: 'online', message: `Tremol ZFP Lab Server ${r.message}` } : { state: 'offline', message: `Tremol ZFP Lab Server not reached (${r.message})` };
       }
       case 'vscu': {
         if (!openSecrets(this.cfg).cmcKey) return { state: 'offline', message: 'Not initialised' };

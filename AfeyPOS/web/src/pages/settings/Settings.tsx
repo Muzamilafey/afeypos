@@ -464,9 +464,10 @@ const PROVIDER_FIELDS: Record<string, { settings: [string, string][]; secrets: [
     settings: [['tin', 'KRA PIN of the business'], ['bhfId', 'KRA branch id (00 = head office)'], ['cuSerial', 'CU serial number (on the ETR device)'], ['connection', 'How Afey POS reaches the ETR program'],
       ['url', 'Program address on this computer, e.g. http://127.0.0.1:4444'], ['invoicePath', 'Path invoices are sent to (default /invoice)'], ['statusPath', 'Status address from the maker\'s documentation, e.g. /invoice/{invoiceNumber} (optional; without it a lost answer goes to reconciliation)'],
       ['inbox', 'Inbox folder the program reads, e.g. C:\\ETR\\in'], ['outbox', 'Outbox folder it answers in, e.g. C:\\ETR\\out'],
+      ['operatorNum', 'Tremol operator / cashier number (default 1)'],
       ['timeoutSeconds', 'Seconds to wait for the device (default 30)'],
       ['fieldInvoice', 'Answer field with the CU invoice number (only if not found)'], ['fieldSerial', 'Answer field with the CU serial (optional)'], ['fieldQr', 'Answer field with the QR link (optional)']],
-    secrets: [['authHeader', 'Key header, if the program asks for one (e.g. X-Api-Key: abc)']],
+    secrets: [['authHeader', 'Key header, if the program asks for one (e.g. X-Api-Key: abc)'], ['operatorPass', 'Tremol operator password (default 0000)']],
   },
 };
 
@@ -813,12 +814,14 @@ export function IntegrationsPage() {
                   <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}><Input value={edit.settings?.[f.key] ?? ''} placeholder={f.placeholder} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [f.key]: e.target.value } })} /></Field>
                 ))}
                 {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => edit.provider === 'etr' && (
-                  (['url', 'invoicePath', 'statusPath'].includes(k) && (edit.settings?.connection ?? 'http') !== 'http')
+                  (k === 'url' && !['http', 'tremol'].includes(edit.settings?.connection ?? 'http'))
+                  || (['invoicePath', 'statusPath'].includes(k) && (edit.settings?.connection ?? 'http') !== 'http')
                   || (['inbox', 'outbox'].includes(k) && edit.settings?.connection !== 'folder')
-                  || (['url', 'invoicePath', 'statusPath', 'inbox', 'outbox', 'timeoutSeconds', 'fieldInvoice', 'fieldSerial', 'fieldQr'].includes(k) && edit.settings?.connection === 'simulator')
+                  || (k === 'operatorNum' && edit.settings?.connection !== 'tremol')
+                  || (['url', 'invoicePath', 'statusPath', 'inbox', 'outbox', 'operatorNum', 'timeoutSeconds', 'fieldInvoice', 'fieldSerial', 'fieldQr'].includes(k) && edit.settings?.connection === 'simulator')
                 ) ? null : k === 'connection' && edit.provider === 'etr' ? (
                   <Field key={k} label={l}><Select value={edit.settings?.connection ?? 'http'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, connection: e.target.value } })} options={[
-                    { value: 'http', label: 'Its program listens on this computer (web address)' }, { value: 'folder', label: 'Folder exchange (inbox / outbox)' }, { value: 'simulator', label: 'Simulator (training, nothing sent to KRA)' },
+                    { value: 'http', label: 'Its program listens on this computer (web address)' }, { value: 'folder', label: 'Folder exchange (inbox / outbox)' }, { value: 'tremol', label: 'Tremol control unit (ZFP Lab Server)' }, { value: 'simulator', label: 'Simulator (training, nothing sent to KRA)' },
                   ]} /></Field>
                 ) : k === 'type' && edit.kind === 'mpesa' ? (
                   <Field key={k} label={l}><Select value={edit.settings?.type ?? 'paybill'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, type: e.target.value } })} options={[{ value: 'paybill', label: 'Paybill (customers enter an account number)' }, { value: 'till', label: 'Buy Goods / Till number' }]} /></Field>
