@@ -56,6 +56,15 @@ export async function etimsDevicesForTill(branchId?: Types.ObjectId | null, till
   return configsForTill('etims', branchId, tillId);
 }
 
+/** True if the sale has at least one line whose product is not excluded from eTIMS. */
+async function saleHasSendableLine(saleId: Types.ObjectId) {
+  const sale = await Sale.findById(saleId, { lines: 1 }).lean();
+  const ids = (sale?.lines ?? []).map((l: any) => l.productId).filter(Boolean);
+  if (!ids.length) return false;
+  const excluded = new Set((await Product.find({ _id: { $in: ids }, 'etims.doNotSend': true }, { _id: 1 }).lean()).map((p) => String(p._id)));
+  return (sale!.lines as any[]).some((l) => l.productId && !excluded.has(String(l.productId)));
+}
+
 async function nextInvoiceNo(configId: Types.ObjectId) {
   const c = await Counter.findOneAndUpdate({ key: `etims:invoice:${configId}` }, { $inc: { seq: 1 } }, { upsert: true, new: true });
   return c!.seq;
@@ -68,6 +77,8 @@ export async function queueSaleForEtims(saleId: Types.ObjectId, branchId: Types.
   const allowed = await etimsDevicesForTill(branchId, opts.tillId);
   const cfg = (opts.configId && allowed.find((c) => String(c._id) === String(opts.configId))) ?? allowed[0] ?? null;
   if (!cfg) return;
+  // If every item on the sale is marked "do not send to KRA", reserve no invoice number (no gap in the sequence).
+  if (!(await saleHasSendableLine(saleId))) return;
   const invcNo = await nextInvoiceNo(cfg._id);
   await Sale.updateOne({ _id: saleId }, { $set: { etims: { status: 'pending', configId: cfg._id, invcNo, orgInvcNo: 0, attempts: 0, statusChangedAt: new Date() } } });
   await enqueue('etims.submit', { kind: 'sale', id: String(saleId) }, { maxAttempts: 60, dedupeKey: `etims:sale:${saleId}` });
@@ -93,8 +104,11 @@ interface LineIn { productId: Types.ObjectId; name?: string | null; qty?: number
 async function buildLines(lines: LineIn[]) {
   const products = new Map((await Product.find({ _id: { $in: lines.map((l) => l.productId) } }).lean()).map((p) => [String(p._id), p]));
   const items: EtimsSaleLine[] = [];
-  for (const [i, l] of lines.entries()) {
+  for (const l of lines) {
     const p: any = products.get(String(l.productId));
+    // Products the business marked "do not send to KRA" are left off the fiscal invoice entirely.
+    if (p?.etims?.doNotSend) continue;
+    const i = items.length;
     const qtyUnit = p?.etims?.qtyUnitCd || QTY_UNIT[p?.baseUnit ?? 'pc'] || 'U';
     const pkg = p?.etims?.pkgUnitCd || 'NT';
     const qty = Math.abs(l.qty ?? 0);
@@ -332,6 +346,8 @@ export async function queueItemRegistration(productId: Types.ObjectId, caps: { m
 registerJob('etims.item', async ({ productId }: { productId: string }) => {
   const p: any = await Product.findById(productId).lean();
   if (!p) return;
+  // The business chose not to send this item to KRA: do not register it.
+  if (p.etims?.doNotSend) return;
   const qtyUnit = p.etims?.qtyUnitCd || QTY_UNIT[p.baseUnit] || 'U';
   const pkg = p.etims?.pkgUnitCd || 'NT';
   const itemCd = await itemCodeFor(p, pkg, qtyUnit);

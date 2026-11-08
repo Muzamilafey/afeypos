@@ -79,6 +79,7 @@ const productSchema = z.object({
     taxTyCd: z.enum(['A', 'B', 'C', 'D', 'E']).optional().or(z.literal('')),
     pkgUnitCd: z.string().trim().max(5).optional(),
     qtyUnitCd: z.string().trim().max(5).optional(),
+    doNotSend: z.boolean().optional(),
   }).optional(),
 });
 

@@ -127,6 +127,30 @@ describe('signing sales, credit notes and voids', () => {
   });
 });
 
+describe('products excluded from KRA', () => {
+  it('leaves "do not send" items off fiscal invoices and skips a sale made only of them', async () => {
+    const taxed = await createProduct(t.client, { name: 'Milk 500ml', sku: 'KMILK', prices: { retail: 6000 }, taxRateBp: 1600, etims: { itemClsCd: '50202200' }, openingStock: [{ warehouseId: wh, qty: 10 }] });
+    const excluded = await createProduct(t.client, { name: 'Charity envelope', sku: 'KCHAR', prices: { retail: 5000 }, taxRateBp: 0, etims: { doNotSend: true }, openingStock: [{ warehouseId: wh, qty: 10 }] });
+    await runJobs();
+    // The excluded product is not registered as a KRA item.
+    expect(MockEtimsGateway.items.find((i) => i.itemNm === 'Charity envelope')).toBeUndefined();
+
+    // A sale of only the excluded product reserves no invoice number.
+    const onlyExcluded = (await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: excluded._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 5000 }] })).body.data;
+    expect((await t.client.get(`/sales/${onlyExcluded._id}`)).body.data.etims).toBeFalsy();
+
+    // A mixed sale is fiscalised but the excluded line is left off the invoice sent to KRA.
+    const before = MockEtimsGateway.sales.length;
+    const mixed = (await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: taxed._id, qty: 1 }, { productId: excluded._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 11000 }] })).body.data;
+    expect((await t.client.get(`/sales/${mixed._id}`)).body.data.etims.status).toBe('pending');
+    await runJobs();
+    expect(MockEtimsGateway.sales.length).toBe(before + 1);
+    const sent = MockEtimsGateway.sales.at(-1)!;
+    expect(sent.totItemCnt).toBe(1);
+    expect(sent.itemList.map((i: any) => i.itemNm)).toEqual(['Milk 500ml']);
+  });
+});
+
 describe('choosing the ETR device', () => {
   it('a till lists the devices it may sign with, and the sale is signed by the chosen one', async () => {
     // A second ETR device, set up for this till only, comes first for it.

@@ -226,13 +226,23 @@ export function ProductEditPage() {
         {caps.modules.includes('etims') && (
           <Card title="KRA eTIMS">
             <div className="space-y-3">
-              <EtimsItemClassPicker value={p.etims?.itemClsCd ?? ''} onChange={(code) => set('etims', { ...p.etims, itemClsCd: code })} />
-              <Field label="Tax type" hint="Leave as automatic to follow the VAT rate">
-                <Select value={p.etims?.taxTyCd ?? ''} onChange={(e) => set('etims', { ...p.etims, taxTyCd: e.target.value })} placeholder="Automatic (from VAT rate)"
-                  options={[{ value: 'B', label: 'B: VAT 16%' }, { value: 'E', label: 'E: VAT 8%' }, { value: 'C', label: 'C: zero-rated' }, { value: 'A', label: 'A: exempt' }, { value: 'D', label: 'D: non-VAT' }]} />
-              </Field>
-              {p.etims?.itemCd && <div className="text-xs text-ink-500">Item code {p.etims.itemCd}{p.etims.registeredAt ? ' · registered with KRA' : ' · not registered yet'}</div>}
-              {p.etims?.error && <div className="text-xs text-red-600">{p.etims.error}</div>}
+              <Checkbox label="Send this product to KRA (eTIMS)" checked={!p.etims?.doNotSend}
+                onChange={(v) => set('etims', { ...p.etims, doNotSend: !v })} />
+              {p.etims?.doNotSend ? (
+                <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                  This product is not registered with KRA and is left off fiscal receipts. Make sure leaving it off is allowed for your business.
+                </p>
+              ) : (
+                <>
+                  <EtimsItemClassPicker value={p.etims?.itemClsCd ?? ''} onChange={(code) => set('etims', { ...p.etims, itemClsCd: code })} />
+                  <Field label="Tax type" hint="Leave as automatic to follow the VAT rate">
+                    <Select value={p.etims?.taxTyCd ?? ''} onChange={(e) => set('etims', { ...p.etims, taxTyCd: e.target.value })} placeholder="Automatic (from VAT rate)"
+                      options={[{ value: 'B', label: 'B: VAT 16%' }, { value: 'E', label: 'E: VAT 8%' }, { value: 'C', label: 'C: zero-rated' }, { value: 'A', label: 'A: exempt' }, { value: 'D', label: 'D: non-VAT' }]} />
+                  </Field>
+                  {p.etims?.itemCd && <div className="text-xs text-ink-500">Item code {p.etims.itemCd}{p.etims.registeredAt ? ' · registered with KRA' : ' · not registered yet'}</div>}
+                  {p.etims?.error && <div className="text-xs text-red-600">{p.etims.error}</div>}
+                </>
+              )}
             </div>
           </Card>
         )}

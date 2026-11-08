@@ -101,6 +101,8 @@ const productSchema = new Schema(
       qtyUnitCd: String,
       registeredAt: Date,
       error: String,
+      /** When true the item is NOT sent to KRA eTIMS (not registered, and its lines are left off fiscal invoices). */
+      doNotSend: { type: Boolean, default: false },
     },
   },
   { timestamps: true },

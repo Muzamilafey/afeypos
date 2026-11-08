@@ -78,6 +78,7 @@ export function ProductWizardPage() {
   const [supplierId, setSupplierId] = useState('');
   const [plu, setPlu] = useState('');
   const [itemClsCd, setItemClsCd] = useState('');
+  const [etimsSend, setEtimsSend] = useState(true);
   const [labelCopies, setLabelCopies] = useState('1');
   const [labelPrice, setLabelPrice] = useState(true);
   const [online, setOnline] = useState(false);
@@ -187,7 +188,7 @@ export function ProductWizardPage() {
         trackStock: type === 'stock' && trackStock, trackBatches, trackSerials, allowFractional: fractional && !trackSerials, soldByWeight: weighed,
         reorderLevel: Number(reorderLevel) || 0, reorderQty: Number(reorderQty) || 0, maxStock: Number(maxStock) || 0, binLocation: binLocation || undefined,
         supplierId: supplierId || null, plu: plu || null, scaleIds: scaleIds.length ? scaleIds : undefined, label: { copies: Number(labelCopies) || 1, showPrice: labelPrice }, online: online ? { enabled: true } : undefined,
-        etims: itemClsCd ? { itemClsCd } : undefined,
+        etims: caps.modules.includes('etims') ? { ...(itemClsCd ? { itemClsCd } : {}), doNotSend: !etimsSend } : undefined,
       };
       const wh = warehouseId || defaultWh?._id;
       if (type === 'stock' && Number(openingQty) > 0 && wh) {
@@ -429,8 +430,11 @@ export function ProductWizardPage() {
             {caps.modules.includes('onlineStore') && <div className="pt-6"><Checkbox label="Sell on the online shop" checked={online} onChange={setOnline} /></div>}
           </div>
           {caps.modules.includes('etims') && (
-            <div className="mt-4 max-w-md">
-              <EtimsItemClassPicker value={itemClsCd} onChange={setItemClsCd} />
+            <div className="mt-4 max-w-md space-y-2">
+              <Checkbox label="Send this product to KRA (eTIMS)" checked={etimsSend} onChange={setEtimsSend} />
+              {etimsSend
+                ? <EtimsItemClassPicker value={itemClsCd} onChange={setItemClsCd} />
+                : <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">This product will not be registered with KRA and is left off fiscal receipts.</p>}
             </div>
           )}
           {plu && (labelScales.data ?? []).length > 0 && (
