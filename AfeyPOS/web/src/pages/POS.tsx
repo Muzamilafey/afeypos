@@ -10,6 +10,7 @@ import { usePublicConfig } from './Auth';
 import { useLocations } from '../lib/hooks';
 import { getWorkstation, setWorkstation } from '../lib/workstation';
 import { bridgeConfigured, fingerprint } from '../lib/bridge';
+import { DeviceCheckBar } from '../components/DeviceCheckBar';
 import { money, mpesaPayer, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
 import { connectRealtime, useRealtime } from '../lib/realtime';
 import { TxnStatus, type TerminalTxn } from './settings/CardTerminals';
@@ -616,7 +617,10 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
 
   return (
     // Fills the window under the shell's header (48px) and breadcrumb (42px), inside the page padding; the footer is hidden here.
-    <div className="flex flex-col gap-3 lg:h-[calc(100vh-80px)] lg:min-h-[520px] lg:flex-row">
+    <div className="flex flex-col gap-3 lg:h-[calc(100vh-80px)] lg:min-h-[520px]">
+      {/* When the till opens, a quick check of the device bridge, printer, scanner and fingerprint reader. */}
+      {shift && <DeviceCheckBar />}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
       {/* main: search, transaction lines, totals */}
       <section className="card flex min-w-0 flex-1 flex-col overflow-hidden" aria-label="Current sale">
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 px-4 py-3 dark:border-ink-800">
@@ -789,6 +793,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
           <span className="rounded-full bg-white/20 px-3 py-1 text-sm font-bold">F9 · {money(totals.total)}</span>
         </button>
       </aside>
+      </div>
 
       {dropping && shift && <CashDropModal shift={shift} tillId={till._id} onClose={() => { setDropping(false); setTimeout(() => searchRef.current?.focus(), 30); }} onDone={() => { pickup.refetch(); }} />}
       {locked && <TillLock name={me!.user.name} onUnlocked={() => { setLocked(false); setTimeout(() => searchRef.current?.focus(), 30); }} />}

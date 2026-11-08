@@ -288,3 +288,28 @@ test('checkout: the on-screen number keypad types into the scan box', async ({ p
   await pad.getByRole('button', { name: 'Hide keypad' }).click();
   await expect(pad).toHaveCount(0);
 });
+
+test('checkout: the device-check bar runs and can be skipped or run in the background', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('Email').fill('amina@mandera.test');
+  await page.getByLabel('Password', { exact: true }).fill('Mandera2026');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('link', { name: 'Checkout', exact: true })).toBeVisible();
+  await page.goto('/pos');
+  const start = page.getByRole('button', { name: /^Start shift/ });
+  if (await start.isVisible().catch(() => false)) {
+    await page.getByRole('button', { name: 'Enter the total instead' }).click();
+    await page.getByLabel('Opening float').fill('500');
+    await start.click();
+  }
+  const bar = page.getByTestId('device-check');
+  await expect(bar).toBeVisible();
+  await expect(bar).toContainText('Device bridge');
+  await expect(bar).toContainText(/Devices ready|need attention/, { timeout: 5000 });
+  await page.screenshot({ path: 'test-results/device-check.png' });
+  // Run in the background: it goes away and does not return after a reload.
+  await bar.getByRole('button', { name: 'Run in the background' }).click();
+  await expect(bar).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByTestId('device-check')).toHaveCount(0);
+});
