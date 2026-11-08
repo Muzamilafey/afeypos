@@ -4,6 +4,6 @@
   -Port 9999 `
   -HqUrl https://walalaha.afey.co.ke `
   -BranchCode WLH01 `
-  -SyncToken '<long token from step 1>' `
+  -SyncToken '5XrCXYdOYrMuW6dFZZNMGFo8fI9GGvQAa8_J9jyT5_g' `
   -EncryptionKey 'mCmmJonywDZNXQtgSDPRzJKQOUoS2Lx0kEpv+6nSP9o=' `
   -Ref claude/determined-maxwell-1zzhxx
