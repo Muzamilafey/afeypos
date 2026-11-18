@@ -19,6 +19,9 @@ const proxy = { target: api, changeOrigin: !/^http:\/\/(127\.0\.0\.1|localhost)(
 
 export default defineConfig({
   root: dir,
+  // Relative assets let this same build run at / on the local kiosk and under
+  // /attendance-terminal/ on the main POS web server.
+  base: './',
   publicDir: path.resolve(dir, '../web/public'),
   plugins: [react()],
   server: { host: '127.0.0.1', port: 5175, strictPort: true, proxy: { '/api': proxy } },

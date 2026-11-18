@@ -199,6 +199,28 @@ export function createApp() {
     });
   }
 
+  // The attendance kiosk is a small standalone SPA. It shares this server's API
+  // and database, while its relative asset paths also let the local port-5175
+  // preview use the same build when the branch is offline.
+  if (e.ATTENDANCE_DIST_DIR && fs.existsSync(e.ATTENDANCE_DIST_DIR)) {
+    const dist = path.resolve(e.ATTENDANCE_DIST_DIR);
+    const index = path.join(dist, 'index.html');
+    app.use('/attendance-terminal', express.static(dist, {
+      index: false,
+      maxAge: '1h',
+      setHeaders(res, file) {
+        const name = path.basename(file);
+        if (name === 'index.html') res.setHeader('Cache-Control', 'no-cache');
+        else if (file.startsWith(path.join(dist, 'assets'))) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      },
+    }));
+    app.use('/attendance-terminal', (req, res, next) => {
+      if (req.method !== 'GET') return next();
+      if (path.extname(req.path)) return res.sendStatus(404);
+      return res.sendFile(index, { headers: { 'Cache-Control': 'no-cache' } });
+    });
+  }
+
   // Local installations serve the built web app from the same server.
   if (e.WEB_DIST_DIR && fs.existsSync(e.WEB_DIST_DIR)) {
     const dist = path.resolve(e.WEB_DIST_DIR);

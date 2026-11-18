@@ -65,6 +65,8 @@ const schema = z.object({
   /** branch role: the branch's sync token issued by HQ (Settings → Branches). */
   SYNC_TOKEN: z.string().optional(),
   WEB_DIST_DIR: z.string().optional(),
+  /** Separate attendance kiosk SPA, hosted on the POS server at /attendance-terminal. */
+  ATTENDANCE_DIST_DIR: z.string().optional(),
   /** Online shop website (shop/dist), served to requests for SHOP_HOSTNAMES (e.g. shop.mysupermarket.co.ke). */
   SHOP_DIST_DIR: z.string().optional(),
   SHOP_HOSTNAMES: z.string().default(''),

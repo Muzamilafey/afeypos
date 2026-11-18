@@ -120,6 +120,7 @@ set('BACKUP_DIR', path.join(dataDir, 'backups'));
 // stable path of the current version (--app-dir /opt/afeypos/app), so switching versions needs no config change.
 const appDir = path.resolve(opt('app-dir', root));
 set('WEB_DIST_DIR', path.join(appDir, 'web', 'dist'));
+set('ATTENDANCE_DIST_DIR', path.join(appDir, 'attendance', 'dist'));
 set('SHOP_DIST_DIR', path.join(appDir, 'shop', 'dist'));
 if (opt('shop-host')) set('SHOP_HOSTNAMES', opt('shop-host'));
 
@@ -159,7 +160,7 @@ if (!flag('no-install')) {
   run('npm', fs.existsSync(path.join(root, 'package-lock.json')) ? ['ci', '--no-audit', '--no-fund', '--loglevel=error'] : ['install', '--no-audit', '--no-fund']);
 }
 if (!flag('no-build')) {
-  log('Building (shared code, server, web app, device bridge, online shop)');
+  log('Building (shared code, server, web app, device bridge, online shop, attendance terminal)');
   run('npm', ['run', 'build']);
 }
 

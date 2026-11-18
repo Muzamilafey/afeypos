@@ -152,6 +152,13 @@ router.get('/hr/attendance/launcher.cmd', requirePermission('hr.manage'), async 
     'setlocal',
     `set "AFEYPOS_ROOT=${cmdRoot}"`,
     'if not exist "%AFEYPOS_ROOT%\\scripts\\attendance-launch.mjs" (echo This command file must be run on the Afey POS computer. & pause & exit /b 1)',
+    'fltmc >nul 2>&1',
+    'if errorlevel 1 (',
+    '  set "AFEYPOS_CMD=%~f0"',
+    '  echo Requesting administrator access to install the attendance startup task...',
+    '  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:AFEYPOS_CMD -Verb RunAs"',
+    '  exit /b',
+    ')',
     'node "%AFEYPOS_ROOT%\\scripts\\attendance-launch.mjs"',
     'if errorlevel 1 pause',
   ].join('\r\n') + '\r\n';

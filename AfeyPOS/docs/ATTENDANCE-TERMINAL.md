@@ -1,13 +1,16 @@
-# Local attendance terminal
+# Attendance terminal
 
-The attendance terminal is a local web app on port **5175**. It proxies `/api` to the Afey POS server configured in `server/.env`, so clock events use the same database as the POS.
+The attendance terminal is a web app served by Afey POS at **`/attendance-terminal/`**. It uses the same API and database as the POS. On branch installations it records locally while offline and syncs attendance to head office when the internet returns.
+
+The same build can run as a dedicated local kiosk on **`http://127.0.0.1:5175/`**. This is useful for a computer at the staff entrance and continues working when a branch has no internet.
 
 ## Start it
 
-- In Afey POS, open **People → Attendance** and download **Attendance launcher**. Run `AfeyPOS-Attendance.cmd` on the local Afey POS computer. It builds the terminal if needed, starts its production preview at `http://127.0.0.1:5175`, waits until the page responds, then opens it in the browser. Leave the command window open while it is in use; closing that window stops the terminal.
-- The launcher requires the Afey POS installation, Node.js/npm, and installed workspace dependencies on that same computer. It is offered by standalone and branch installations, not the remote HQ server.
+- In Afey POS, open **People → Attendance** and select **Open web attendance terminal** to use the app from the same site as the POS.
+- For a dedicated local kiosk, select **Install attendance startup app** and run `AfeyPOS-Attendance.cmd` on the local Afey POS computer. Approve the administrator prompt. The command builds the app if needed, registers the **AfeyPOS Attendance** Windows startup task, starts the local web server, waits for it to answer, and opens it in the browser. It starts again after a device restart and retries if the web server exits.
+- The command requires the Afey POS installation, Node.js/npm, and installed workspace dependencies on that computer. It is offered by standalone and branch installations, not the remote HQ server; HQ users can open the hosted web app instead.
 - For development, `npm run dev:attendance` starts the Vite app directly. `npm run dev` starts the API, POS, shop and attendance terminal together.
-- The terminal listens on loopback only and is intended for a browser on the attendance computer.
+- The local kiosk listens on loopback only. For a network browser, use the hosted `/attendance-terminal/` page through the POS server rather than exposing port 5175.
 
 ## Card scanner
 
@@ -15,7 +18,7 @@ USB barcode scanners that type the card code into the focused field and send Ent
 
 ## Fingerprint reader
 
-The launcher reads the local pairing token and port from `bridge/config.json` and passes them to the app in a URL fragment. The app saves them to this browser's local storage, removes the fragment immediately, then tests the bridge. Bridge startup automatically allows the two fixed attendance origins (`http://127.0.0.1:5175` and `http://localhost:5175`). Register the reader in Afey POS under **Hardware → This computer**. If the bridge uses a custom config path, open the gear menu and enter its address and pairing token manually.
+The local launcher reads the pairing token and port from `bridge/config.json` and passes them to the app in a URL fragment. The app saves them to this browser's local storage, removes the fragment immediately, then tests the bridge. The bridge allows the two fixed kiosk origins and the origin of its configured `server.url`. Register the reader in Afey POS under **Hardware → This computer**. If the hosted web app uses a different origin, add that exact origin to the bridge's `allowedOrigins`; pairing tokens remain browser-local.
 
 Fingerprint matches are verified by the registered bridge against the same tenant's enrolled templates, then the existing attendance API records the event. The app does not store fingerprint data.
 
