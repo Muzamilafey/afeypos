@@ -193,6 +193,15 @@ export class EtrGateway implements EtimsGateway {
     return { sdcId: this.cfg.cuSerial || undefined };
   }
 
+  /** Verify the configured ETR transport and return a human-readable connection result. */
+  async testConnection(): Promise<string> {
+    const device = await this.initialize();
+    if (this.cfg.connection === 'simulator') return 'ETR simulator is ready';
+    if (this.cfg.connection === 'folder') return `ETR folders are accessible${device.sdcId ? ` (CU ${device.sdcId})` : ''}`;
+    const address = assertLocal(this.cfg.url ?? '');
+    return `ETR program responds at ${address.origin}${device.sdcId ? ` (CU ${device.sdcId})` : ''}`;
+  }
+
   /** Whether a status query exists for this connection. */
   get canFindSale() {
     return this.cfg.connection !== 'http' || Boolean(this.cfg.statusPath);

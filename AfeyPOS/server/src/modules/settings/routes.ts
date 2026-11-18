@@ -24,7 +24,6 @@ import { createSmsProvider } from '../../integrations/sms/index.js';
 import { createEmailProvider } from '../../integrations/email/index.js';
 import { c2bShortCodeOf, callbackUrlProblems, callbackUrls, gatewayFor, handleC2B, mpesaParts } from '../payments/mpesa.js';
 import { explainC2BError } from '../../integrations/mpesa/daraja.js';
-import { etimsGateway } from '../etims/service.js';
 import { notify } from '../notifications/service.js';
 import { DEFAULT_TEMPLATES } from '../notifications/templates.js';
 import { receiptContext, renderReceiptHtml, renderReceiptText, sampleSale } from '../hardware/receipt.js';

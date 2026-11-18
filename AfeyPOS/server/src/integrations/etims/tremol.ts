@@ -212,6 +212,12 @@ export class TremolGateway implements EtimsGateway {
     return { sdcId: v.attrs.SerialNumber ?? v.attrs.serialNumber ?? undefined };
   }
 
+  /** Verify the ZFP Lab Server can query the fiscal unit. */
+  async testConnection(): Promise<string> {
+    const device = await this.initialize();
+    return `Tremol ZFP Lab Server responded${device.sdcId ? ` (CU ${device.sdcId})` : ''}`;
+  }
+
   /** TIMS control units keep no item list; nothing to register in advance. */
   async saveItem(_item: EtimsItem) {}
 
