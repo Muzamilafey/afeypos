@@ -16,7 +16,7 @@
 
 ## Attendance
 
-Staff clock in and out on the sign-in screen with their staff card (+PIN) or fingerprint (see BIOMETRICS.md). *Attendance* shows days present and hours per month, with CSV export. Daily and hourly staff are paid from these records unless the payslip is adjusted.
+Staff clock in and out from the sign-in screen or the separate local attendance terminal with a staff card (+PIN) or fingerprint (see [the attendance terminal guide](ATTENDANCE-TERMINAL.md) and BIOMETRICS.md). *Attendance* shows each employee's clock-in day count and calendar-day attendance rate, plus completed hours, with CSV export. Daily and hourly staff are paid from completed shifts unless the payslip is adjusted.
 
 ## Leave
 

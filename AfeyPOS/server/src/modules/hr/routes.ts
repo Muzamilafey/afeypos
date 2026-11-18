@@ -3,12 +3,15 @@
  * Runs on head office or a standalone shop; branch servers see HR as managed at HQ.
  */
 import { Router } from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { formatMoney } from '@afeypos/shared';
+import { env } from '../../config/env.js';
 import { Employee, LeaveRequest, PayrollRun, Payout, SalaryAdvance, Tenant, User } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents, escapeRegex } from '../../http/validate.js';
 import { canSelfApprove, requirePermission } from '../../http/auth.js';
-import { badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
+import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { nextNumber } from '../../lib/numbering.js';
 import { toCsv } from '../../lib/csv.js';
@@ -140,22 +143,50 @@ router.post('/hr/employees/import-users', requirePermission('hr.manage'), async 
 });
 
 // ---------- attendance ----------
+router.get('/hr/attendance/launcher.cmd', requirePermission('hr.manage'), async (_req, res) => {
+  if (env().DEPLOYMENT_MODE === 'hq') throw new AppError(409, 'LOCAL_LAUNCHER_ONLY', 'Download the attendance launcher from the local Afey POS installation on the attendance computer.');
+  const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const cmdRoot = appRoot.replace(/%/g, '%%');
+  const cmd = [
+    '@echo off',
+    'setlocal',
+    `set "AFEYPOS_ROOT=${cmdRoot}"`,
+    'if not exist "%AFEYPOS_ROOT%\\scripts\\attendance-launch.mjs" (echo This command file must be run on the Afey POS computer. & pause & exit /b 1)',
+    'node "%AFEYPOS_ROOT%\\scripts\\attendance-launch.mjs"',
+    'if errorlevel 1 pause',
+  ].join('\r\n') + '\r\n';
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'attachment; filename="AfeyPOS-Attendance.cmd"');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.send(cmd);
+});
+
 router.get('/hr/attendance', requirePermission('hr.manage'), async (req, res) => {
   const q = parse(z.object({ period: z.string().regex(/^\d{4}-\d{2}$/).optional(), format: z.enum(['json', 'csv']).default('json') }), req.query);
   const period = q.period ?? new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 7);
   const { start, end } = monthBounds(period);
+  // With no roster/schedule stored, this rate uses elapsed calendar days in the selected month.
+  const [year, month] = period.split('-').map(Number);
+  const periodStartDay = Date.UTC(year!, month! - 1, 1);
+  const periodEndDay = Date.UTC(year!, month!, 1);
+  const todayEat = new Date(Date.now() + 3 * 3600_000);
+  const todayEatStart = Date.UTC(todayEat.getUTCFullYear(), todayEat.getUTCMonth(), todayEat.getUTCDate());
+  const rateEndDay = Math.min(periodEndDay, todayEatStart + 24 * 3600_000);
+  const daysElapsed = Math.max(0, Math.floor((rateEndDay - periodStartDay) / (24 * 3600_000)));
   const employees = await Employee.find({ userId: { $ne: null } }).lean();
   const att = await attendanceSummary(employees.map((e) => e.userId!), start, end);
   const rows = employees.map((e) => {
     const a = att.get(String(e.userId));
-    return { employeeNo: e.employeeNo, name: e.name, daysPresent: a?.days ?? 0, hoursWorked: a?.hours ?? 0, clockedInNow: a?.open ?? false };
+    const attendanceCount = a?.attendanceCount ?? 0;
+    return { employeeNo: e.employeeNo, name: e.name, daysPresent: a?.days ?? 0, attendanceCount, attendanceRate: daysElapsed ? Math.round((attendanceCount / daysElapsed) * 10_000) / 100 : 0, hoursWorked: a?.hours ?? 0, clockedInNow: a?.open ?? false };
   });
   if (q.format === 'csv') {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="attendance-${period}.csv"`);
     return res.send(toCsv(rows));
   }
-  res.json({ data: rows, period });
+  res.json({ data: rows, period, daysElapsed });
 });
 
 // ---------- leave ----------

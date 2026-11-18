@@ -34,6 +34,13 @@ export const configPath = () => process.env.AFEY_BRIDGE_CONFIG ?? path.resolve('
 export function loadConfig(file = configPath()): BridgeConfig {
   const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<BridgeConfig>;
   const cfg = { port: 9123, host: '127.0.0.1', allowedOrigins: [], printers: {}, ...raw } as BridgeConfig;
+  // The attendance terminal is a first-party local app on a fixed loopback origin.
+  // Keep it usable with existing bridge configs without requiring a manual CORS edit.
+  cfg.allowedOrigins = [...new Set([
+    ...cfg.allowedOrigins,
+    'http://127.0.0.1:5175',
+    'http://localhost:5175',
+  ])];
   if (!cfg.pairingToken || cfg.pairingToken.length < 24 || /REPLACE/.test(cfg.pairingToken)) throw new Error('Set a pairingToken of at least 24 random characters in config.json');
   if (!cfg.server?.url) throw new Error('Set server.url in config.json');
   if (cfg.host !== '127.0.0.1' && cfg.host !== 'localhost') console.warn('[bridge] Listening on a non-loopback address exposes devices to the network.');

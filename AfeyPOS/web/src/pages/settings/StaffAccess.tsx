@@ -108,7 +108,7 @@ export function StaffAccessPanel({ user, onChanged }: { user: any; onChanged: ()
         <p className="mt-1 text-xs text-ink-500">Scanning the card signs in, approves and clocks in, with the PIN below unless the business allows card only.</p>
       </div>
       <div className="flex flex-wrap items-end gap-2">
-        <Field label={user.hasPin ? 'Change till PIN' : 'Set till PIN'}><Input inputMode="numeric" maxLength={8} className="w-36" value={pin} placeholder="4-8 digits" onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} /></Field>
+        <Field label={user.hasPin ? 'Change till PIN' : 'Set till PIN'} hint="PIN-only sign-in requires a unique 4-8 digit PIN for each staff member."><Input inputMode="numeric" maxLength={8} className="w-36" value={pin} placeholder="4-8 digits" onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} /></Field>
         <Button size="sm" variant="secondary" disabled={pin.length > 0 && pin.length < 4} loading={busy === 'pin'} onClick={savePin}>{pin ? 'Save PIN' : user.hasPin ? 'Remove PIN' : 'Save PIN'}</Button>
       </div>
       {biometrics && (

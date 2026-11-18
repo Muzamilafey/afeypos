@@ -9,6 +9,8 @@ const userSchema = new Schema(
     phone: String,
     passwordHash: { type: String, required: true },
     pinHash: String,
+    /** Keyed, tenant-scoped lookup digest; lets PIN-only login find a user without storing a recoverable PIN. */
+    pinLookupHash: { type: String, select: false },
     /** Built-in roles and custom roles ("custom:<slug>", see CustomRole). */
     roles: {
       type: [String], required: true,
@@ -43,6 +45,7 @@ const userSchema = new Schema(
   { timestamps: true },
 );
 userSchema.index({ tenantId: 1, email: 1 }, { unique: true });
+userSchema.index({ tenantId: 1, pinLookupHash: 1 }, { unique: true, partialFilterExpression: { pinLookupHash: { $type: 'string' } } });
 userSchema.index({ tenantId: 1, 'card.codeHash': 1 }, { unique: true, partialFilterExpression: { 'card.codeHash': { $type: 'string' } } });
 userSchema.index({ tenantId: 1, employeeNo: 1 }, { unique: true, partialFilterExpression: { employeeNo: { $type: 'string' } } });
 export const User = tenantModel('User', userSchema);

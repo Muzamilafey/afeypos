@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import type { AddressInfo } from 'node:net';
 import { createBridgeServer, hmac } from '../src/server.js';
 import { displayFrame, parseScaleFrame } from '../src/adapters/serial.js';
 import { HelperProcessAdapter, SimulatorAdapter, createFingerprintAdapter } from '../src/adapters/fingerprint.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { BridgeConfig } from '../src/config.js';
+import { loadConfig, type BridgeConfig } from '../src/config.js';
 
 const received: Buffer[] = [];
 let printer: net.Server;
@@ -41,6 +43,19 @@ afterAll(() => {
 });
 
 const H = { 'X-Afey-Bridge-Token': 'x'.repeat(32), 'Content-Type': 'application/json' };
+
+describe('bridge config defaults', () => {
+  it('allows the first-party local attendance app origins', () => {
+    const file = path.join(os.tmpdir(), `afey-bridge-${process.pid}-${Date.now()}.json`);
+    fs.writeFileSync(file, JSON.stringify({ pairingToken: 'p'.repeat(32), server: { url: 'http://server.test' }, allowedOrigins: ['http://pos.local'] }));
+    try {
+      const cfg = loadConfig(file);
+      expect(cfg.allowedOrigins).toContain('http://127.0.0.1:5175');
+      expect(cfg.allowedOrigins).toContain('http://localhost:5175');
+      expect(cfg.allowedOrigins).toContain('http://pos.local');
+    } finally { fs.rmSync(file, { force: true }); }
+  });
+});
 
 describe('device bridge', () => {
   it('rejects requests without the pairing token or from other origins', async () => {

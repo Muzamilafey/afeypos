@@ -65,4 +65,4 @@ See ARCHITECTURE.md. One business per installation; records carry its id and the
 - No WAF or bot protection in the app itself; use the reverse proxy/CDN.
 - Customers, suppliers and products are shared by all branches (not branch-scoped). The books (journal entries) are not branch-scoped either: give accounting permissions only to staff who may see the whole business.
 - Rate limits and SMS token buckets are per process (use a shared store if you run many instances).
-- KRA eTIMS fiscal submission is not implemented.
+- Direct receipt adapters for the listed Tremol and Datecs fiscal devices are not implemented or hardware-verified. The separate OSCU/VSCU HTTP gateway has simulator coverage but is not certified against KRA or a local VSCU; see [ETIMS.md](ETIMS.md).

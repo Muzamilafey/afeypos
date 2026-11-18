@@ -10,7 +10,7 @@ Afey POS sends every sale, return and void to the Kenya Revenue Authority's elec
 
 ## Set up
 
-1. Register the business on the KRA eTIMS portal and apply for OSCU or VSCU. KRA issues a **device serial number** for each branch (the `bhfId`: `00` is head office, then `01`, `02`...).
+1. Register the business on the KRA eTIMS portal and apply for OSCU or VSCU. KRA issues a **device serial number** for each branch (`bhfId`: `00` is head office, then `01`, `02`...).
 2. In *Settings → Integrations → Add KRA eTIMS*, enter:
    - the KRA PIN (`P051234567X`),
    - the branch id,
@@ -19,7 +19,7 @@ Afey POS sends every sale, return and void to the Kenya Revenue Authority's elec
    - sandbox or production.
 
    On a multi-branch business, add one device per branch and select the branch it covers.
-3. Press **Initialise device**. KRA returns the SCU id, the MRC number and the communication key (`cmcKey`). The key is stored encrypted and is never sent to the browser. **Test** reports OK once the key is present.
+3. Press **Initialise device**. KRA returns the SCU id, the MRC number and the communication key (`cmcKey`). The key is stored encrypted and is never sent to the browser. **Test** checks that the configured HTTP service responds; it does not initialize the device or submit an invoice.
 4. Give products a KRA **item classification code** and, if needed, a tax type under *Products → KRA eTIMS*. The tax type defaults from the VAT rate:
 
    | VAT rate | Tax type |
@@ -54,6 +54,14 @@ Afey POS sends every sale, return and void to the Kenya Revenue Authority's elec
   | M-Pesa / mobile money | 06 |
   | Other | 07 |
 
+## Local ETR discovery and device support
+
+The **Search this computer** action runs through the paired Afey device bridge on Windows. It lists matching fiscal programs, their TCP listeners, and USB/COM devices. When it detects Tremol ZFPLabServer, it asks that server to find a device and shows its response. Discovery does not initialize, register, fiscalize, or submit a receipt.
+
+Afey only fills a VSCU URL when one listener belongs to software explicitly identified as KRA VSCU/eTIMS and the address is unambiguous. A device scan cannot safely infer the KRA PIN, branch registration, KRA-issued device serial, or communication key. The business PIN and head-office branch id are prefilled from business settings; check them before saving. Enter the KRA-issued serial yourself, then initialize only after confirming the selected service is the right KRA device.
+
+The listed model name or COM port alone does not make a printer a supported signing provider. The current signing gateway speaks the KRA OSCU/VSCU HTTP API. It does not contain model-specific direct receipt adapters for Tremol G03, S25, M23, FP24, or Datecs WP25 and FP700. Type A devices need their supplier program and registration flow; Type B/C hardware needs its compatible fiscal API/driver. Those flows must not be guessed from a USB port or a process name. Tremol's ZFPLabServer can discover and operate compatible Tremol devices, but its receipt command library is separate from the KRA OSCU/VSCU API.
+
 ## API
 
 | Area | Endpoints |
@@ -74,8 +82,10 @@ The client follows KRA's published OSCU/VSCU specification:
 
 Automated tests cover item registration, signing, credit notes, voids, offline retry and receipts using the simulator.
 
-**This build has not been run against the KRA sandbox, VSCU software or production**, because this build environment has no access to KRA. Before going live, complete KRA's sandbox certification with your device serial number. Points to confirm there:
+Automated tests cover the KRA API payload builder and signing queue with the simulator. The local discovery action has not been verified with attached Tremol or Datecs hardware in this environment. The KRA client has not been certified against the KRA sandbox, local VSCU software, or production. Before going live, complete KRA's sandbox certification with your device serial number. Points to confirm there:
 
 - the receipt QR link format,
 - the refund reason codes,
 - the classification codes used for your catalogue.
+- the selected local VSCU's KRA API compatibility and how it returns signed invoice data.
+- the relevant vendor's integration package and receipt/credit-note workflow for each direct fiscal device model.

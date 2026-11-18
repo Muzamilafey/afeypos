@@ -143,7 +143,7 @@ export function LoginPage() {
     e.preventDefault();
     run(async () => {
       if (mfa) await completeMfa(mfa, code);
-      else if (mode === 'pin') await pinLogin(email, secret);
+      else if (mode === 'pin') await pinLogin(secret);
       else if (mode === 'card') await cardLogin(card.trim(), secret);
       else if (mode === 'finger') {
         const r = await fingerprint<{ loginToken: string }>('login');
@@ -166,9 +166,11 @@ export function LoginPage() {
       icon={pin ? 'keypad' : 'lock'}
       aria-label={pin ? 'PIN' : 'Password'}
       type={show ? 'text' : 'password'}
+      autoFocus={mode === 'pin'}
       autoComplete={pin ? 'off' : 'current-password'}
       inputMode={pin ? 'numeric' : undefined}
       maxLength={pin ? 8 : undefined}
+      minLength={pin ? 4 : undefined}
       required={mode !== 'card'}
       value={secret}
       onChange={(e) => setSecret(pin ? e.target.value.replace(/\D/g, '') : e.target.value)}
@@ -195,9 +197,15 @@ export function LoginPage() {
                 </button>
               ))}
             </div>
-            {(mode === 'password' || mode === 'pin') && (
+            {mode === 'password' && (
               <>
                 <IconInput icon="mail" aria-label="Email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" />
+                {secretInput}
+              </>
+            )}
+            {mode === 'pin' && (
+              <>
+                <p className="text-sm text-ink-500">Enter your staff PIN to sign in.</p>
                 {secretInput}
               </>
             )}

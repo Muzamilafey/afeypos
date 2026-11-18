@@ -19,7 +19,7 @@ interface AuthState {
   loading: boolean;
   login(email: string, password: string): Promise<{ mfaRequired?: boolean; mfaToken?: string }>;
   completeMfa(mfaToken: string, code: string): Promise<void>;
-  pinLogin(email: string, pin: string): Promise<void>;
+  pinLogin(pin: string): Promise<void>;
   /** Staff card (+ PIN): returns PIN_REQUIRED when the PIN is missing. */
   cardLogin(code: string, pin?: string): Promise<void>;
   /** Exchanges a fingerprint login token from the device bridge for a session. */
@@ -74,8 +74,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const r = await api<any>('/auth/mfa', { body: { mfaToken, code } });
         await finish(r.accessToken);
       },
-      async pinLogin(email, pin) {
-        const r = await api<any>('/auth/pin-login', { body: { email, pin } });
+      async pinLogin(pin) {
+        const r = await api<any>('/auth/pin-login', { body: { pin } });
         await finish(r.accessToken);
       },
       async cardLogin(code, pin) {

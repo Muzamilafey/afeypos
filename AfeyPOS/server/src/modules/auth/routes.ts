@@ -7,7 +7,7 @@ import { AttendanceRecord, Session, Till, User, IdempotencyRecord } from '../../
 import { authenticateCard } from '../staff/cards.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { authenticate, signedIn, signShortToken, verifyShortToken } from '../../http/auth.js';
-import { decrypt, encrypt, generateTotpSecret, hashPassword, verifyPassword, verifyTotp } from '../../lib/crypto.js';
+import { decrypt, encrypt, generateTotpSecret, hashPassword, pinLookupHash, verifyPassword, verifyTotp } from '../../lib/crypto.js';
 import { AppError, badRequest, forbidden, notFound, unauthorized } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { env } from '../../config/env.js';
@@ -54,12 +54,23 @@ router.post('/mfa', authLimiter, async (req, res) => {
 
 /** Quick PIN sign-in for cashiers on a shared till. PIN users cannot have 2FA bypassed: users with 2FA must use password. */
 router.post('/pin-login', authLimiter, async (req, res) => {
-  const body = parse(z.object({ email: z.string().trim().toLowerCase().email(), pin: z.string().regex(/^\d{4,8}$/) }), req.body);
-  const u = await User.findOne({ email: body.email, status: 'active' });
+  const body = parse(z.object({ email: z.string().trim().toLowerCase().email().optional(), pin: z.string().regex(/^\d{4,8}$/) }), req.body);
+  const lookupHash = pinLookupHash(String(req.tenant!._id), body.pin);
+  const u = body.email
+    ? await User.findOne({ email: body.email, status: 'active' })
+    : await User.findOne({ pinLookupHash: lookupHash, status: 'active' });
   if (u?.lockedUntil && u.lockedUntil > new Date()) throw new AppError(423, 'ACCOUNT_LOCKED', 'Account temporarily locked');
   if (!u || !u.pinHash || u.twoFactor?.enabled || !(await verifyPassword(body.pin, u.pinHash))) {
-    if (u) await User.updateOne({ _id: u._id }, { $inc: { failedLogins: 1 } });
-    throw unauthorized('Invalid email or PIN');
+    if (u) {
+      const failed = (u.failedLogins ?? 0) + 1;
+      await User.updateOne({ _id: u._id }, { $set: { failedLogins: failed, ...(failed >= 5 ? { lockedUntil: new Date(Date.now() + 15 * 60_000) } : {}) } });
+    } else if (!body.email) await verifyPassword(body.pin, undefined);
+    throw unauthorized(body.email ? 'Invalid email or PIN' : 'Invalid PIN. Ask a manager to set a unique PIN if this is an existing account.');
+  }
+  if (body.email) {
+    // Let existing email+PIN logins populate the keyed index for later PIN-only logins.
+    try { await User.updateOne({ _id: u._id, pinHash: u.pinHash, pinLookupHash: { $exists: false } }, { $set: { pinLookupHash: lookupHash } }); }
+    catch (err: any) { if (err?.code !== 11000) throw err; }
   }
   await User.updateOne({ _id: u._id }, { $set: { failedLogins: 0, lastLoginAt: new Date() } });
   const s = await issueSession({ userType: 'tenant', userId: u._id, tenantId: req.tenant!._id, req, expiresAt: new Date(Date.now() + 16 * 3600_000) });
@@ -214,8 +225,15 @@ router.post('/pin', async (req, res) => {
   const body = parse(z.object({ pin: z.string().regex(/^\d{4,8}$/, 'PIN must be 4-8 digits'), password: z.string() }), req.body);
   const u = await User.findById(req.auth!.userId);
   if (!u || !(await verifyPassword(body.password, u.passwordHash))) throw badRequest('Password is incorrect');
+  const lookupHash = pinLookupHash(String(req.tenant!._id), body.pin);
+  if (await User.exists({ _id: { $ne: u._id }, pinLookupHash: lookupHash })) throw badRequest('That PIN is already assigned to another staff member. Choose a unique PIN for PIN-only sign-in.');
   u.pinHash = await hashPassword(body.pin);
-  await u.save();
+  u.pinLookupHash = lookupHash;
+  try { await u.save(); }
+  catch (err: any) {
+    if (err?.code === 11000 && err?.keyPattern?.pinLookupHash) throw badRequest('That PIN is already assigned to another staff member. Choose a unique PIN for PIN-only sign-in.');
+    throw err;
+  }
   await audit(req, { action: 'auth.pin_set', entity: 'User', entityId: u._id });
   res.json({ ok: true });
 });

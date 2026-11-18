@@ -8,7 +8,7 @@ import { idParam, objectId, pagination, parse, positiveCents } from '../../http/
 import { requireModule, requirePermission, signedIn } from '../../http/auth.js';
 import { AppError, badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
-import { hashPassword } from '../../lib/crypto.js';
+import { hashPassword, pinLookupHash } from '../../lib/crypto.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { nextNumber } from '../../lib/numbering.js';
 import { env } from '../../config/env.js';
@@ -22,6 +22,7 @@ import { createSmsProvider } from '../../integrations/sms/index.js';
 import { createEmailProvider } from '../../integrations/email/index.js';
 import { callbackUrlProblems, callbackUrls, gatewayFor, handleC2B } from '../payments/mpesa.js';
 import { explainC2BError } from '../../integrations/mpesa/daraja.js';
+import { etimsGateway } from '../etims/service.js';
 import { notify } from '../notifications/service.js';
 import { DEFAULT_TEMPLATES } from '../notifications/templates.js';
 import { receiptContext, renderReceiptHtml, renderReceiptText, sampleSale } from '../hardware/receipt.js';
@@ -182,7 +183,7 @@ const userSchema = z.object({
 });
 
 function present(u: any) {
-  const { passwordHash: _p, pinHash, twoFactor, card, ...rest } = u;
+  const { passwordHash: _p, pinHash, pinLookupHash: _pl, twoFactor, card, ...rest } = u;
   const cardInfo = card?.codeHash && !card.revokedAt ? { last4: card.last4, issuedAt: card.issuedAt } : null;
   return { ...rest, hasPin: Boolean(pinHash), twoFactorEnabled: Boolean(twoFactor?.enabled), card: cardInfo };
 }
@@ -194,7 +195,15 @@ router.get('/settings/users', requirePermission('users.manage'), async (_req, re
 router.post('/settings/users', requirePermission('users.manage'), async (req, res) => {
   const body = parse(userSchema.extend({ password: passwordSchema, pin: z.string().regex(/^\d{4,8}$/).optional() }), req.body);
   await checkUserAccessChange(req, null, { roles: body.roles, extraPermissions: body.extraPermissions, deniedPermissions: body.deniedPermissions, branchIds: body.branchIds.map(String) });
-  const u = await User.create({ ...body, employeeNo: body.employeeNo || (await nextEmployeeNo()), passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined });
+  const lookupHash = body.pin ? pinLookupHash(String(req.tenant!._id), body.pin) : undefined;
+  if (lookupHash && await User.exists({ pinLookupHash: lookupHash })) throw badRequest('That PIN is already assigned to another staff member. Choose a unique PIN for PIN-only sign-in.');
+  let u;
+  try {
+    u = await User.create({ ...body, employeeNo: body.employeeNo || (await nextEmployeeNo()), passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined, pinLookupHash: lookupHash });
+  } catch (err: any) {
+    if (err?.code === 11000 && err?.keyPattern?.pinLookupHash) throw badRequest('That PIN is already assigned to another staff member. Choose a unique PIN for PIN-only sign-in.');
+    throw err;
+  }
   await audit(req, { action: 'user.created', entity: 'User', entityId: u._id, details: { roles: body.roles, extraPermissions: body.extraPermissions, deniedPermissions: body.deniedPermissions, branchIds: body.branchIds } });
   res.status(201).json({ data: present(u.toObject()) });
 });
@@ -213,9 +222,18 @@ router.patch('/settings/users/:id', requirePermission('users.manage'), async (re
   const { password, pin, ...rest } = body;
   Object.assign(target, rest);
   if (password) target.passwordHash = await hashPassword(password);
-  // Managers set or clear a till PIN (needed with the staff card); '' removes it.
-  if (pin !== undefined) target.pinHash = pin ? await hashPassword(pin) : undefined;
-  await target.save();
+  // Managers set or clear a till PIN; keyed lookup allows PIN-only sign-in without retaining plaintext.
+  if (pin !== undefined) {
+    const lookupHash = pin ? pinLookupHash(String(req.tenant!._id), pin) : undefined;
+    if (lookupHash && await User.exists({ _id: { $ne: target._id }, pinLookupHash: lookupHash })) throw badRequest('That PIN is already assigned to another staff member. Choose a unique PIN for PIN-only sign-in.');
+    target.pinHash = pin ? await hashPassword(pin) : undefined;
+    target.pinLookupHash = lookupHash;
+  }
+  try { await target.save(); }
+  catch (err: any) {
+    if (err?.code === 11000 && err?.keyPattern?.pinLookupHash) throw badRequest('That PIN is already assigned to another staff member. Choose a unique PIN for PIN-only sign-in.');
+    throw err;
+  }
   if (body.status === 'disabled' || password) await revokeAllSessions(target._id);
   await audit(req, { action: 'user.updated', entity: 'User', entityId: id, details: { fields: Object.keys(body).filter((k) => k !== 'password' && k !== 'pin'), roles: body.roles, extraPermissions: body.extraPermissions, deniedPermissions: body.deniedPermissions, branchIds: body.branchIds, status: body.status, passwordReset: Boolean(password), pinChanged: pin !== undefined } });
   res.json({ data: present(target.toObject()) });
@@ -366,8 +384,12 @@ router.post('/settings/integrations/:id/test', requirePermission('integrations.m
     } else if (cfg.kind === 'payment') {
       message = await paymentGatewayFor(cfg).testCredentials();
     } else if (cfg.kind === 'etims') {
-      if (!openSecrets(cfg).cmcKey) throw new Error('Not initialised yet: press Initialise device');
-      message = `Initialised: SCU ${cfg.settings?.sdcId ?? '?'}, MRC ${cfg.settings?.mrcNo ?? '?'}`;
+      const reachability = await etimsGateway(cfg).testConnection();
+      if (!openSecrets(cfg).cmcKey && cfg.provider !== 'mock') {
+        throw new Error(`${reachability} Device is not initialised yet; initialise it before signing invoices.`);
+      } else {
+        message = `${reachability} ${cfg.provider === 'mock' ? '' : `Initialised: SCU ${cfg.settings?.sdcId ?? '?'}, MRC ${cfg.settings?.mrcNo ?? '?'}.`}`.trim();
+      }
     } else if (cfg.kind === 'email') {
       await createEmailProvider(cfg.provider, cfg.settings ?? {}, openSecrets(cfg)).verify();
       message = 'SMTP connection verified';

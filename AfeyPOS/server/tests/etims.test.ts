@@ -44,7 +44,9 @@ describe('eTIMS device setup', () => {
     const c = await t.client.post('/settings/integrations', { kind: 'etims', provider: 'mock', name: 'eTIMS (simulator)', settings: { tin: 'p051234567x', bhfId: '00', dvcSrlNo: 'DVC-001' } });
     expect(c.status).toBe(201);
     cfgId = c.body.data.id;
-    expect((await t.client.post(`/settings/integrations/${cfgId}/test`, {})).body.data.ok).toBe(false);
+    const beforeInit = await t.client.post(`/settings/integrations/${cfgId}/test`, {});
+    expect(beforeInit.body.data.ok).toBe(true);
+    expect(beforeInit.body.data.message).toContain('never contacts a fiscal device or KRA');
     const init = await t.client.post(`/settings/integrations/${cfgId}/etims/initialize`, {});
     expect(init.body.data).toMatchObject({ sdcId: 'KRACU0100000001', mrcNo: 'WIS00000001' });
     expect((await t.client.post(`/settings/integrations/${cfgId}/test`, {})).body.data.ok).toBe(true);

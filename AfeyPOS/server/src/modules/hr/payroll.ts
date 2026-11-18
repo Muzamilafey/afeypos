@@ -32,11 +32,12 @@ export function monthBounds(period: string, tz = 'Africa/Nairobi') {
   return { start, end };
 }
 
-/** Hours and distinct days on site from clock-in/clock-out pairs (an unclosed shift counts nothing; shifts capped at 16 h). */
+/** Completed shifts feed payroll days/hours; attendanceCount includes each calendar day with a clock-in, even if still open. */
 export async function attendanceSummary(userIds: Types.ObjectId[], start: Date, end: Date) {
   const recs = await AttendanceRecord.find({ userId: { $in: userIds }, at: { $gte: start, $lt: end } }).sort({ userId: 1, at: 1 }).lean();
-  const out = new Map<string, { hours: number; days: number; open: boolean }>();
+  const out = new Map<string, { hours: number; days: number; attendanceCount: number; open: boolean }>();
   const days = new Map<string, Set<string>>();
+  const clockInDays = new Map<string, Set<string>>();
   let openAt: Date | null = null;
   let current = '';
   for (const r of recs) {
@@ -45,10 +46,13 @@ export async function attendanceSummary(userIds: Types.ObjectId[], start: Date, 
       current = uid;
       openAt = null;
     }
-    const s = out.get(uid) ?? { hours: 0, days: 0, open: false };
+    const s = out.get(uid) ?? { hours: 0, days: 0, attendanceCount: 0, open: false };
     if (r.kind === 'clock_in') {
       openAt = r.at;
       s.open = true;
+      const present = clockInDays.get(uid) ?? new Set();
+      present.add(new Date(r.at.getTime() + 3 * 3600_000).toISOString().slice(0, 10));
+      clockInDays.set(uid, present);
     } else if (openAt) {
       s.hours += Math.min(16, (r.at.getTime() - openAt.getTime()) / 3600_000);
       const d = days.get(uid) ?? new Set();
@@ -62,6 +66,7 @@ export async function attendanceSummary(userIds: Types.ObjectId[], start: Date, 
   for (const [uid, s] of out) {
     s.hours = Math.round(s.hours * 100) / 100;
     s.days = days.get(uid)?.size ?? 0;
+    s.attendanceCount = clockInDays.get(uid)?.size ?? 0;
   }
   return out;
 }

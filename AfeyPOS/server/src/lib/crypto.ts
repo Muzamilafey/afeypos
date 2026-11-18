@@ -45,6 +45,11 @@ export function hmacSha256(key: string, data: string): string {
   return crypto.createHmac('sha256', key).update(data).digest('hex');
 }
 
+/** Tenant-scoped, non-reversible lookup key for PIN-only sign-in. Never use a plain PIN hash. */
+export function pinLookupHash(tenantId: string, pin: string): string {
+  return crypto.createHmac('sha256', Buffer.from(env().ENCRYPTION_KEY, 'base64')).update(`pin-login\0${tenantId}\0${pin}`).digest('hex');
+}
+
 function key(): Buffer {
   return Buffer.from(env().ENCRYPTION_KEY, 'base64');
 }

@@ -94,6 +94,18 @@ describe('employees, leave and advances', () => {
   });
 });
 
+describe('local attendance terminal launcher', () => {
+  it('downloads a no-cache Windows command file for the local installation', async () => {
+    const response = await t.client.get('/hr/attendance/launcher.cmd');
+    expect(response.status).toBe(200);
+    expect(response.headers['content-disposition']).toContain('AfeyPOS-Attendance.cmd');
+    expect(response.headers['cache-control']).toBe('no-store');
+    const cmd = Buffer.isBuffer(response.body) ? response.body.toString('utf8') : String(response.text ?? '');
+    expect(cmd).toContain('attendance-launch.mjs');
+    expect(cmd).toContain('node "%AFEYPOS_ROOT%');
+  });
+});
+
 describe('payroll', () => {
   let runId: string;
 

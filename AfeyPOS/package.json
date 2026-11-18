@@ -8,7 +8,8 @@
     "server",
     "web",
     "bridge",
-    "shop"
+    "shop",
+    "attendance"
   ],
   "scripts": {
     "build:shared": "npm run build -w @afeypos/shared",
@@ -17,13 +18,14 @@
     "dev": "npm run build:shared && node scripts/dev.mjs",
     "dev:server": "npm run dev -w @afeypos/server",
     "dev:web": "npm run dev -w @afeypos/web",
-    "build": "npm run build:shared && npm run build -w @afeypos/server && npm run build -w @afeypos/web && npm run build -w @afeypos/bridge && npm run build -w @afeypos/shop",
+    "build": "npm run build:shared && npm run build -w @afeypos/server && npm run build -w @afeypos/web && npm run build -w @afeypos/bridge && npm run build -w @afeypos/shop && npm run build -w @afeypos/attendance",
     "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "test": "npm run build:shared && npm run test --workspaces --if-present",
     "test:e2e": "npm run test:e2e -w @afeypos/web",
     "start": "npm run start -w @afeypos/server",
     "dev:shop": "npm run dev -w @afeypos/shop",
+    "dev:attendance": "npm run dev -w @afeypos/attendance",
     "postinstall": "npm run build:shared",
     "web:remote": "node scripts/web-remote.mjs"
   },

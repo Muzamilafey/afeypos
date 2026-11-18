@@ -108,6 +108,7 @@ export interface EtimsSignature {
 
 export interface EtimsGateway {
   initialize(): Promise<{ sdcId?: string; mrcNo?: string; cmcKey?: string; bhfNm?: string; taxprNm?: string }>;
+  testConnection(): Promise<string>;
   saveItem(item: EtimsItem): Promise<void>;
   saveSale(sale: EtimsSale): Promise<EtimsSignature>;
 }
@@ -120,7 +121,15 @@ export class EtimsClient implements EtimsGateway {
   constructor(private cfg: EtimsConfig) {}
 
   get baseUrl() {
-    if (this.cfg.baseUrl) return this.cfg.baseUrl.replace(/\/$/, '');
+    if (this.cfg.baseUrl) {
+      let endpoint: URL;
+      try { endpoint = new URL(this.cfg.baseUrl); }
+      catch { throw new IntegrationError('Enter a valid VSCU HTTP or HTTPS address', undefined, undefined, false); }
+      if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+        throw new IntegrationError('VSCU address must be an HTTP or HTTPS URL without credentials, query, or fragment', undefined, undefined, false);
+      }
+      return `${endpoint.origin}${endpoint.pathname.replace(/\/$/, '')}`;
+    }
     if (this.cfg.mode === 'vscu') throw new IntegrationError('Set the VSCU address (e.g. http://192.168.1.5:8088)', undefined, undefined, false);
     return this.cfg.environment === 'production' ? 'https://etims-api.kra.go.ke/etims-api' : 'https://etims-api-sbx.kra.go.ke/etims-api';
   }
@@ -138,6 +147,25 @@ export class EtimsClient implements EtimsGateway {
       throw new IntegrationError(`eTIMS ${r?.resultCd ?? '?'}: ${r?.resultMsg ?? 'rejected'}`, undefined, r, false);
     }
     return r;
+  }
+
+  /** Checks only that the configured HTTP service responds; this does not initialise or fiscalize a device. */
+  async testConnection() {
+    const address = this.baseUrl;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const endpoint = new URL(address);
+      const response = await fetch(`${address}/`, { method: 'GET', signal: controller.signal, redirect: 'manual' });
+      if (response.status >= 500) throw new IntegrationError(`eTIMS service returned HTTP ${response.status}`, response.status, undefined, true);
+      await response.arrayBuffer();
+      return `HTTP service at ${endpoint.host} responded with ${response.status}; no invoice was submitted.`;
+    } catch (err: any) {
+      if (err instanceof IntegrationError) throw err;
+      const host = (() => { try { return new URL(address).host; } catch { return 'configured address'; } })();
+      if (err?.name === 'AbortError') throw new IntegrationError(`Timed out reaching the eTIMS service at ${host}`);
+      throw new IntegrationError(`Cannot reach the eTIMS service at ${host}: ${err?.message ?? 'connection failed'}`);
+    } finally { clearTimeout(timer); }
   }
 
   async initialize() {
@@ -166,6 +194,7 @@ export class MockEtimsGateway implements EtimsGateway {
   async initialize() {
     return { sdcId: 'KRACU0100000001', mrcNo: 'WIS00000001', cmcKey: 'MOCK-CMC-KEY', bhfNm: 'Simulated branch', taxprNm: 'Simulated taxpayer' };
   }
+  async testConnection() { return 'Simulator ready; it never contacts a fiscal device or KRA.'; }
   async saveItem(item: EtimsItem) {
     MockEtimsGateway.items.push(item);
   }

@@ -8,6 +8,7 @@ import { useAuth } from '../../lib/auth';
 import { useLocations } from '../../lib/hooks';
 import { dateTime, money } from '../../lib/format';
 import { getWorkstation, setWorkstation } from '../../lib/workstation';
+import { bridge, bridgeConfigured } from '../../lib/bridge';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
@@ -212,7 +213,7 @@ export function UsersPage() {
             <Field label="Employee number" hint={edit._id ? undefined : 'Left empty, the next EMP- number is used'}><Input value={edit.employeeNo ?? ''} onChange={(e) => setEdit({ ...edit, employeeNo: e.target.value })} /></Field>
             <Field label="Job title (printed on the card)"><Input value={edit.jobTitle ?? ''} onChange={(e) => setEdit({ ...edit, jobTitle: e.target.value })} /></Field>
             <Field label={edit._id ? 'New password (optional)' : 'Password'}><Input type="password" value={edit.password ?? ''} onChange={(e) => setEdit({ ...edit, password: e.target.value })} /></Field>
-            {!edit._id && <Field label="Till PIN (optional, 4-8 digits)"><Input inputMode="numeric" value={edit.pin ?? ''} onChange={(e) => setEdit({ ...edit, pin: e.target.value })} /></Field>}
+            {!edit._id && <Field label="Till PIN (optional, unique 4-8 digits)" hint="Staff can use this PIN alone at sign-in; each staff member needs a different PIN."><Input inputMode="numeric" maxLength={8} value={edit.pin ?? ''} onChange={(e) => setEdit({ ...edit, pin: e.target.value.replace(/\D/g, '') })} /></Field>}
             {me!.capabilities.modules.includes('salesReps') && <Field label="Commission %"><Input inputMode="decimal" value={(edit.commissionRateBp ?? 0) / 100} onChange={(e) => setEdit({ ...edit, commissionRateBp: Math.round(Number(e.target.value) * 100) })} /></Field>}
           </div>
           {self && <p className="mt-4 rounded-sm bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">You cannot change your own roles, permissions or branches. Ask another administrator.</p>}
@@ -303,12 +304,12 @@ const KIND_INFO: Record<IntegrationKind, { label: string; icon: string; blurb: s
   sms: { label: 'SMS', icon: 'megaphone', blurb: 'Receipts, reminders and campaigns by text' },
   email: { label: 'Email', icon: 'mail', blurb: 'Receipts, statements, documents with PDFs' },
 };
-const CATEGORIES: { key: 'all' | 'payments' | IntegrationKind; label: string; kinds: IntegrationKind[] }[] = [
-  { key: 'all', label: 'All', kinds: ['mpesa', 'payment', 'etims', 'sms', 'email'] },
+type IntegrationTab = 'payments' | 'new' | 'etims' | 'communication';
+const CATEGORIES: { key: IntegrationTab; label: string; kinds: IntegrationKind[] }[] = [
   { key: 'payments', label: 'Payments', kinds: ['mpesa', 'payment'] },
+  { key: 'new', label: 'New integrations', kinds: ['mpesa', 'payment', 'etims', 'sms', 'email'] },
   { key: 'etims', label: 'KRA eTIMS', kinds: ['etims'] },
-  { key: 'sms', label: 'SMS', kinds: ['sms'] },
-  { key: 'email', label: 'Email', kinds: ['email'] },
+  { key: 'communication', label: 'Communication', kinds: ['sms', 'email'] },
 ];
 const OTHER_PROVIDERS: Record<string, string> = {
   daraja: 'Safaricom Daraja: STK push, Paybill / Buy Goods confirmations, B2C payouts.',
@@ -414,6 +415,7 @@ function C2BPanel({ config, onChanged }: { config: any; onChanged?: () => void }
 }
 
 export function IntegrationsPage() {
+  const { me } = useAuth();
   const toast = useToast();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['integrations'], queryFn: () => api<{ data: any[]; providers: Record<string, string[]>; callbackUrls: Record<string, string> }>('/settings/integrations') });
@@ -421,16 +423,33 @@ export function IntegrationsPage() {
   const [testing, setTesting] = useState<any>(null);
   const [c2b, setC2b] = useState<any>(null);
   const [testTo, setTestTo] = useState('');
-  const [category, setCategory] = useState<(typeof CATEGORIES)[number]['key']>('all');
+  const [category, setCategory] = useState<IntegrationTab>('payments');
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [discoveringEtr, setDiscoveringEtr] = useState(false);
+  const [etrDiscovery, setEtrDiscovery] = useState<{ programs: { pid: number; name: string; path?: string; driver: 'kra-vscu' | 'tremol-zfplab' | 'tremol-fpcmd' | 'datecs' | 'unknown-fiscal'; listeners: { address: string; port: number }[] }[]; serialPorts: { deviceId: string; name: string; pnpId?: string; family: 'tremol' | 'datecs' | 'unknown' }[]; tremolServers?: { address: string; online: boolean; response?: string; error?: string }[] } | null>(null);
   if (!q.data) return <Loading />;
   const rows = q.data.data;
   const kinds = CATEGORIES.find((c) => c.key === category)!.kinds;
-  const connected = rows.filter((r) => kinds.includes(r.kind));
+  const connected = category === 'new' ? [] : rows.filter((r) => kinds.includes(r.kind));
   const startNew = (kind: IntegrationKind, provider: string) => {
     setError(null);
-    setEdit({ kind, provider, name: kind === 'payment' ? PAYMENT_PROVIDER_INFO[provider as PaymentProviderKey].label : kind === 'etims' ? 'KRA eTIMS' : providerTitle(kind, provider), enabled: true, isDefault: !rows.some((r) => r.kind === kind), environment: 'sandbox', settings: kind === 'etims' ? { bhfId: '00' } : {}, secrets: {} });
+    setEtrDiscovery(null);
+    setEdit({ kind, provider, name: kind === 'payment' ? PAYMENT_PROVIDER_INFO[provider as PaymentProviderKey].label : kind === 'etims' ? 'KRA eTIMS' : providerTitle(kind, provider), enabled: true, isDefault: !rows.some((r) => r.kind === kind), environment: 'sandbox', settings: kind === 'etims' ? { tin: me?.tenant.settings?.taxPin || '', bhfId: '00' } : {}, secrets: {} });
+  };
+  const discoverEtr = async () => {
+    setDiscoveringEtr(true); setEtrDiscovery(null);
+    try {
+      const r = await bridge<{ data: NonNullable<typeof etrDiscovery> }>('/etims/discover', undefined, 12_000);
+      setEtrDiscovery(r.data);
+      // Only auto-fill a listener belonging to explicitly named KRA VSCU/eTIMS software.
+      // A fiscal-printer command server is a different protocol and must never be saved as a VSCU URL.
+      const candidates = [...new Map(r.data.programs.filter((p) => p.driver === 'kra-vscu').flatMap((p) => p.listeners.map((listener) => [listener.address, listener] as const))).values()];
+      if (candidates.length === 1) {
+        setEdit((current: any) => !current || current.settings?.baseUrl ? current : ({ ...current, settings: { ...current.settings, baseUrl: candidates[0]!.address } }));
+      }
+    } catch (e) { setError(e); }
+    finally { setDiscoveringEtr(false); }
   };
   const save = async () => {
     setError(null);
@@ -455,7 +474,8 @@ export function IntegrationsPage() {
   const attention = rows.filter((r) => !r.enabled || (r.lastTest?.at && r.lastTest.ok === false)).length;
   // Catalog: everything that can be connected in the chosen category.
   interface Tile { kind: IntegrationKind; provider: string; title: string; text: string; soon: boolean }
-  const catalog = kinds.flatMap((k): Tile[] => {
+  const catalogKinds = category === 'new' ? kinds : category === 'payments' ? [] : kinds;
+  const catalog = catalogKinds.flatMap((k): Tile[] => {
     if (k === 'payment') return PAYMENT_PROVIDERS.filter((p) => !PAYMENT_PROVIDER_INFO[p].devOnly).map((p) => ({ kind: k, provider: p, title: PAYMENT_PROVIDER_INFO[p].label, text: PAYMENT_PROVIDER_INFO[p].description, soon: PAYMENT_PROVIDER_INFO[p].availability === 'soon' }));
     return (q.data.providers[k] ?? []).map((p) => ({ kind: k, provider: p, title: providerTitle(k, p), text: OTHER_PROVIDERS[p] ?? '', soon: false }));
   });
@@ -471,22 +491,23 @@ export function IntegrationsPage() {
         <Stat label="Need attention" value={attention} icon="info" color={attention ? 'red' : 'teal'} hint={attention ? 'Disabled or failed the last test' : 'All good'} />
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-1.5" role="tablist" aria-label="Integration type">
+      <div className="mb-4 flex flex-wrap gap-1.5 border-b border-ink-200 pb-3 dark:border-ink-800" role="tablist" aria-label="Integration type">
         {CATEGORIES.map((c) => {
-          const n = rows.filter((r) => c.kinds.includes(r.kind)).length;
+          const n = c.key === 'new' ? 0 : rows.filter((r) => c.kinds.includes(r.kind)).length;
           return (
-            <button key={c.key} type="button" role="tab" aria-selected={category === c.key} onClick={() => setCategory(c.key)}
-              className={cx('inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-semibold transition', category === c.key ? 'bg-brand-500 text-white shadow-sm' : 'bg-white text-ink-600 ring-1 ring-ink-200 hover:bg-ink-50 dark:bg-ink-900 dark:text-ink-300 dark:ring-ink-700')}>
+            <button key={c.key} id={`integrations-tab-${c.key}`} type="button" role="tab" aria-controls="integrations-panel" aria-selected={category === c.key} onClick={() => setCategory(c.key)}
+              className={cx('inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition', category === c.key ? 'bg-brand-500 text-white shadow-sm' : 'bg-white text-ink-600 ring-1 ring-ink-200 hover:bg-ink-50 dark:bg-ink-900 dark:text-ink-300 dark:ring-ink-700')}>
               {c.label}{n > 0 && <span className={cx('rounded-full px-1.5 text-[11px]', category === c.key ? 'bg-white/25' : 'bg-ink-100 dark:bg-ink-800')}>{n}</span>}
             </button>
           );
         })}
       </div>
 
-      <section className="mb-6" aria-labelledby="connected-h">
-        <h2 id="connected-h" className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Connected</h2>
+      <div id="integrations-panel" role="tabpanel" aria-labelledby={`integrations-tab-${category}`} tabIndex={0}>
+      {category !== 'new' && <section className="mb-6" aria-labelledby="connected-h">
+        <h2 id="connected-h" className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">{category === 'payments' ? 'Configured payments' : category === 'etims' ? 'KRA eTIMS connections' : 'Communication connections'}</h2>
         {connected.length === 0 ? (
-          <div className="card flex items-center gap-3 p-5 text-sm text-ink-500"><Icon name="plug" className="h-5 w-5" />Nothing connected here yet. Pick a provider below.</div>
+          <div className="card flex flex-wrap items-center justify-between gap-3 p-5 text-sm text-ink-500"><span className="flex items-center gap-3"><Icon name="plug" className="h-5 w-5" />Nothing configured here yet.</span>{category === 'payments' ? <Button size="sm" variant="secondary" onClick={() => setCategory('new')}>Browse new integrations</Button> : <span>Available providers are listed below.</span>}</div>
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
             {connected.map((r) => (
@@ -512,7 +533,7 @@ export function IntegrationsPage() {
                 {r.lastTest?.at && !r.lastTest.ok && r.lastTest.message && <p className="mt-2 rounded-md bg-red-50 px-2.5 py-1.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-200">{r.lastTest.message}</p>}
                 <div className="mt-4 flex flex-wrap gap-1.5 border-t border-ink-100 pt-3 dark:border-ink-800">
                   <Button size="sm" onClick={() => { setTestTo(''); setTesting(r); }}><Icon name="check" className="h-3.5 w-3.5" />Test</Button>
-                  <Button size="sm" variant="secondary" onClick={() => { setError(null); setEdit({ ...r, secrets: {} }); }}>Configure</Button>
+                  <Button size="sm" variant="secondary" onClick={() => { setError(null); setEdit({ ...r, settings: r.kind === 'etims' ? { ...r.settings, tin: r.settings?.tin || me?.tenant.settings?.taxPin || '', bhfId: r.settings?.bhfId || '00' } : r.settings, secrets: {} }); }}>Configure</Button>
                   {r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => setC2b(r)}>Register C2B URLs</Button>}
                   {r.kind === 'etims' && <Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/settings/integrations/${r.id}/etims/initialize`, { body: {} }).then((x) => { toast.success(`eTIMS device initialised: SCU ${x.data.sdcId}`); q.refetch(); }).catch(toast.error)}>Initialise device</Button>}
                 </div>
@@ -520,10 +541,10 @@ export function IntegrationsPage() {
             ))}
           </div>
         )}
-      </section>
+      </section>}
 
-      <section className="mb-6" aria-labelledby="catalog-h">
-        <h2 id="catalog-h" className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Add an integration</h2>
+      {(category !== 'payments') && <section className="mb-6" aria-labelledby="catalog-h">
+        <h2 id="catalog-h" className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">{category === 'new' ? 'Available integrations' : 'Add an integration'}</h2>
         {kinds.map((k) => {
           const tiles = catalog.filter((c) => c.kind === k);
           if (!tiles.length) return null;
@@ -547,19 +568,20 @@ export function IntegrationsPage() {
           );
         })}
         {kinds.includes('payment') && <button type="button" className="text-xs text-ink-500 underline hover:text-brand-600" onClick={() => startNew('payment', 'simulator')}>Add the payment simulator (training and testing; never moves money)</button>}
-      </section>
+      </section>}
 
-      {kinds.includes('mpesa') && (
+      {category === 'payments' && (
         <details className="card mb-4 p-4">
           <summary className="cursor-pointer text-sm font-semibold">M-Pesa callback URLs <span className="font-normal text-ink-500">(register these with Safaricom)</span></summary>
           <div className="mt-3 grid gap-2 md:grid-cols-2">{Object.entries(q.data.callbackUrls).map(([k, v]) => <CopyField key={k} label={k} value={v} />)}</div>
           <p className="mt-2 text-xs text-ink-500">These URLs contain a secret token. They must be public HTTPS addresses Safaricom can reach.</p>
         </details>
       )}
+      </div>
 
       {testing && (
         <Modal open onClose={() => setTesting(null)} title={`Test ${testing.name}`} icon="check" size="sm"
-          subtitle={testing.kind === 'sms' || testing.kind === 'email' ? 'Sends a real test message.' : 'Checks the connection and credentials with the provider.'}
+          subtitle={testing.kind === 'sms' || testing.kind === 'email' ? 'Sends a real test message.' : testing.kind === 'etims' ? 'Checks that the saved eTIMS HTTP address responds. It does not submit a test invoice.' : 'Checks the connection and credentials with the provider.'}
           footer={<><Button variant="secondary" onClick={() => setTesting(null)}>Cancel</Button><Button loading={busy} onClick={runTest}>Run test</Button></>}>
           {testing.kind === 'sms' || testing.kind === 'email'
             ? <Field label={testing.kind === 'sms' ? 'Send the test SMS to' : 'Send the test email to'}><Input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder={testing.kind === 'sms' ? '07XX XXX XXX' : 'you@example.com'} /></Field>
@@ -596,6 +618,34 @@ export function IntegrationsPage() {
               </div>
               <div className="flex flex-wrap gap-5"><Checkbox label="Enabled" checked={edit.enabled} onChange={(v) => setEdit({ ...edit, enabled: v })} /><Checkbox label="Default" checked={edit.isDefault} onChange={(v) => setEdit({ ...edit, isDefault: v })} /></div>
             </fieldset>
+            {edit.kind === 'etims' && edit.provider === 'vscu' && (
+              <section className="space-y-3 rounded-lg border border-brand-200 bg-brand-50/40 p-4 dark:border-brand-900 dark:bg-brand-950/20" aria-label="Find local VSCU software">
+                <div>
+                  <h3 className="text-sm font-bold">Find fiscal software and connected devices</h3>
+                  <p className="mt-1 text-xs text-ink-600 dark:text-ink-300">Lists installed ETR software and USB/COM ports. If Tremol ZFPLabServer is installed, Afey asks it to find the attached device. Discovery never fiscalizes the device or submits a sale.</p>
+                </div>
+                {bridgeConfigured()
+                  ? <Button size="sm" variant="secondary" loading={discoveringEtr} disabled={discoveringEtr} onClick={discoverEtr}><Icon name="search" className="h-3.5 w-3.5" />Search this computer</Button>
+                  : <p className="text-xs text-ink-600 dark:text-ink-300">Pair the Afey device bridge under <Link className="font-semibold text-brand-600 hover:underline" to="/settings/hardware">Hardware → This computer</Link> to scan this PC.</p>}
+                {etrDiscovery && (
+                  <div className="space-y-2" role="status">
+                    {etrDiscovery.programs.length === 0
+                      ? <p className="text-xs text-amber-700 dark:text-amber-300">No matching fiscal program was found. Connect the device and start its supplied program, then scan again.</p>
+                      : <>
+                        {etrDiscovery.programs.map((p) => (
+                          <div key={`${p.pid}-${p.name}`} className="rounded-md border border-ink-200 bg-white/70 p-2 text-xs dark:border-ink-700 dark:bg-ink-900/50">
+                            <div className="font-semibold">{p.name}<span className="ml-2 rounded bg-ink-100 px-1.5 py-0.5 font-normal text-ink-600 dark:bg-ink-800 dark:text-ink-300">{p.driver === 'kra-vscu' ? 'KRA VSCU candidate' : p.driver === 'tremol-zfplab' ? 'Tremol device server' : p.driver === 'tremol-fpcmd' ? 'Tremol Kenya utility' : p.driver === 'datecs' ? 'Datecs utility' : 'Fiscal software'}</span>{p.path ? <span className="ml-1 block break-all font-normal text-ink-500">{p.path}</span> : null}</div>
+                            {p.listeners.length === 0 ? <div className="mt-1 text-ink-500">No local listening address detected.</div> : <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">{p.listeners.map((listener) => p.driver === 'kra-vscu' ? <button key={listener.address} type="button" className="font-mono text-brand-700 underline hover:text-brand-900 dark:text-brand-300" onClick={() => setEdit((current: any) => ({ ...current, settings: { ...current.settings, baseUrl: listener.address } }))}>Use as VSCU: {listener.address}</button> : <span key={listener.address} className="font-mono text-ink-500">{listener.address} (different driver protocol)</span>)}</div>}
+                          </div>
+                        ))}
+                      </>}
+                    {etrDiscovery.serialPorts.length > 0 && <p className="text-xs text-ink-600 dark:text-ink-300">Detected USB/COM ports: {etrDiscovery.serialPorts.map((p) => `${p.name} (${p.deviceId}; ${p.family})`).join(', ')}. A COM port alone cannot prove the fiscal model, KRA registration or CU serial number.</p>}
+                    {etrDiscovery.tremolServers?.map((server) => <div key={server.address} className={`rounded-md p-2 text-xs ${server.online ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200' : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200'}`}><div className="font-semibold">Tremol ZFPLabServer at {server.address} {server.online ? 'responded' : 'not reachable'}</div>{server.response && <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono">{server.response}</pre>}{server.error && <div className="mt-1">{server.error}</div>}</div>)}
+                    <p className="text-xs text-ink-500">Only an unambiguous KRA VSCU address is filled automatically. Tremol ZFPLab, Datecs drivers, and the G03 API are separate protocols; their detected addresses are not saved as VSCU endpoints. A discovered COM port is not enough to submit fiscal receipts.</p>
+                  </div>
+                )}
+              </section>
+            )}
             <fieldset className="space-y-3">
               <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Account details</legend>
               <div className="grid gap-3 sm:grid-cols-2">
