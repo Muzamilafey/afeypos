@@ -1,18 +1,22 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Types } from 'mongoose';
-import { normalizeIsbn, PRICE_LISTS, parseVariableWeightBarcode, PRODUCT_FIELDS, type VariableWeightConfig } from '@afeypos/shared';
-import { Brand, Category, CustomerPrice, Product, Promotion, StockLevel, UnitOfMeasure, Warehouse } from '../../models/index.js';
+import { decodeScaleBarcode, detectBarcode, gtinAliases, mergeCheckoutRules, normalizeIsbn, PRICE_LISTS, PRODUCT_FIELDS } from '@afeypos/shared';
+import { scaleFormatsFor } from './barcodes.js';
+import { Brand, Category, CustomerPrice, Product, Promotion, RemoteStockRequest, StockLevel, UnitOfMeasure, Warehouse } from '../../models/index.js';
 import { escapeRegex, idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { requireModule, requirePermission } from '../../http/auth.js';
 import { withTransaction } from '../../db/connection.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { applyMovement } from '../inventory/stock.js';
+import { requestRemoteStock } from '../inventory/remote.js';
+import { ownsWarehouse } from '../sync/ownership.js';
 import { quotePrice } from './pricing.js';
 import { parseCsv, toCsv } from '../../lib/csv.js';
 import { recordTombstone } from '../sync/hq.js';
 import { queueItemRegistration } from '../etims/service.js';
+import { env } from '../../config/env.js';
 
 const router = Router();
 
@@ -38,7 +42,8 @@ const productSchema = z.object({
   online: z.object({ enabled: z.boolean(), description: z.string().max(2000).optional(), featured: z.boolean().optional(), compareAtCents: z.number().int().min(0).nullable().optional(), badge: z.string().trim().max(20).optional() }).partial().optional(),
   baseUnit: z.string().trim().min(1).max(20).default('pc'),
   units: z.array(unitSchema).max(20).default([]),
-  barcodes: z.array(z.object({ code: z.string().trim().min(3).max(64), unitCode: z.string().trim().min(1).max(20) })).max(50).default([]),
+  // Short in-house codes (e.g. "67") are valid barcodes too: imports accept them, so editing must as well.
+  barcodes: z.array(z.object({ code: z.string().trim().min(1).max(64), unitCode: z.string().trim().min(1).max(20) })).max(50).default([]),
   costCents: positiveCents.default(0),
   prices: priceMap.default({}),
   priceTiers: z.array(z.object({ priceList: z.enum(PRICE_LISTS), minQty: z.number().positive(), priceCents: positiveCents })).max(20).default([]),
@@ -56,6 +61,15 @@ const productSchema = z.object({
   ageRestricted: z.boolean().default(false),
   minAge: z.number().int().min(0).max(30).default(18),
   soldByWeight: z.boolean().default(false),
+  sellingMethod: z.enum(['unit', 'weight', 'volume', 'length', 'area', 'pack', 'multi_uom', 'variants']).nullish(),
+  minPriceCents: positiveCents.nullish(),
+  branchPrices: z.array(z.object({ branchId: objectId, retail: positiveCents.nullish(), wholesale: positiveCents.nullish() })).max(200).default([]),
+  maxStock: z.number().min(0).default(0),
+  wholesaleMinQty: z.number().min(0).max(1e6).default(0),
+  binLocation: z.string().trim().max(40).optional(),
+  supplierId: objectId.nullish(),
+  scaleIds: z.array(objectId).max(50).optional(),
+  label: z.object({ copies: z.number().int().min(1).max(50), showPrice: z.boolean(), template: z.string().max(40) }).partial().optional(),
   plu: z.string().trim().regex(/^\d{1,6}$/).nullish(),
   parentId: objectId.nullish(),
   variantAttributes: z.record(z.string(), z.string().max(60)).optional(),
@@ -65,6 +79,7 @@ const productSchema = z.object({
     taxTyCd: z.enum(['A', 'B', 'C', 'D', 'E']).optional().or(z.literal('')),
     pkgUnitCd: z.string().trim().max(5).optional(),
     qtyUnitCd: z.string().trim().max(5).optional(),
+    doNotSend: z.boolean().optional(),
   }).optional(),
 });
 
@@ -89,7 +104,23 @@ function normalizeProduct(p: ProductInput, caps: { productFields: readonly strin
   if (p.trackBatches && !caps.modules.includes('batchExpiry')) throw badRequest('Enable the batches & expiry module first');
   const attributes = Object.fromEntries(Object.entries(p.attributes).filter(([k]) => (PRODUCT_FIELDS as readonly string[]).includes(k) || k.startsWith('custom_')));
   const trackStock = p.type === 'stock' ? p.trackStock : false;
+  if (new Set(p.branchPrices.map((b) => String(b.branchId))).size !== p.branchPrices.length) throw badRequest('One price per branch');
+  if (p.minPriceCents && p.prices.retail && p.minPriceCents > p.prices.retail) throw badRequest('The minimum price is higher than the retail price');
   return { ...p, units, attributes, trackStock };
+}
+
+/** Friendly duplicate checks before the unique indexes (a PLU "0123" is the same scale item as "123"). */
+async function assertUnique(p: { plu?: string | null; barcodes: { code: string }[]; sku: string }, selfId?: Types.ObjectId) {
+  const not = selfId ? { _id: { $ne: selfId } } : {};
+  if (p.plu) {
+    const other = await Product.findOne({ ...not, plu: { $in: [...new Set([p.plu, String(Number(p.plu))])] } }, { name: 1 }).lean();
+    if (other) throw new AppError(409, 'DUPLICATE_PLU', `PLU ${p.plu} is already used by ${other.name}`);
+  }
+  if (p.barcodes.length) {
+    const codes = p.barcodes.map((b) => b.code);
+    const other = await Product.findOne({ ...not, 'barcodes.code': { $in: codes } }, { name: 1, barcodes: 1 }).lean();
+    if (other) throw new AppError(409, 'DUPLICATE_BARCODE', `Barcode ${other.barcodes.find((b) => codes.includes(b.code))?.code} is already on ${other.name}`);
+  }
 }
 
 
@@ -167,7 +198,8 @@ const DEFAULT_UNITS = [
 
 /** Units of measure, with how many products use each as their base or extra unit. Common units are added once. */
 router.get('/units', requirePermission('products.read'), async (_req, res) => {
-  if (!(await UnitOfMeasure.exists({}))) await UnitOfMeasure.insertMany(DEFAULT_UNITS, { ordered: false }).catch(() => undefined);
+  // Branch servers get the units from head office (seeding them here too would clash with HQ's copies).
+  if (env().DEPLOYMENT_MODE !== 'branch' && !(await UnitOfMeasure.exists({}))) await UnitOfMeasure.insertMany(DEFAULT_UNITS, { ordered: false }).catch(() => undefined);
   const [units, base, extra] = await Promise.all([
     UnitOfMeasure.find({}).sort({ code: 1 }).lean(),
     Product.aggregate([{ $group: { _id: '$baseUnit', n: { $sum: 1 } } }]),
@@ -203,28 +235,22 @@ router.delete('/units/:id', requirePermission('products.manage'), async (req, re
 });
 
 /**
- * Barcode check: is the code well formed (EAN-13, EAN-8, UPC-A check digit), is it a scale barcode, and which
+ * Barcode check: which symbology (EAN-13/8, UPC-A/E, GTIN-14, Code 39/128) and is its check digit right, is it a scale barcode, and which
  * product (and unit) it belongs to. Used by Barcode verify before printing labels or receiving stock.
  */
 router.get('/barcodes/verify', requirePermission('products.read'), async (req, res) => {
   const { code } = parse(z.object({ code: z.string().trim().min(1).max(64) }), req.query);
-  const digits = /^\d+$/.test(code);
-  const gtinOk = (c: string) => {
-    const d = c.split('').map(Number);
-    const check = d.pop()!;
-    const sum = d.reverse().reduce((a, n, i) => a + n * (i % 2 === 0 ? 3 : 1), 0);
-    return (10 - (sum % 10)) % 10 === check;
-  };
-  const format = !digits ? 'Code 128 / text' : code.length === 13 ? 'EAN-13' : code.length === 8 ? 'EAN-8' : code.length === 12 ? 'UPC-A' : code.length === 14 ? 'GTIN-14' : 'Numeric';
-  const checkDigit = digits && [8, 12, 13, 14].includes(code.length) ? gtinOk(code) : null;
-  const isbn = normalizeIsbn(code);
-  const scale = req.capabilities!.modules.includes('weighedItems') ? parseVariableWeightBarcode(code, req.tenant!.settings!.variableWeight as unknown as VariableWeightConfig) : null;
-  const matches = await Product.find({ $or: [{ 'barcodes.code': code }, { sku: code }, { plu: code }, ...(isbn && isbn !== code ? [{ 'barcodes.code': isbn }] : [])] }, { name: 1, sku: 1, barcodes: 1, baseUnit: 1, prices: 1, active: 1 }).limit(5).lean();
+  const info = detectBarcode(code);
+  const isbn = info.isbn ?? normalizeIsbn(code);
+  const scale = decodeScaleBarcode(code, scaleFormatsFor(req));
+  const aliases = gtinAliases(code);
+  const matches = await Product.find({ $or: [{ 'barcodes.code': { $in: [code, ...aliases] } }, { sku: code }, { plu: code }, ...(isbn && isbn !== code ? [{ 'barcodes.code': isbn }] : [])] }, { name: 1, sku: 1, barcodes: 1, baseUnit: 1, prices: 1, active: 1 }).limit(5).lean();
   const scaleProduct = !matches.length && scale ? await Product.findOne({ plu: { $in: [scale.itemCode, String(Number(scale.itemCode))] } }, { name: 1, sku: 1, baseUnit: 1, prices: 1, active: 1 }).lean() : null;
   res.json({ data: {
-    code, format, checkDigitValid: checkDigit, isbn: isbn && isbn !== code ? isbn : null, scale: scale ? { ...scale, product: scaleProduct } : null,
-    products: matches.map((p) => ({ ...p, unitCode: p.barcodes?.find((b) => b.code === code)?.unitCode ?? p.baseUnit })),
-    duplicate: matches.filter((p) => p.barcodes?.some((b) => b.code === code)).length > 1,
+    code, format: info.format, checkDigitValid: info.checkDigitValid, restricted: info.restricted, warnings: info.warnings, gtin13: info.gtin13,
+    isbn: isbn && isbn !== code ? isbn : null, scale: scale ? { ...scale, product: scaleProduct } : null,
+    products: matches.map((p) => ({ ...p, unitCode: p.barcodes?.find((b) => b.code === code || aliases.includes(b.code))?.unitCode ?? p.baseUnit })),
+    duplicate: matches.filter((p) => p.barcodes?.some((b) => b.code === code || aliases.includes(b.code))).length > 1,
   } });
 });
 
@@ -265,14 +291,22 @@ router.get('/products/lookup', requirePermission('products.read'), async (req, r
   const { code, warehouseId } = parse(z.object({ code: z.string().trim().min(1).max(64), warehouseId: objectId.optional() }), req.query);
   let product = await Product.findOne({ 'barcodes.code': code, active: true }).lean();
   let unitCode = product?.barcodes.find((b) => b.code === code)?.unitCode;
-  let weighed: { qty?: number; priceCents?: number } | undefined;
-  if (!product && req.capabilities!.modules.includes('weighedItems')) {
-    const parsed = parseVariableWeightBarcode(code, req.tenant!.settings!.variableWeight as unknown as VariableWeightConfig);
+  if (!product) {
+    // The same GTIN as another scanner sends it (UPC-A with/without the leading 0, UPC-E).
+    const aliases = gtinAliases(code);
+    if (aliases.length) {
+      product = await Product.findOne({ 'barcodes.code': { $in: aliases }, active: true }).lean();
+      unitCode = product?.barcodes.find((b) => aliases.includes(b.code))?.unitCode;
+    }
+  }
+  let weighed: { qty?: number; priceCents?: number; format?: string } | undefined;
+  if (!product) {
+    const parsed = decodeScaleBarcode(code, scaleFormatsFor(req));
     if (parsed) {
       product = await Product.findOne({ plu: String(Number(parsed.itemCode)), active: true }).lean() ?? await Product.findOne({ plu: parsed.itemCode, active: true }).lean();
       if (product) {
         unitCode = product.baseUnit;
-        weighed = parsed.weight !== undefined ? { qty: parsed.weight } : { priceCents: parsed.priceCents };
+        weighed = parsed.weight !== undefined ? { qty: parsed.weight, format: parsed.formatName } : { priceCents: parsed.priceCents, format: parsed.formatName };
       }
     }
   }
@@ -295,31 +329,40 @@ router.get('/products/:id', requirePermission('products.read'), async (req, res)
   if (!p) throw notFound('Product');
   const levels = await StockLevel.find({ productId: p._id }).lean();
   const variants = await Product.find({ parentId: p._id }, { name: 1, sku: 1, variantAttributes: 1 }).lean();
-  res.json({ data: { ...p, levels, variants } });
+  const pendingStock = await RemoteStockRequest.find({ productId: p._id, status: { $in: ['pending', 'failed'] } }, { warehouseId: 1, qty: 1, status: 1, error: 1, createdAt: 1 }).lean();
+  res.json({ data: { ...p, levels, variants, pendingStock } });
 });
 
 router.post('/products/:id/quote', requirePermission('products.read'), async (req, res) => {
   const body = parse(z.object({ unitCode: z.string().optional(), qty: z.number().positive(), priceList: z.enum(PRICE_LISTS).default('retail'), customerId: objectId.optional(), branchId: objectId.optional(), couponCode: z.string().optional() }), req.body);
   const product = await Product.findById(idParam(req.params.id));
   if (!product) throw notFound('Product');
-  res.json({ data: await quotePrice({ product, ...body }) });
+  const rules = mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
+  res.json({ data: await quotePrice({ product, ...body, wholesaleByQty: rules.pricing.wholesaleByQuantity }) });
 });
 
 router.post('/products', requirePermission('products.manage'), async (req, res) => {
   const input = parse(createSchema, req.body);
   const { openingStock, ...rest } = input;
   const data = normalizeProduct(rest, req.capabilities!);
+  await assertUnique(data);
   const product = await withTransaction(async () => {
     const [p] = await Product.create([data]);
     for (const os of openingStock ?? []) {
       if (!(await Warehouse.exists({ _id: os.warehouseId }))) throw notFound('Warehouse');
+      // A branch with its own server owns its stock: head office sends the opening stock there instead.
+      if (env().DEPLOYMENT_MODE === 'hq' && !(await ownsWarehouse(os.warehouseId))) {
+        await requestRemoteStock({ productId: p._id, warehouseId: os.warehouseId, qty: os.qty, unitCostCents: os.unitCostCents ?? p.costCents, batchNo: os.batchNo, expiryDate: os.expiryDate, serials: os.serials, userId: req.auth!.userId });
+        continue;
+      }
       await applyMovement({ product: p, productId: p._id, warehouseId: os.warehouseId, qty: os.qty, type: 'opening', unitCostCents: os.unitCostCents ?? p.costCents, reason: 'Opening stock', ref: { type: 'Product', id: p._id, number: p.sku }, userId: req.auth!.userId, batchNo: os.batchNo, expiryDate: os.expiryDate, serials: os.serials });
     }
     await audit(req, { action: 'product.created', entity: 'Product', entityId: p._id, details: { sku: p.sku } });
     return p;
   });
   await queueItemRegistration(product._id, req.capabilities!);
-  res.status(201).json({ data: product });
+  const pendingStock = await RemoteStockRequest.countDocuments({ productId: product._id, status: 'pending' });
+  res.status(201).json({ data: product, pendingStock });
 });
 
 router.put('/products/:id', requirePermission('products.manage'), async (req, res) => {
@@ -327,8 +370,10 @@ router.put('/products/:id', requirePermission('products.manage'), async (req, re
   const input = parse(productSchema, req.body);
   const before = await Product.findById(id).lean();
   if (!before) throw notFound('Product');
-  if (JSON.stringify(before.prices) !== JSON.stringify(input.prices) && !req.auth!.permissions.has('prices.manage')) throw badRequest('You need the prices.manage permission to change prices');
+  const priceShape = (x: { prices?: unknown; minPriceCents?: number | null; wholesaleMinQty?: number | null; branchPrices?: { branchId: unknown; retail?: number | null; wholesale?: number | null }[] }) => JSON.stringify([x.prices, x.minPriceCents ?? null, x.wholesaleMinQty ?? 0, (x.branchPrices ?? []).map((b) => [String(b.branchId), b.retail ?? null, b.wholesale ?? null])]);
+  if (priceShape(before) !== priceShape(input) && !req.auth!.permissions.has('prices.manage')) throw badRequest('You need the prices.manage permission to change prices');
   const data = normalizeProduct(input, req.capabilities!);
+  await assertUnique(data, id);
   // Staff who cannot see cost prices cannot change them either (their editor does not show the cost).
   if (!req.auth!.permissions.has('products.cost')) data.costCents = before.costCents ?? 0;
   if (before.trackSerials !== data.trackSerials || before.trackBatches !== data.trackBatches) {
@@ -418,45 +463,92 @@ router.get('/products-export.csv', requirePermission('products.read'), async (re
   res.send(toCsv(rows));
 });
 
-/** Imports products from CSV (create or update by SKU). Dry-run by default; returns per-row results. */
+/**
+ * Imports products (create or update by SKU) from CSV text or from rows the browser read from the Excel
+ * template (with an optional uploaded photo per row). Dry-run by default: every row comes back with what will
+ * happen or what is wrong, so the review page can show it; nothing is saved unless every row is valid.
+ */
+const importCell = z.union([z.string(), z.number(), z.boolean(), z.null()]).transform((v) => (v === null ? '' : String(v).trim()));
 router.post('/products-import', requirePermission('products.manage'), async (req, res) => {
-  const body = parse(z.object({ csv: z.string().min(1).max(5_000_000), commit: z.boolean().default(false) }), req.body);
-  const rows = parseCsv(body.csv);
+  const body = parse(z.object({
+    csv: z.string().min(1).max(5_000_000).optional(),
+    rows: z.array(z.record(z.string(), importCell)).max(10_000).optional(),
+    commit: z.boolean().default(false),
+  }).refine((b) => b.csv || b.rows, 'Send a file'), req.body);
+  const rows = body.rows ?? parseCsv(body.csv!);
   if (rows.length > 10000) throw badRequest('Import at most 10,000 rows at a time');
+  if (!rows.length) throw badRequest('The file has no products');
   const cats = new Map((await Category.find({}).lean()).map((c) => [c.name.toLowerCase(), c._id]));
-  const results: { row: number; sku: string; action: 'create' | 'update' | 'error'; error?: string }[] = [];
-  const toMoney = (v: string | undefined) => (v === undefined || v === '' ? undefined : Math.round(Number(v) * 100));
+  const brands = new Map((await Brand.find({}).lean()).map((b) => [b.name.toLowerCase(), b._id]));
+  const results: { row: number; sku: string; action: 'create' | 'update' | 'error'; error?: string; warnings?: string[] }[] = [];
+  const toMoney = (v: string | undefined) => (v === undefined || v === '' ? undefined : Math.round(Number(String(v).replace(/[, ]/g, '')) * 100));
   const prepared: { sku: string; data: Record<string, unknown>; exists: boolean }[] = [];
+  const skus = new Map<string, number>();
+  const codes = new Map<string, number>();
   for (const [i, r] of rows.entries()) {
+    const rowNo = Number(r._row) || i + 2;
     const sku = (r.sku ?? '').trim();
     try {
-      if (!sku || !r.name) throw new Error('sku and name are required');
-      const nums = ['cost', 'retail', 'wholesale', 'contractor', 'taxRatePercent', 'reorderLevel'].filter((k) => r[k] && Number.isNaN(Number(r[k])));
-      if (nums.length) throw new Error(`invalid number in ${nums.join(', ')}`);
+      if (!r.name) throw new Error('Name is missing');
+      if (!sku) throw new Error('SKU is missing');
+      if (skus.has(sku.toLowerCase())) throw new Error(`SKU ${sku} is also on row ${skus.get(sku.toLowerCase())}`);
+      skus.set(sku.toLowerCase(), rowNo);
+      const nums = ['cost', 'retail', 'taxRatePercent', 'reorderLevel', 'openingStock'].filter((k) => r[k] && Number.isNaN(Number(String(r[k]).replace(/[, ]/g, ''))));
+      if (nums.length) throw new Error(`Not a number: ${nums.join(', ')}`);
+      if (!r.retail || Number(toMoney(r.retail)) <= 0) throw new Error('Selling price is missing');
+      const warnings: string[] = [];
+      const existing = await Product.findOne({ sku }, { _id: 1 }).lean();
+      const barcode = (r.barcode ?? '').replace(/\s/g, '');
+      if (barcode) {
+        if (codes.has(barcode)) throw new Error(`Barcode ${barcode} is also on row ${codes.get(barcode)}`);
+        codes.set(barcode, rowNo);
+        const owner = await Product.findOne({ 'barcodes.code': barcode }, { sku: 1, name: 1 }).lean();
+        if (owner && String(owner._id) !== String(existing?._id)) throw new Error(`Barcode ${barcode} already belongs to ${owner.name} (${owner.sku})`);
+      }
       let categoryId: Types.ObjectId | undefined;
       if (r.category) {
         categoryId = cats.get(r.category.toLowerCase());
-        if (!categoryId && body.commit) {
-          const c = await Category.create({ name: r.category });
-          categoryId = c._id;
-          cats.set(r.category.toLowerCase(), c._id);
+        if (!categoryId) {
+          warnings.push(`New category "${r.category}"`);
+          if (body.commit) {
+            const c = await Category.create({ name: r.category });
+            categoryId = c._id;
+            cats.set(r.category.toLowerCase(), c._id);
+          }
         }
       }
-      const baseUnit = r.baseUnit || 'pc';
+      let brandId: Types.ObjectId | undefined;
+      if (r.brand) {
+        brandId = brands.get(r.brand.toLowerCase());
+        if (!brandId) {
+          warnings.push(`New brand "${r.brand}"`);
+          if (body.commit) {
+            const b = await Brand.create({ name: r.brand });
+            brandId = b._id;
+            brands.set(r.brand.toLowerCase(), b._id);
+          }
+        }
+      }
+      const image = r.image && /^\/api\/v1\/files\/[a-f0-9]{32}\.(png|jpg|webp)$/.test(r.image) ? r.image : undefined;
+      const baseUnit = (r.baseUnit || 'pc').toLowerCase();
+      const type = (r.type || 'stock').toLowerCase().replace(/[\s-]+/g, '_');
+      const active = (r.active ?? '').toLowerCase();
       const data: Record<string, unknown> = {
-        name: r.name, type: ['stock', 'service', 'non_stock'].includes(r.type) ? r.type : 'stock', baseUnit, categoryId,
-        ...(req.auth!.permissions.has('products.cost') ? { costCents: toMoney(r.cost) ?? 0 } : {}),
-        prices: { retail: toMoney(r.retail) ?? 0, wholesale: toMoney(r.wholesale), contractor: toMoney(r.contractor) },
+        name: r.name, type: ['stock', 'service', 'non_stock'].includes(type) ? type : 'stock', baseUnit,
+        ...(categoryId ? { categoryId } : {}), ...(brandId ? { brandId } : {}), ...(r.description ? { description: r.description } : {}),
+        ...(req.auth!.permissions.has('products.cost') && r.cost !== undefined && r.cost !== '' ? { costCents: toMoney(r.cost) } : {}),
+        'prices.retail': toMoney(r.retail),
+        ...(r.wholesale ? { 'prices.wholesale': toMoney(r.wholesale) } : {}), ...(r.contractor ? { 'prices.contractor': toMoney(r.contractor) } : {}),
         taxRateBp: r.taxRatePercent === undefined || r.taxRatePercent === '' ? null : Math.round(Number(r.taxRatePercent) * 100),
         reorderLevel: Number(r.reorderLevel || 0),
-        active: r.active === undefined || r.active === '' ? true : r.active.toLowerCase() !== 'false',
+        active: !['false', 'no', 'n', '0', 'inactive'].includes(active),
+        ...(image ? { images: [image] } : {}),
       };
-      if (r.barcode) data.barcodes = [{ code: r.barcode, unitCode: baseUnit }];
-      const exists = Boolean(await Product.exists({ sku }));
-      prepared.push({ sku, data, exists });
-      results.push({ row: i + 2, sku, action: exists ? 'update' : 'create' });
+      if (barcode) data.barcodes = [{ code: barcode, unitCode: baseUnit }];
+      prepared.push({ sku, data, exists: Boolean(existing) });
+      results.push({ row: rowNo, sku, action: existing ? 'update' : 'create', ...(warnings.length ? { warnings } : {}) });
     } catch (e: any) {
-      results.push({ row: i + 2, sku, action: 'error', error: e.message });
+      results.push({ row: rowNo, sku, action: 'error', error: e.message });
     }
   }
   const errors = results.filter((r) => r.action === 'error').length;
@@ -464,10 +556,13 @@ router.post('/products-import', requirePermission('products.manage'), async (req
     await withTransaction(async () => {
       for (const p of prepared) {
         if (p.exists) await Product.updateOne({ sku: p.sku }, { $set: p.data });
-        else await Product.create([{ sku: p.sku, units: [{ code: p.data.baseUnit, name: p.data.baseUnit, factor: 1 }], ...p.data }]);
+        else {
+          const { 'prices.retail': retail, 'prices.wholesale': wholesale, 'prices.contractor': contractor, ...rest } = p.data as any;
+          await Product.create([{ sku: p.sku, units: [{ code: p.data.baseUnit, name: p.data.baseUnit, factor: 1 }], prices: { retail, wholesale, contractor }, ...rest }]);
+        }
       }
     });
-    await audit(req, { action: 'product.imported', details: { rows: prepared.length } });
+    await audit(req, { action: 'product.imported', details: { rows: prepared.length, created: results.filter((r) => r.action === 'create').length, updated: results.filter((r) => r.action === 'update').length } });
   }
   res.json({ data: { committed: body.commit && errors === 0, errors, results } });
 });

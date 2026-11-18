@@ -100,17 +100,17 @@ const IconInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElem
 
 type LoginMode = 'password' | 'pin' | 'card' | 'finger';
 const MODES: { key: LoginMode; label: string; icon: string }[] = [
-  { key: 'password', label: 'Password', icon: 'lock' },
-  { key: 'pin', label: 'PIN', icon: 'keypad' },
-  { key: 'card', label: 'Staff card', icon: 'idcard' },
   { key: 'finger', label: 'Fingerprint', icon: 'finger' },
+  { key: 'card', label: 'Staff card', icon: 'idcard' },
+  { key: 'pin', label: 'PIN', icon: 'keypad' },
+  { key: 'password', label: 'Password', icon: 'lock' },
 ];
 
 export function LoginPage() {
   const { login, completeMfa, pinLogin, cardLogin, fingerprintLogin } = useAuth();
   const nav = useNavigate();
   const cfg = usePublicConfig();
-  const [mode, setMode] = useState<LoginMode>('password');
+  const [mode, setMode] = useState<LoginMode>(bridgeConfigured() ? 'finger' : 'password');
   const [email, setEmail] = useState('');
   const [secret, setSecret] = useState('');
   const [card, setCard] = useState('');
@@ -144,7 +144,7 @@ export function LoginPage() {
     run(async () => {
       if (mfa) await completeMfa(mfa, code);
       else if (mode === 'pin') await pinLogin(secret);
-      else if (mode === 'card') await cardLogin(card.trim(), secret);
+      else if (mode === 'card') await cardLogin(card.trim());
       else if (mode === 'finger') {
         const r = await fingerprint<{ loginToken: string }>('login');
         await fingerprintLogin(r.loginToken);
@@ -159,7 +159,7 @@ export function LoginPage() {
     });
   };
 
-  const pin = mode === 'pin' || mode === 'card';
+  const pin = mode === 'pin';
   const secretInput = (
     <IconInput
       ref={pinRef}
@@ -199,7 +199,7 @@ export function LoginPage() {
             </div>
             {mode === 'password' && (
               <>
-                <IconInput icon="mail" aria-label="Email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" />
+                <IconInput icon="mail" aria-label="Email or username" type="text" autoComplete="username" autoCapitalize="none" spellCheck={false} required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email or username" />
                 {secretInput}
               </>
             )}
@@ -211,11 +211,11 @@ export function LoginPage() {
             )}
             {mode === 'card' && (
               <>
+                {/* The card alone signs in: scanning it (the scanner sends Enter) submits the form. */}
                 <IconInput icon="idcard" aria-label="Staff card" autoFocus autoComplete="off" type="password" value={card} required
                   onChange={(e) => setCard(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); pinRef.current?.focus(); } }}
                   placeholder="Scan your staff card" />
-                {secretInput}
+                <p className="text-xs text-ink-500">Scan your card: it signs you in straight away.</p>
               </>
             )}
             {mode === 'finger' && (
@@ -247,25 +247,22 @@ export function LoginPage() {
 /** Attendance from the sign-in screen: staff card (+PIN) or fingerprint; nobody needs to be signed in. */
 function ClockModal({ onClose }: { onClose: () => void }) {
   const [card, setCard] = useState('');
-  const [pin, setPin] = useState('');
   const [error, setError] = useState<unknown>(null);
   const [done, setDone] = useState<{ name: string; kind: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const pinRef = useRef<HTMLInputElement>(null);
   const go = async (fn: () => Promise<{ name: string; kind: string }>) => {
     setBusy(true);
     setError(null);
     try {
       setDone(await fn());
       setCard('');
-      setPin('');
     } catch (e) {
       setError(e);
     } finally {
       setBusy(false);
     }
   };
-  const byCard = () => go(async () => (await api<{ data: { name: string; kind: string } }>('/auth/clock', { body: { code: card.trim(), pin: pin || undefined } })).data);
+  const byCard = () => go(async () => (await api<{ data: { name: string; kind: string } }>('/auth/clock', { body: { code: card.trim() } })).data);
   const byFinger = () => go(async () => {
     const r = await fingerprint<{ attendance: { kind: string }; user: { name: string } }>('attendance');
     return { name: r.user.name, kind: r.attendance.kind };
@@ -274,8 +271,7 @@ function ClockModal({ onClose }: { onClose: () => void }) {
     <Modal open onClose={onClose} title="Clock in / out" size="sm" footer={<><Button variant="secondary" onClick={onClose}>Close</Button><Button loading={busy} disabled={!card} onClick={byCard}>Clock with card</Button></>}>
       {done && <p className="mb-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200" role="status">{done.name}: {done.kind === 'clock_in' ? 'clocked in' : 'clocked out'} at {new Date().toLocaleTimeString()}</p>}
       <div className="space-y-3">
-        <Field label="Staff card"><Input autoFocus type="password" autoComplete="off" value={card} onChange={(e) => setCard(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); pinRef.current?.focus(); } }} placeholder="Scan your card" /></Field>
-        <Field label="PIN"><Input ref={pinRef} type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} onKeyDown={(e) => { if (e.key === 'Enter' && card) byCard(); }} /></Field>
+        <Field label="Staff card" hint="Scan your card: it clocks you in or out straight away."><Input autoFocus type="password" autoComplete="off" value={card} onChange={(e) => setCard(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && card.trim()) { e.preventDefault(); byCard(); } }} placeholder="Scan your card" /></Field>
         {bridgeConfigured() && <Button variant="secondary" className="w-full" loading={busy} onClick={byFinger}><Icon name="finger" className="h-4 w-4" />Use fingerprint</Button>}
         <ErrorBox error={error} />
       </div>

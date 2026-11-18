@@ -9,7 +9,10 @@ import { DataTable } from '../../components/DataTable';
 import { ProductPicker } from '../../components/ProductPicker';
 import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, StatusBadge, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
-import { code128Svg } from '../../components/barcode';
+import { labelBarcodeSvg } from '@afeypos/shared';
+import { PrintingVisual } from '../../components/PayVisuals';
+import { bridge, bridgeConfigured } from '../../lib/bridge';
+import { printHtmlString } from '../../lib/printing';
 
 function useWarehouseSelect() {
   const locs = useLocations();
@@ -147,6 +150,7 @@ export function AdjustmentsPage() {
 }
 
 export function TransfersPage() {
+  const { me, can } = useAuth();
   const w = useWarehouseSelect();
   const qc = useQueryClient();
   const toast = useToast();
@@ -156,6 +160,7 @@ export function TransfersPage() {
   const [to, setTo] = useState('');
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [error, setError] = useState<unknown>(null);
+  const needsApproval = Boolean(me?.tenant.checkoutRules?.transfers?.approvalRequired);
   const act = async (id: string, action: string) => {
     try { await api(`/inventory/transfers/${id}/${action}`, { body: {} }); qc.invalidateQueries({ queryKey: ['transfers'] }); toast.success('Updated'); } catch (e) { toast.error(e); }
   };
@@ -170,7 +175,12 @@ export function TransfersPage() {
             { key: 't', header: 'To', render: (r: any) => w.name(r.toWarehouseId) },
             { key: 'l', header: 'Lines', render: (r: any) => r.lines.length },
             { key: 's', header: 'Status', render: (r: any) => <StatusBadge status={r.status} /> },
-            { key: 'a', header: '', render: (r: any) => r.status === 'draft' ? <Button size="sm" onClick={() => act(r._id, 'dispatch')}>Dispatch</Button> : r.status === 'in_transit' ? <Button size="sm" onClick={() => act(r._id, 'receive')}>Receive all</Button> : null },
+            { key: 'a', header: '', render: (r: any) => r.status === 'draft' ? (
+              <div className="flex justify-end gap-1">
+                {needsApproval && !r.approvedAt && can('inventory.adjust.approve') && <Button size="sm" variant="secondary" onClick={() => act(r._id, 'approve')}>Approve</Button>}
+                {needsApproval && !r.approvedAt && !can('inventory.adjust.approve') ? <Badge tone="amber">waiting for approval</Badge> : <Button size="sm" onClick={() => act(r._id, 'dispatch')}>Dispatch</Button>}
+              </div>
+            ) : r.status === 'in_transit' ? <Button size="sm" onClick={() => act(r._id, 'receive')}>Receive all</Button> : null },
           ]} />
       </div>
       <Modal open={open} onClose={() => setOpen(false)} title="New transfer" size="lg" footer={<><Button variant="secondary" onClick={() => setOpen(false)}>Cancel</Button><Button disabled={!from || !to || !lines.length} onClick={async () => {
@@ -232,38 +242,183 @@ function StocktakeModal({ id, onClose }: { id: string; onClose: () => void }) {
       <Input className="mb-2 max-w-xs" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
       <table className="min-w-full text-sm"><thead><tr><th className="th">Product</th><th className="th num">Expected</th><th className="th num">Counted</th><th className="th num">Variance</th></tr></thead>
         <tbody>{st.lines.filter((l: any) => !filter || l.productId?.name?.toLowerCase().includes(filter.toLowerCase()) || l.productId?.sku === filter).map((l: any) => {
-          const pid = l.productId?._id;
+          // Each line is keyed by its own product, so a count goes to that product only.
+          const pid = String(l.productId?._id ?? l.productId);
           const counted = counts[pid] ?? (l.countedQty ?? '');
           const v = counted === '' ? null : Number(counted) - l.expectedQty;
-          return <tr key={pid}><td className="td">{l.productId?.name} <span className="text-ink-500">{l.productId?.sku}</span></td><td className="td num">{qty(l.expectedQty)}</td>
-            <td className="td num">{st.status === 'counting' ? <Input className="ml-auto w-24 text-right" inputMode="decimal" value={counted} onChange={(e) => setCounts({ ...counts, [pid]: e.target.value })} /> : qty(l.countedQty)}</td>
+          return <tr key={pid}><td className="td">{l.productId?.name ? <>{l.productId.name} <span className="text-ink-500">{l.productId.sku}</span></> : <span className="text-ink-500">Product no longer exists</span>}</td><td className="td num">{qty(l.expectedQty)}</td>
+            <td className="td num">{st.status === 'counting' ? <Input className="ml-auto w-24 text-right" inputMode="decimal" aria-label={`Counted ${l.productId?.name ?? ''}`.trim()} value={counted} onChange={(e) => setCounts({ ...counts, [pid]: e.target.value })} /> : qty(l.countedQty)}</td>
             <td className={`td num ${v && v < 0 ? 'text-red-600' : v ? 'text-amber-600' : ''}`}>{v === null ? '' : qty(v)}</td></tr>;
         })}</tbody></table>
     </Modal>
   );
 }
 
-export function LabelsPage() {
-  const [items, setItems] = useState<{ p: any; copies: number }[]>([]);
-  const [error, setError] = useState<unknown>(null);
-  const print = () => {
+const escHtml = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const unitLine = (r: LabelRow) => (r.factor === 1 ? '' : `${r.unitName} · ${r.factor} ${r.p.baseUnit}`);
+
+/** 50 x 30 mm labels as a printable page (browser printing and the preview). */
+function labelsHtml(rows: LabelRow[], opts: { preview?: boolean } = {}) {
+  const body = rows.flatMap((r) => {
+    // A real EAN/UPC symbol for GTIN codes, Code 128 otherwise; sized in mm to fit the 46 mm usable width and stay scannable.
+    const svg = labelBarcodeSvg(r.code!, { heightMm: 9, maxWidthMm: 46 });
+    const unit = unitLine(r) ? `<div class="u">${escHtml(unitLine(r))}</div>` : '';
+    const one = `<div class="l"><div class="n">${escHtml(r.p.name)}</div>${unit}<div class="p">KES ${(r.priceCents / 100).toFixed(2)}</div>${svg}<div class="c">${escHtml(r.code!)}</div></div>`;
+    return Array.from({ length: opts.preview ? 1 : r.copies }, () => one);
+  }).join('');
+  const style = `@page{size:50mm 30mm;margin:0}body{margin:0;font:10px sans-serif;${opts.preview ? 'background:#e9ebee;display:flex;flex-wrap:wrap;gap:8px;padding:8px' : ''}}.l{width:50mm;height:30mm;padding:2mm;box-sizing:border-box;${opts.preview ? 'background:#fff;border-radius:4px;box-shadow:0 1px 3px #0003' : 'page-break-after:always'};text-align:center;overflow:hidden}.n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.u{font-size:8px;font-weight:600;text-transform:uppercase}.p{font-size:14px;font-weight:700}svg{display:block;margin:0.5mm auto 0;max-width:100%}.c{font-size:8px}`;
+  return `<!doctype html><html><head><title>Labels</title><style>${style}</style></head><body>${body}</body></html>`;
+}
+
+type PrinterChoice = { id: string; label: string; group: string; via: 'browser' | 'bridge' | 'bridge-system' | 'server' | 'device'; name?: string; language?: 'zpl' | 'tspl' };
+
+/**
+ * Side panel to choose the printer and print the labels there: the print window on this PC, a printer through the
+ * device bridge on this PC, a printer installed on the Afey POS computer, or a network label printer.
+ */
+function PrintLabelsPanel({ rows, onClose }: { rows: LabelRow[]; onClose: () => void }) {
+  const toast = useToast();
+  const choices = useQuery({
+    queryKey: ['label-printers'],
+    queryFn: async () => {
+      const list: PrinterChoice[] = [{ id: 'browser', label: 'Print window on this computer', group: 'This computer', via: 'browser' }];
+      if (bridgeConfigured()) {
+        const b = await bridge<{ configured: Record<string, unknown>; system: { name: string; default?: boolean }[] }>('/printers', undefined, 6000).catch(() => null);
+        for (const name of Object.keys(b?.configured ?? {})) list.push({ id: `bridge:${name}`, label: `${name} (device bridge)`, group: 'This computer', via: 'bridge', name });
+        for (const p of b?.system ?? []) list.push({ id: `bridge-system:${p.name}`, label: `${p.name}${p.default ? ' (default)' : ''}`, group: 'This computer', via: 'bridge-system', name: p.name });
+      }
+      const local = await api<{ data: { available: boolean; printers: { name: string }[] } }>('/hardware/printers/local').then((r) => r.data).catch(() => null);
+      for (const p of local?.available ? local.printers : []) list.push({ id: `server:${p.name}`, label: p.name, group: 'Afey POS computer', via: 'server', name: p.name });
+      const devices = await api<{ data: { _id: string; name: string; serverCanPrint: boolean; language: string }[] }>('/hardware/label-printers').then((r) => r.data).catch(() => []);
+      for (const d of devices.filter((x) => x.serverCanPrint)) list.push({ id: `device:${d._id}`, label: d.name, group: 'Network label printers', via: 'device', name: d._id, language: d.language === 'tspl' ? 'tspl' : 'zpl' });
+      return list;
+    },
+  });
+  const saved = (() => { try { return JSON.parse(localStorage.getItem('afey.labelPrinter') ?? '{}'); } catch { return {}; } })();
+  const [choiceId, setChoiceId] = useState<string>(saved.id ?? 'browser');
+  const [language, setLanguage] = useState<'zpl' | 'tspl'>(saved.language ?? 'zpl');
+  const [state, setState] = useState<{ state: 'printing' | 'done' | 'browser' | 'failed'; message?: string } | null>(null);
+  const list = choices.data ?? [];
+  const choice = list.find((c) => c.id === choiceId) ?? list[0];
+  const direct = choice && choice.via !== 'browser';
+  const total = rows.reduce((a, r) => a + r.copies, 0);
+  const groups = [...new Set(list.map((c) => c.group))];
+  const items = rows.map((r) => ({ name: r.p.name.slice(0, 60), unit: unitLine(r) || undefined, price: `KES ${(r.priceCents / 100).toFixed(2)}`, barcode: r.code!, copies: r.copies }));
+  const print = async () => {
+    if (!choice) return;
+    try { localStorage.setItem('afey.labelPrinter', JSON.stringify({ id: choice.id, language })); } catch { /* ignore */ }
+    if (direct && items.some((i) => !/^[A-Za-z0-9-]{1,40}$/.test(i.barcode))) { toast.error('A barcode has characters label printers cannot print: use the print window'); return; }
+    setState({ state: 'printing' });
     try {
-      const html = items.flatMap(({ p, copies }) => {
-        const code = p.barcodes?.[0]?.code ?? p.sku;
-        const svg = code128Svg(code, 40, 1.5);
-        return Array.from({ length: copies }, () => `<div class="l"><div class="n">${p.name.replace(/</g, '&lt;')}</div><div class="p">KES ${((p.prices?.retail ?? 0) / 100).toFixed(2)}</div>${svg}<div class="c">${code}</div></div>`);
-      }).join('');
-      const w = window.open('', '_blank');
-      w!.document.write(`<!doctype html><html><head><title>Labels</title><style>@page{size:50mm 30mm;margin:0}body{margin:0;font:10px sans-serif}.l{width:50mm;height:30mm;padding:2mm;box-sizing:border-box;page-break-after:always;text-align:center;overflow:hidden}.n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.p{font-size:14px;font-weight:700}svg{max-width:100%;height:10mm}.c{font-size:8px}</style></head><body>${html}<script>onload=()=>print()</script></body></html>`);
-      w!.document.close();
-    } catch (e) { setError(e); }
+      if (choice.via === 'browser') {
+        await printHtmlString(labelsHtml(rows));
+        setState({ state: 'browser' });
+        return;
+      }
+      if (choice.via === 'bridge' || choice.via === 'bridge-system') {
+        const payload = (await api<{ data: { payload: string } }>('/hardware/labels', { body: { language, items } })).data.payload;
+        const base64 = btoa(unescape(encodeURIComponent(payload)));
+        await bridge('/print/raw', choice.via === 'bridge' ? { printer: choice.name, base64 } : { systemPrinter: choice.name, base64 }, 20_000);
+      } else {
+        await api('/hardware/labels/print', { body: { language, items, ...(choice.via === 'server' ? { localPrinter: choice.name } : { deviceId: choice.name }) } });
+      }
+      setState({ state: 'done', message: `${total} labels sent to ${choice.label}` });
+      toast.success(`${total} labels sent to ${choice.label}`);
+    } catch (e: any) {
+      setState({ state: 'failed', message: e?.message ?? 'The printer was not reached' });
+    }
   };
   return (
-    <div className="max-w-3xl">
-      <PageHeader title="Shelf labels & barcodes" subtitle="Prints 50 × 30 mm Code 128 labels from the browser. ZPL/TSPL output is available through the hardware API." actions={<Button onClick={print} disabled={!items.length}><Icon name="printer" className="h-4 w-4" />Print labels</Button>} />
+    <Modal open onClose={onClose} title="Print labels" subtitle={`${total} label${total === 1 ? '' : 's'} · 50 × 30 mm`} icon="printer" size="md"
+      footer={<><Button variant="secondary" onClick={onClose}>Close</Button><Button loading={state?.state === 'printing'} disabled={!choice} onClick={print}><Icon name="printer" className="h-4 w-4" />Print {total} labels</Button></>}>
+      <div className="space-y-4" data-testid="print-labels-panel">
+        <Field label="Printer">
+          <select className="input" value={choice?.id ?? ''} onChange={(e) => { setChoiceId(e.target.value); const c = list.find((x) => x.id === e.target.value); if (c?.language) setLanguage(c.language); }} aria-label="Printer">
+            {groups.map((g) => <optgroup key={g} label={g}>{list.filter((c) => c.group === g).map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</optgroup>)}
+          </select>
+        </Field>
+        {choices.isLoading && <p className="text-xs text-ink-500">Looking for printers…</p>}
+        {choice?.via === 'browser' && <p className="text-xs text-ink-500">Opens the print window: pick the label printer there and set the paper to 50 × 30 mm.</p>}
+        {direct && (
+          <Field label="Printer language" hint="ZPL for Zebra, TSPL for TSC, Xprinter and most other thermal label printers">
+            <Select value={language} onChange={(e) => setLanguage(e.target.value as 'zpl' | 'tspl')} options={[{ value: 'zpl', label: 'ZPL (Zebra)' }, { value: 'tspl', label: 'TSPL (TSC, Xprinter…)' }]} />
+          </Field>
+        )}
+        {!bridgeConfigured() && <p className="text-xs text-ink-500">To print straight to a USB label printer on this PC without the print window, pair the Afey device bridge (Hardware → This computer).</p>}
+        {state && <PrintingVisual state={state.state} message={state.message} />}
+        <div>
+          <div className="label">Preview (one of each)</div>
+          <iframe title="Label preview" srcDoc={labelsHtml(rows, { preview: true })} sandbox="" className="h-56 w-full rounded-md border border-ink-100 dark:border-ink-800" />
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+type LabelRow = { key: string; p: any; unitCode: string; unitName: string; factor: number; code: string | null; priceCents: number; copies: number; on: boolean };
+
+/** One label line per unit the product is sold in: its own barcode and its own price (unit price, else base x factor). */
+function labelRows(p: any): LabelRow[] {
+  const base = { code: p.baseUnit, name: p.baseUnit === 'pc' ? 'Piece' : p.baseUnit, factor: 1, prices: {} as Record<string, number | undefined> };
+  const units = [base, ...(p.units ?? []).filter((u: any) => u.code !== p.baseUnit)];
+  return units.map((u: any) => {
+    const own = p.barcodes?.find((b: any) => b.unitCode === u.code)?.code ?? null;
+    return {
+      key: `${p._id}:${u.code}`, p, unitCode: u.code, unitName: u.name || u.code, factor: u.factor,
+      // The base unit can always fall back to the SKU (the till finds it); other units need their own barcode.
+      code: own ?? (u.code === p.baseUnit ? p.sku : null),
+      priceCents: u.prices?.retail ?? Math.round((p.prices?.retail ?? 0) * u.factor),
+      copies: 1, on: true,
+    };
+  });
+}
+
+export function LabelsPage() {
+  const toast = useToast();
+  const { can } = useAuth();
+  const [rows, setRows] = useState<LabelRow[]>([]);
+  const [error, setError] = useState<unknown>(null);
+  const upd = (key: string, patch: Partial<LabelRow>) => setRows((all) => all.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const add = (p: any) => setRows((all) => [...all.filter((r) => r.p._id !== p._id), ...labelRows(p)]);
+  const makeBarcode = async (r: LabelRow) => {
+    try {
+      const res = await api<{ data: { code: string } }>(`/products/${r.p._id}/unit-barcode`, { body: { unitCode: r.unitCode } });
+      upd(r.key, { code: res.data.code });
+      toast.success(`In-store barcode ${res.data.code} added to ${r.p.name} (${r.unitName})`);
+    } catch (e) { setError(e); }
+  };
+  const printable = rows.filter((r) => r.on && r.code && r.copies > 0);
+  const [panel, setPanel] = useState(false);
+  const products = [...new Map(rows.map((r) => [r.p._id, r.p])).values()];
+  return (
+    <div className="max-w-4xl">
+      <PageHeader title="Shelf labels & barcodes" subtitle="Prints 50 × 30 mm Code 128 labels from the browser: one line per unit the product is sold in (piece, pack, carton). ZPL/TSPL output is available through the hardware API."
+        actions={<Button onClick={() => setPanel(true)} disabled={!printable.length}><Icon name="printer" className="h-4 w-4" />Print {printable.reduce((a, r) => a + r.copies, 0) || ''} labels</Button>} />
+      {panel && <PrintLabelsPanel rows={printable} onClose={() => setPanel(false)} />}
       <Card>
-        <ProductPicker onPick={(p) => setItems([...items, { p, copies: 1 }])} />
-        <ul className="mt-3 divide-y divide-ink-100 dark:divide-ink-800">{items.map((it, i) => <li key={i} className="flex items-center gap-2 py-2 text-sm"><span className="flex-1">{it.p.name}</span><Input className="w-20" type="number" min={1} value={it.copies} onChange={(e) => setItems(items.map((x, j) => (j === i ? { ...x, copies: Number(e.target.value) } : x)))} aria-label="Copies" /><Button variant="ghost" onClick={() => setItems(items.filter((_, j) => j !== i))}><Icon name="x" className="h-4 w-4" /></Button></li>)}</ul>
+        <ProductPicker onPick={add} />
+        <div className="mt-3 space-y-3" data-testid="label-rows">
+          {products.map((p) => (
+            <div key={p._id} className="rounded-lg border border-ink-100 dark:border-ink-800">
+              <div className="flex items-center justify-between border-b border-ink-100 px-3 py-2 dark:border-ink-800">
+                <span className="font-medium">{p.name}</span>
+                <Button size="sm" variant="ghost" aria-label={`Remove ${p.name}`} onClick={() => setRows((all) => all.filter((r) => r.p._id !== p._id))}><Icon name="x" className="h-4 w-4" /></Button>
+              </div>
+              <ul className="divide-y divide-ink-100 dark:divide-ink-800">
+                {rows.filter((r) => r.p._id === p._id).map((r) => (
+                  <li key={r.key} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+                    <Checkbox label={r.factor === 1 ? `${r.unitName}` : `${r.unitName} (${r.factor} ${p.baseUnit})`} checked={r.on} onChange={(v) => upd(r.key, { on: v })} />
+                    <span className="font-semibold tabular-nums">{money(r.priceCents)}</span>
+                    {r.code ? <span className="font-mono text-xs text-ink-500">{r.code}</span>
+                      : <span className="flex items-center gap-2 text-xs text-amber-700">No barcode for this unit{can('products.manage') && <Button size="sm" variant="secondary" onClick={() => makeBarcode(r)}>Make in-store barcode</Button>}</span>}
+                    <span className="flex-1" />
+                    <Input className="w-20" type="number" min={0} value={r.copies} onChange={(e) => upd(r.key, { copies: Math.max(0, Number(e.target.value) || 0) })} aria-label={`Copies of ${p.name} ${r.unitName}`} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
         <ErrorBox error={error} />
       </Card>
     </div>

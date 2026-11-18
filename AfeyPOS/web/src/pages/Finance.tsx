@@ -1,16 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Navigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, download } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useList, useLocations } from '../lib/hooks';
-import { dateTime, daysAgoLocal, money, paymentLabel, qty, todayLocal } from '../lib/format';
+import { date, dateTime, daysAgoLocal, money, paymentLabel, qty, todayLocal } from '../lib/format';
 import { DataTable } from '../components/DataTable';
 import { BarChart } from '../components/Chart';
-import { Badge, Button, Card, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, StatusBadge, Tabs, useToast } from '../components/ui';
+import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, StatusBadge, Tabs, useToast } from '../components/ui';
 import { ProductPicker } from '../components/ProductPicker';
 import { Icon } from '../components/icons';
+import { ReportActions } from '../components/ReportActions';
+import { AutoChart } from '../components/AutoChart';
+import { CustomView, loadCustomView, REPORT_VIEWS } from './reports/ReportViews';
 
-function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void }) {
+export function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void }) {
   return (
     <div className="flex flex-wrap items-end gap-2">
       <Field label="From"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
@@ -22,16 +26,24 @@ function Period({ from, to, setFrom, setTo }: { from: string; to: string; setFro
 
 export function ReportsPage() {
   const { can, has } = useAuth();
-  const [tab, setTab] = useState('daily');
+  // Reports › <report> menu entries open one report (/reports/<view>); /reports shows every report as tabs.
+  const { view: viewKey } = useParams();
+  const view = viewKey ? REPORT_VIEWS[viewKey] : undefined;
+  const [tabState, setTab] = useState('daily');
+  const tab = view ? (view.custom ? `custom:${view.custom}` : view.tab!) : tabState;
   const [from, setFrom] = useState(daysAgoLocal(6));
   const [to, setTo] = useState(todayLocal());
-  const [groupBy, setGroupBy] = useState('day');
+  const [groupByState, setGroupBy] = useState('day');
+  const groupBy = view?.groupBy ?? (view && view.tab !== 'sales' ? 'day' : groupByState);
   const [deadDays, setDeadDays] = useState(30);
+  useEffect(() => setDeadDays(view?.days ?? 30), [viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [leadDays, setLeadDays] = useState(7);
   const period = { from, to };
   const q = useQuery({
-    queryKey: ['report', tab, from, to, groupBy, deadDays, leadDays],
+    queryKey: ['report', viewKey ?? '', tab, from, to, groupBy, deadDays, leadDays],
+    enabled: !viewKey || Boolean(view),
     queryFn: () => {
+      if (view?.custom) return loadCustomView(view.custom, period, (x) => can(x as any));
       const map: Record<string, [string, Record<string, unknown>]> = {
         sales: ['/reports/sales', { ...period, groupBy }], profit: ['/reports/profit', period], inventory: ['/reports/inventory-valuation', {}], receivables: ['/reports/receivables', {}],
         payables: ['/reports/payables', {}], exceptions: ['/reports/exceptions', period], tax: ['/reports/tax', period], branches: ['/reports/branches', period], shifts: ['/reports/shifts', period],
@@ -50,23 +62,49 @@ export function ReportsPage() {
     { key: 'exceptions', label: 'Voids & discounts' }, { key: 'losses', label: 'Losses' }, { key: 'shifts', label: 'Cashier shifts' }, ...(has('multiBranch') ? [{ key: 'branches', label: 'Branches' }] : []), ...(can('audit.read') ? [{ key: 'activity', label: 'User activity' }] : []),
   ];
   const d = q.data;
+  const reportRef = useRef<HTMLDivElement>(null);
+  // Table or graph, remembered on this computer.
+  const [mode, setModeState] = useState<'table' | 'graph'>(() => { try { return localStorage.getItem('afey.reportMode') === 'graph' ? 'graph' : 'table'; } catch { return 'table'; } });
+  const setMode = (m: 'table' | 'graph') => { setModeState(m); try { localStorage.setItem('afey.reportMode', m); } catch { /* ignore */ } };
+  const tabLabel = view?.title ?? tabs.find((x) => x.key === tab)?.label ?? 'Report';
+  const noPeriod = view?.noPeriod ?? ['inventory', 'receivables', 'payables', 'dead', 'reorder'].includes(tab);
+  const periodText = from === to ? date(from) : `${date(from)} to ${date(to)}`;
+  const reportMeta: [string, string][] = [
+    ...(view?.custom === 'balance' ? [['As at', date(to)] as [string, string]] : !noPeriod ? [['Period', periodText] as [string, string]] : [['As at', dateTime(new Date())] as [string, string]]),
+    ...(tab === 'sales' && !view?.groupBy ? [['Grouped by', groupBy] as [string, string]] : []),
+    ...(tab === 'dead' ? [['No sale for', `${deadDays} days`] as [string, string]] : []),
+    ...(tab === 'reorder' ? [['Supplier lead time', `${leadDays} days`] as [string, string]] : []),
+  ];
   const csvTabs = ['sales', 'inventory', 'shifts', 'branches', 'losses', 'purchases', 'activity', 'daily', 'returns', 'performance', 'dead', 'reorder'];
   const csvPath: Record<string, string> = { sales: '/reports/sales', inventory: '/reports/inventory-valuation', daily: '/reports/daily-summary', performance: '/reports/product-performance', dead: '/reports/dead-stock', reorder: '/reports/reorder' };
+  if (viewKey && !view) return <Navigate to="/reports" replace />;
   return (
     <div>
-      <PageHeader title="Reports" subtitle="Periods use the business timezone" actions={csvTabs.includes(tab) && <Button variant="secondary" onClick={() => download(csvPath[tab] ?? `/reports/${tab}`, `${tab}.csv`, { ...period, groupBy, days: deadDays, leadDays, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>} />
-      <Tabs tabs={tabs} value={tab} onChange={setTab} />
-      {!['inventory', 'receivables', 'payables', 'dead', 'reorder'].includes(tab) && <div className="mb-4"><Period from={from} to={to} setFrom={setFrom} setTo={setTo} /></div>}
+      <PageHeader title={view?.title ?? 'Reports'} subtitle={view ? `${view.subtitle}. Periods use the business timezone.` : 'Periods use the business timezone'} actions={<>
+        {d && !q.isLoading && !q.error && <ReportActions target={reportRef} title={tabLabel} subtitle={view?.subtitle} meta={reportMeta} csv={!(view?.csv || (!view?.custom && csvTabs.includes(tab)))} />}
+        {view?.csv && <Button variant="secondary" onClick={() => download(view.csv!, `${viewKey}.csv`, { ...period, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>}
+        {!view?.custom && csvTabs.includes(tab) && <Button variant="secondary" onClick={() => download(csvPath[tab] ?? `/reports/${tab}`, `${tab}.csv`, { ...period, groupBy, days: deadDays, leadDays, format: 'csv' })}><Icon name="download" className="h-4 w-4" />CSV</Button>}
+      </>} />
+      {!view && <Tabs tabs={tabs} value={tab} onChange={setTab} />}
+      <div className="mb-3 inline-flex rounded-md border border-ink-200 p-0.5 dark:border-ink-700" role="radiogroup" aria-label="Report view">
+        {(['table', 'graph'] as const).map((m) => <button key={m} type="button" role="radio" aria-checked={mode === m} onClick={() => setMode(m)} className={`rounded px-3 py-1 text-[12px] font-semibold ${mode === m ? 'bg-brand-500 text-white' : 'text-ink-600 dark:text-ink-300'}`}>{m === 'table' ? 'Table' : 'Graph'}</button>)}
+      </div>
+      {!noPeriod && <div className="mb-4"><Period from={from} to={to} setFrom={setFrom} setTo={setTo} /></div>}
       {tab === 'dead' && <div className="mb-4 max-w-xs"><Field label="No sale for (days)"><Input type="number" min={1} value={deadDays} onChange={(e) => setDeadDays(Math.max(1, Number(e.target.value) || 30))} /></Field></div>}
       {tab === 'reorder' && <div className="mb-4 max-w-xs"><Field label="Supplier lead time (days)"><Input type="number" min={0} value={leadDays} onChange={(e) => setLeadDays(Math.max(0, Number(e.target.value) || 0))} /></Field></div>}
       {q.isLoading ? <Loading /> : q.error ? <ErrorBox error={q.error} /> : (
-        <>
+        <div ref={reportRef}>
+          {mode === 'graph' ? (d ? <div className="space-y-3">
+            {tab === 'sales' && !view?.groupBy && <Select aria-label="Group by" className="max-w-xs" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} options={['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'].map((x) => ({ value: x, label: `By ${x}` }))} />}
+            <AutoChart key={`${viewKey ?? ''}:${tab}:${groupBy}`} data={d} />
+          </div> : null) : <>
+          {view?.custom && d && <CustomView custom={view.custom} d={d} />}
           {tab === 'sales' && (
             <div className="space-y-4">
-              <Select className="max-w-xs" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} options={['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'].map((x) => ({ value: x, label: `By ${x}` }))} />
+              {!view?.groupBy && <Select className="max-w-xs" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} options={['day', 'week', 'month', 'hour', 'weekday', 'product', 'category', 'department', 'brand', 'cashier', 'branch', 'till', 'paymentMethod', 'customer', 'salesRep'].map((x) => ({ value: x, label: `By ${x}` }))} />}
               {['day', 'week', 'month', 'hour'].includes(groupBy) && <Card><BarChart data={d.data.map((r: any) => ({ label: r._id, value: r.grossCents }))} format={money} /></Card>}
               <div className="card"><DataTable rows={d.data.map((r: any, i: number) => ({ ...r, id: String(r._id ?? i) }))} columns={[
-                { key: 'k', header: groupBy, render: (r: any) => r.name ?? r._id ?? '—' },
+                { key: 'k', header: ({ cashier: 'User', customer: 'Customer', brand: 'Brand', paymentMethod: 'Payment method', salesRep: 'Sales rep' } as Record<string, string>)[groupBy] ?? groupBy[0]!.toUpperCase() + groupBy.slice(1), render: (r: any) => r.name ?? r._id ?? '—' },
                 ...(d.data[0]?.count !== undefined ? [{ key: 'c', header: 'Count', className: 'num', render: (r: any) => r.count }] : []),
                 ...(d.data[0]?.qty !== undefined ? [{ key: 'q', header: 'Qty', className: 'num', render: (r: any) => qty(r.qty) }] : []),
                 { key: 'g', header: 'Sales (incl. tax)', className: 'num', render: (r: any) => money(r.grossCents) },
@@ -93,19 +131,20 @@ export function ReportsPage() {
             );
           })()}
           {tab === 'inventory' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Stock value at cost" value={money(d.totalValueCents)} hint="Weighted average cost" /><Stat label="Retail value" value={money(d.retailValueCents)} /></div><div className="card"><DataTable rows={d.data} columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'q', header: 'Qty', className: 'num', render: (r: any) => `${qty(r.qty)} ${r.unit}` }, { key: 'c', header: 'Avg cost', className: 'num', render: (r: any) => money(r.avgCostCents) }, { key: 'v', header: 'Value', className: 'num', render: (r: any) => money(r.valueCents) }]} /></div></>}
-          {(tab === 'receivables' || tab === 'payables') && <div className="card"><div className="p-3 font-semibold">Total {money(d.totalCents)}</div><DataTable rows={d.data} columns={[{ key: 'n', header: tab === 'receivables' ? 'Customer' : 'Supplier', render: (r: any) => (r.customer ?? r.supplier)?.name }, ...[['current', 'Current'], ['d1_30', '1-30'], ['d31_60', '31-60'], ['d61_90', '61-90'], ['d90plus', '90+'], ['total', 'Total']].map(([k, l]) => ({ key: k, header: l, className: 'num', render: (r: any) => money(r[k]) }))]} /></div>}
-          {tab === 'tax' && <div className="grid gap-3 sm:grid-cols-4"><Stat label="Output tax" value={money(d.data.outputTaxCents)} /><Stat label="Input tax" value={money(d.data.inputTaxCents)} /><Stat label="Net payable" value={money(d.data.netTaxPayableCents)} /><Card className="sm:col-span-4"><p className="text-sm text-ink-500">{d.data.note}</p>{d.data.outputByRate.map((r: any) => <div key={r.rateBp} className="flex justify-between text-sm"><span>{r.rateBp / 100}%</span><span>net {money(r.netCents)} · tax {money(r.taxCents)}</span></div>)}</Card></div>}
-          {tab === 'exceptions' && <div className="grid gap-4 lg:grid-cols-3"><Stat label="Voided" value={money(d.data.totals.voidsCents)} hint={`${d.data.voids.length} sales`} /><Stat label="Returned" value={money(d.data.totals.returnsCents)} hint={`${d.data.returns.length} returns`} /><Stat label="Discounts given" value={money(d.data.totals.discountsCents)} hint={`${d.data.discounts.length} sales`} /><Card title="Supervisor overrides" className="lg:col-span-3"><ul className="text-sm">{d.data.overrides.map((s: any) => <li key={s._id}>{s.number}: {s.overrides.map((o: any) => o.action).join('; ')}</li>)}</ul></Card></div>}
+          {(tab === 'receivables' || tab === 'payables') && <div className="card"><div data-report-text className="p-3 font-semibold">Total {money(d.totalCents)}</div><DataTable rows={d.data} columns={[{ key: 'n', header: tab === 'receivables' ? 'Customer' : 'Supplier', render: (r: any) => (r.customer ?? r.supplier)?.name }, ...[['current', 'Current'], ['d1_30', '1-30'], ['d31_60', '31-60'], ['d61_90', '61-90'], ['d90plus', '90+'], ['total', 'Total']].map(([k, l]) => ({ key: k, header: l, className: 'num', render: (r: any) => money(r[k]) }))]} /></div>}
+          {tab === 'tax' && <div className="grid gap-3 sm:grid-cols-4"><Stat label="Output tax" value={money(d.data.outputTaxCents)} /><Stat label="Input tax" value={money(d.data.inputTaxCents)} /><Stat label="Net payable" value={money(d.data.netTaxPayableCents)} /><Card className="sm:col-span-4" title="Output tax by rate"><p data-report-text className="text-sm text-ink-500">{d.data.note}</p><div data-lines="VAT rate|Net · tax">{d.data.outputByRate.map((r: any) => <div data-line key={r.rateBp} className="flex justify-between text-sm"><span>{r.rateBp / 100}%</span><span>net {money(r.netCents)} · tax {money(r.taxCents)}</span></div>)}</div></Card></div>}
+          {tab === 'exceptions' && <div className="grid gap-4 lg:grid-cols-3"><Stat label="Voided" value={money(d.data.totals.voidsCents)} hint={`${d.data.voids.length} sales`} /><Stat label="Returned" value={money(d.data.totals.returnsCents)} hint={`${d.data.returns.length} returns`} /><Stat label="Discounts given" value={money(d.data.totals.discountsCents)} hint={`${d.data.discounts.length} sales`} /><Card title="Supervisor overrides" className="lg:col-span-3"><ul className="text-sm">{d.data.overrides.map((s: any) => <li data-report-text key={s._id}>{s.number}: {s.overrides.map((o: any) => o.action).join('; ')}</li>)}</ul></Card></div>}
           {['branches', 'shifts', 'losses', 'purchases', 'activity'].includes(tab) && <div className="card"><DataTable rows={d.data.map((r: any, i: number) => ({ ...r, id: String(i) }))} columns={Object.keys(d.data[0] ?? {}).filter((k) => !['_id', 'productId', 'warehouseId'].includes(k)).map((k) => ({ key: k, header: k.replace(/Cents$/, '').replace(/([A-Z])/g, ' $1'), className: /Cents$|count|qty/i.test(k) ? 'num' : undefined, render: (r: any) => (/Cents$/.test(k) ? money(r[k]) : /At$/.test(k) ? dateTime(r[k]) : typeof r[k] === 'object' ? JSON.stringify(r[k]) : String(r[k] ?? '')) }))} /></div>}
           {tab === 'daily' && <RetailDaily d={d} />}
           {tab === 'basket' && <RetailBasket d={d.data} />}
           {tab === 'returns' && <RetailReturns d={d.data} />}
           {tab === 'discounts' && <RetailDiscounts d={d.data} />}
           {tab === 'performance' && <RetailPerformance d={d} />}
-          {tab === 'dead' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Value tied up" value={money(d.totalValueCents)} hint={`${d.data.length} products without a sale in ${d.days} days`} tone={d.totalValueCents ? 'red' : undefined} /></div><div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.productId }))} empty="Every stocked product sold recently" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'q', header: 'On hand', className: 'num', render: (r: any) => `${qty(r.qty)} ${r.unit}` }, { key: 'v', header: 'Cost value', className: 'num', render: (r: any) => money(r.valueCents) }, { key: 'rv', header: 'Retail value', className: 'num', render: (r: any) => money(r.retailValueCents) }, { key: 'l', header: 'Last sold', render: (r: any) => (r.lastSoldAt ? `${dateTime(r.lastSoldAt)} (${r.daysSinceSale} d)` : 'Never') }]} /></div></>}
+          {tab === 'dead' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Value tied up" value={money(d.totalValueCents)} hint={`${d.data.length} products without a sale in ${d.days} days`} tone={d.totalValueCents ? 'red' : undefined} /></div><div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.productId }))} empty="Every stocked product sold recently" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 'q', header: 'On hand', className: 'num', render: (r: any) => `${qty(r.qty)} ${r.unit}` }, { key: 'v', header: 'Cost value', className: 'num', render: (r: any) => money(r.valueCents) }, { key: 'rv', header: 'Retail value', className: 'num', render: (r: any) => money(r.retailValueCents) }, { key: 'l', header: 'Last sold', render: (r: any) => (r.lastSoldAt ? `${dateTime(r.lastSoldAt)} (${r.daysSinceSale} d)` : 'Never') }, { key: 'sg', header: 'Suggested action', render: (r: any) => <span className="text-xs">{r.suggestion}</span> }]} /></div></>}
           {tab === 'reorder' && <><div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3"><Stat label="Products to reorder" value={String(d.data.length)} /><Stat label="Estimated cost" value={money(d.totalCostCents)} hint={`Sales rate of the last ${d.params.days} days, cover ${d.params.leadDays + d.params.coverDays} days`} /></div><div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r.productId }))} empty="Nothing needs reordering" columns={[{ key: 'n', header: 'Product', render: (r: any) => r.name }, { key: 's', header: 'Last supplier', render: (r: any) => r.supplier || '—' }, { key: 'h', header: 'On hand', className: 'num', render: (r: any) => qty(r.onHand) }, { key: 'o', header: 'On order', className: 'num', render: (r: any) => qty(r.onOrder) }, { key: 'a', header: 'Sells / day', className: 'num', render: (r: any) => r.avgDailySales }, { key: 'd', header: 'Days left', className: 'num', render: (r: any) => (r.daysLeft ?? '—') }, { key: 'q', header: 'Order', className: 'num font-semibold', render: (r: any) => `${qty(r.suggestQty)} ${r.unit}` }, { key: 'c', header: 'Est. cost', className: 'num', render: (r: any) => money(r.estCostCents) }]} /></div></>}
-          {tab === 'expenses' && <div className="grid gap-4 lg:grid-cols-2"><Card title="By category">{d.data.map((r: any) => <div key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</Card><Card title="Cash movements">{d.cashMovements.map((r: any) => <div key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</Card></div>}
-        </>
+          {tab === 'expenses' && <div className="grid gap-4 lg:grid-cols-2"><Card title="By category"><div data-lines="Category|Amount">{d.data.map((r: any) => <div data-line key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</div></Card><Card title="Cash movements"><div data-lines="Movement|Amount">{d.cashMovements.map((r: any) => <div data-line key={r._id} className="flex justify-between text-sm"><span>{r._id}</span><span>{money(r.totalCents)}</span></div>)}</div></Card></div>}
+          </>}
+        </div>
       )}
     </div>
   );
@@ -169,7 +208,7 @@ function RetailBasket({ d }: { d: any }) {
 }
 
 function RetailReturns({ d }: { d: any }) {
-  const rows = (x: any[], label: (r: any) => string) => x.map((r: any, i: number) => <div key={i} className="flex justify-between text-sm"><span>{label(r)}</span><span className="tabular-nums">{r.count ?? qty(r.qty)} · {money(r.refundCents)}</span></div>);
+  const rows = (x: any[], label: (r: any) => string) => <div data-lines="|Count · refunded">{x.map((r: any, i: number) => <div data-line key={i} className="flex justify-between text-sm"><span>{label(r)}</span><span className="tabular-nums">{r.count ?? qty(r.qty)} · {money(r.refundCents)}</span></div>)}</div>;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
@@ -215,30 +254,209 @@ function RetailPerformance({ d }: { d: any }) {
   );
 }
 
+/**
+ * Expenses: what the shop spends outside buying stock. Tabs for the list (with approvals), the month's
+ * budgets and the bills that come every month.
+ */
 export function ExpensesPage() {
+  const { can } = useAuth();
   const qc = useQueryClient();
   const toast = useToast();
-  const list = useList(['expenses'], '/expenses', { limit: 50 });
-  const [open, setOpen] = useState(false);
-  const [f, setF] = useState<any>({ category: '', amountCents: null, method: 'cash', payee: '', reference: '' });
+  const [tab, setTab] = useState('list');
+  const [status, setStatus] = useState('');
+  const list = useQuery({ queryKey: ['expenses', status], queryFn: () => api<{ data: any[]; pendingApproval: number }>('/expenses', { query: { limit: 50, status: status || undefined } }) });
+  const accounts = useQuery({ queryKey: ['money-accounts'], queryFn: () => api<{ data: any[] }>('/accounting/money-accounts').then((r) => r.data).catch(() => []) });
+  const [open, setOpen] = useState<any>(null);
   const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const approve = can('expenses.approve');
+  const refresh = () => qc.invalidateQueries({ queryKey: ['expenses'] });
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const f = open;
+      const body = { category: f.category, amountCents: f.amountCents, method: f.method, payee: f.payee || undefined, reference: f.reference || undefined, notes: f.notes || undefined, bankAccountId: f.bankAccountId || undefined, attachmentFileId: f.attachmentFileId || undefined, date: f.date || undefined };
+      const r = await api<{ needsApproval?: boolean }>('/expenses', { body });
+      setOpen(null);
+      refresh();
+      toast.success(r.needsApproval ? 'Recorded: it is waiting for a manager to approve it' : 'Saved');
+    } catch (e) { setError(e); } finally { setBusy(false); }
+  };
+  const decide = (id: string, ok: boolean) => api(`/expenses/${id}/decide`, { body: { approve: ok } }).then(() => { refresh(); toast.success(ok ? 'Approved' : 'Turned down'); }).catch(toast.error);
+
   return (
     <div>
-      <PageHeader title="Expenses" actions={<Button onClick={() => setOpen(true)}><Icon name="plus" className="h-4 w-4" />Record expense</Button>} />
-      <div className="card"><DataTable rows={list.data?.data} loading={list.isLoading} error={list.error} columns={[
-        { key: 'n', header: 'Number', render: (r: any) => r.number }, { key: 'd', header: 'Date', render: (r: any) => dateTime(r.date) }, { key: 'c', header: 'Category', render: (r: any) => r.category },
-        { key: 'p', header: 'Payee', render: (r: any) => r.payee ?? '' }, { key: 'm', header: 'Method', render: (r: any) => r.method }, { key: 'a', header: 'Amount', className: 'num', render: (r: any) => money(r.amountCents) },
+      <PageHeader title="Expenses" subtitle="Rent, power, transport and everything else the shop pays for" actions={<>
+        <Button variant="secondary" onClick={() => download('/expenses', 'expenses.csv', { format: 'csv', limit: 1000 })}><Icon name="download" className="h-4 w-4" />CSV</Button>
+        <Button onClick={() => { setError(null); setOpen({ category: '', amountCents: null, method: 'cash', payee: '', reference: '' }); }}><Icon name="plus" className="h-4 w-4" />Record expense</Button>
+      </>} />
+      <Tabs value={tab} onChange={setTab} tabs={[{ key: 'list', label: `Expenses${list.data?.pendingApproval ? ` (${list.data.pendingApproval} waiting)` : ''}` }, { key: 'budgets', label: 'Budgets' }, { key: 'recurring', label: 'Every month' }]} />
+
+      {tab === 'list' && (
+        <>
+          <div className="mb-3 max-w-xs"><Field label="Show"><Select value={status} onChange={(e) => setStatus(e.target.value)} options={[{ value: '', label: 'All' }, { value: 'pending', label: 'Waiting for approval' }, { value: 'approved', label: 'Approved' }, { value: 'rejected', label: 'Turned down' }]} /></Field></div>
+          <div className="card"><DataTable rows={list.data?.data} loading={list.isLoading} error={list.error} empty="No expenses yet" columns={[
+            { key: 'n', header: 'Number', render: (r: any) => r.number }, { key: 'd', header: 'Date', render: (r: any) => dateTime(r.date) }, { key: 'c', header: 'Category', render: (r: any) => r.category },
+            { key: 'p', header: 'Payee', render: (r: any) => r.payee ?? '' }, { key: 'm', header: 'Paid with', render: (r: any) => r.method },
+            { key: 'b', header: 'From account', render: (r: any) => accounts.data?.find((a: any) => a._id === r.bankAccountId)?.name ?? '' },
+            { key: 'a', header: 'Amount', className: 'num font-semibold', render: (r: any) => money(r.amountCents) },
+            { key: 's', header: 'Status', render: (r: any) => (r.status === 'approved' ? <Badge tone="green">approved</Badge> : r.status === 'pending' ? <Badge tone="amber">waiting</Badge> : <Badge tone="red">turned down</Badge>) },
+            ...(approve ? [{ key: 'x', header: '', render: (r: any) => (r.status === 'pending' ? <div className="flex gap-1"><Button size="sm" onClick={() => decide(r._id, true)}>Approve</Button><Button size="sm" variant="ghost" onClick={() => decide(r._id, false)}>Turn down</Button></div> : null) }] : []),
+          ]} /></div>
+        </>
+      )}
+      {tab === 'budgets' && <Budgets />}
+      {tab === 'recurring' && <RecurringExpenses accounts={accounts.data ?? []} />}
+
+      {open && (
+        <Modal open onClose={() => setOpen(null)} title="Record expense" footer={<Button loading={busy} onClick={save}>Save</Button>}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Category"><Input list="exp-cats" value={open.category} onChange={(e) => setOpen({ ...open, category: e.target.value })} /><datalist id="exp-cats">{['Rent', 'Electricity', 'Water', 'Transport', 'Salaries', 'Airtime', 'Repairs', 'Licences'].map((c) => <option key={c} value={c} />)}</datalist></Field>
+            <Field label="Amount"><MoneyInput value={open.amountCents} onChange={(v) => setOpen({ ...open, amountCents: v })} /></Field>
+            <Field label="Paid with"><Select value={open.method} onChange={(e) => setOpen({ ...open, method: e.target.value })} options={['cash', 'mpesa', 'bank', 'card', 'other'].map((x) => ({ value: x, label: x }))} /></Field>
+            {accounts.data?.length ? <Field label="From which account" hint="Keeps the account balance right"><Select value={open.bankAccountId ?? ''} onChange={(e) => setOpen({ ...open, bankAccountId: e.target.value })} placeholder="Not set" options={accounts.data.map((a: any) => ({ value: a._id, label: a.name }))} /></Field> : null}
+            <Field label="Payee"><Input value={open.payee} onChange={(e) => setOpen({ ...open, payee: e.target.value })} /></Field>
+            <Field label="Date"><Input type="date" value={open.date ?? ''} onChange={(e) => setOpen({ ...open, date: e.target.value })} /></Field>
+            <Field label="Reference"><Input value={open.reference} onChange={(e) => setOpen({ ...open, reference: e.target.value })} /></Field>
+            <div className="sm:col-span-2"><BillAttachment fileId={open.attachmentFileId} onChange={(id) => setOpen({ ...open, attachmentFileId: id })} /></div>
+            <Field label="Notes" className="sm:col-span-2"><Input value={open.notes ?? ''} onChange={(e) => setOpen({ ...open, notes: e.target.value })} /></Field>
+          </div>
+          <ErrorBox error={error} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** A photo or PDF of the bill, kept with the expense. */
+function BillAttachment({ fileId, onChange }: { fileId?: string; onChange: (id: string) => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const upload = async (file: File) => {
+    if (file.size > 3 * 1024 * 1024) return toast.error('The file must be smaller than 3 MB');
+    setBusy(true);
+    try {
+      const base64 = await new Promise<string>((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1]); r.readAsDataURL(file); });
+      const r = await api<{ data: { id: string } }>('/files', { body: { base64, purpose: 'attachment' } });
+      onChange(r.data.id);
+      toast.success('Bill attached');
+    } catch (e) { toast.error(e); } finally { setBusy(false); }
+  };
+  return (
+    <div>
+      <div className="label">Photo of the bill (optional)</div>
+      <div className="flex items-center gap-3">
+        <label className="cursor-pointer"><span className="inline-flex rounded-lg border border-ink-300 px-3 py-2 text-sm hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">{busy ? 'Uploading…' : fileId ? 'Replace' : 'Attach a photo or PDF'}</span>
+          <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="hidden" aria-label="Bill" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+        </label>
+        {fileId && <span className="text-xs text-emerald-700 dark:text-emerald-300">Attached</span>}
+      </div>
+    </div>
+  );
+}
+
+/** What each category may be spent this month, and what has gone already. */
+function Budgets() {
+  const { can } = useAuth();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
+  const q = useQuery({ queryKey: ['budgets', period], queryFn: () => api<any>('/budgets', { query: { period } }) });
+  const [edit, setEdit] = useState<any>(null);
+  const save = async () => {
+    try {
+      await api('/budgets', { method: 'PUT', body: { period, category: edit.category, amountCents: edit.amountCents ?? 0 } });
+      setEdit(null);
+      qc.invalidateQueries({ queryKey: ['budgets'] });
+      toast.success('Budget set');
+    } catch (e) { toast.error(e); }
+  };
+  const d = q.data;
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Month"><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} /></Field>
+        {can('expenses.approve') && <Button onClick={() => setEdit({ category: '', amountCents: null })}><Icon name="plus" className="h-4 w-4" />Set a budget</Button>}
+      </div>
+      {!d ? <Loading /> : (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <Stat label="Budgeted this month" value={money(d.totals.budgetCents)} color="blue" icon="wallet" />
+            <Stat label="Spent" value={money(d.totals.spentCents)} tone={d.totals.spentCents > d.totals.budgetCents && d.totals.budgetCents ? 'red' : undefined} />
+            <Stat label="Left" value={money(Math.max(0, d.totals.budgetCents - d.totals.spentCents))} color="teal" icon="check" />
+          </div>
+          <div className="card"><DataTable rows={d.data.map((r: any) => ({ ...r, id: r._id }))} empty="No budgets set for this month" columns={[
+            { key: 'c', header: 'Category', render: (r: any) => r.category },
+            { key: 'b', header: 'Budget', className: 'num', render: (r: any) => money(r.amountCents) },
+            { key: 's', header: 'Spent', className: 'num', render: (r: any) => money(r.spentCents) },
+            { key: 'l', header: 'Left', className: 'num font-semibold', render: (r: any) => <span className={r.over ? 'text-red-600' : ''}>{money(r.leftCents)}</span> },
+            { key: 'u', header: 'Used', className: 'num', render: (r: any) => <Badge tone={r.over ? 'red' : r.usedBp > 8000 ? 'amber' : 'green'}>{Math.round(r.usedBp / 100)}%</Badge> },
+            ...(can('expenses.approve') ? [{ key: 'a', header: '', render: (r: any) => <Button size="sm" variant="ghost" onClick={() => setEdit({ category: r.category, amountCents: r.amountCents })}>Change</Button> }] : []),
+          ]} /></div>
+          {d.unbudgeted.length > 0 && (
+            <Card title="Spent with no budget set">
+              <div data-lines="Category|Spent">{d.unbudgeted.map((u: any) => <div data-line key={u.category} className="flex justify-between py-0.5 text-sm"><span>{u.category}</span><span className="tabular-nums">{money(u.spentCents)}</span></div>)}</div>
+            </Card>
+          )}
+        </>
+      )}
+      {edit && (
+        <Modal open onClose={() => setEdit(null)} title={`Budget for ${period}`} footer={<Button onClick={save}>Save</Button>}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Category"><Input value={edit.category} onChange={(e) => setEdit({ ...edit, category: e.target.value })} /></Field>
+            <Field label="Amount for the month"><MoneyInput value={edit.amountCents} onChange={(v) => setEdit({ ...edit, amountCents: v })} /></Field>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** Bills that come every month: the server records them on the day they are due. */
+function RecurringExpenses({ accounts }: { accounts: any[] }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const q = useQuery({ queryKey: ['recurring-expenses'], queryFn: () => api<{ data: any[] }>('/recurring-expenses').then((r) => r.data) });
+  const [edit, setEdit] = useState<any>(null);
+  const refresh = () => qc.invalidateQueries({ queryKey: ['recurring-expenses'] });
+  const save = async () => {
+    try {
+      const body = { category: edit.category, amountCents: edit.amountCents, method: edit.method, payee: edit.payee || undefined, dayOfMonth: Number(edit.dayOfMonth) || 1, bankAccountId: edit.bankAccountId || undefined, active: edit.active !== false };
+      if (edit._id) await api(`/recurring-expenses/${edit._id}`, { method: 'PATCH', body });
+      else await api('/recurring-expenses', { body });
+      setEdit(null);
+      refresh();
+      toast.success('Saved');
+    } catch (e) { toast.error(e); }
+  };
+  return (
+    <div className="space-y-3">
+      <Button onClick={() => setEdit({ category: '', amountCents: null, method: 'bank', dayOfMonth: 1 })}><Icon name="plus" className="h-4 w-4" />Add a monthly bill</Button>
+      <div className="card"><DataTable rows={(q.data ?? []).map((r) => ({ ...r, id: r._id }))} loading={q.isLoading} empty="No monthly bills set up" columns={[
+        { key: 'c', header: 'Category', render: (r: any) => r.category },
+        { key: 'p', header: 'Payee', render: (r: any) => r.payee ?? '' },
+        { key: 'a', header: 'Amount', className: 'num', render: (r: any) => money(r.amountCents) },
+        { key: 'd', header: 'Recorded on', render: (r: any) => `Day ${r.dayOfMonth} of the month` },
+        { key: 'b', header: 'From account', render: (r: any) => accounts.find((a) => a._id === r.bankAccountId)?.name ?? r.method },
+        { key: 'l', header: 'Last recorded', render: (r: any) => r.lastRunPeriod ?? 'never' },
+        { key: 's', header: '', render: (r: any) => (r.active === false ? <Badge tone="gray">off</Badge> : <Badge tone="green">on</Badge>) },
+        { key: 'x', header: '', render: (r: any) => <div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => setEdit({ ...r })}>Edit</Button><Button size="sm" variant="ghost" onClick={() => api(`/recurring-expenses/${r._id}`, { method: 'DELETE' }).then(() => { refresh(); toast.success('Removed'); }).catch(toast.error)}>Remove</Button></div> },
       ]} /></div>
-      <Modal open={open} onClose={() => setOpen(false)} title="Record expense" footer={<Button onClick={async () => { try { await api('/expenses', { body: { ...f, payee: f.payee || undefined, reference: f.reference || undefined } }); setOpen(false); qc.invalidateQueries({ queryKey: ['expenses'] }); toast.success('Saved'); } catch (e) { setError(e); } }}>Save</Button>}>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Category"><Input list="exp-cats" value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })} /><datalist id="exp-cats">{['Rent', 'Electricity', 'Water', 'Transport', 'Salaries', 'Airtime', 'Repairs', 'Licences'].map((c) => <option key={c} value={c} />)}</datalist></Field>
-          <Field label="Amount"><MoneyInput value={f.amountCents} onChange={(v) => setF({ ...f, amountCents: v })} /></Field>
-          <Field label="Paid with"><Select value={f.method} onChange={(e) => setF({ ...f, method: e.target.value })} options={['cash', 'mpesa', 'bank', 'card', 'other'].map((x) => ({ value: x, label: x }))} /></Field>
-          <Field label="Payee"><Input value={f.payee} onChange={(e) => setF({ ...f, payee: e.target.value })} /></Field>
-          <Field label="Reference" className="sm:col-span-2"><Input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} /></Field>
-        </div>
-        <ErrorBox error={error} />
-      </Modal>
+      {edit && (
+        <Modal open onClose={() => setEdit(null)} title={edit._id ? 'Monthly bill' : 'Add a monthly bill'} footer={<Button onClick={save}>Save</Button>}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Category"><Input value={edit.category} onChange={(e) => setEdit({ ...edit, category: e.target.value })} placeholder="e.g. Rent" /></Field>
+            <Field label="Amount"><MoneyInput value={edit.amountCents} onChange={(v) => setEdit({ ...edit, amountCents: v })} /></Field>
+            <Field label="Payee"><Input value={edit.payee ?? ''} onChange={(e) => setEdit({ ...edit, payee: e.target.value })} /></Field>
+            <Field label="Day of the month" hint="1 to 28"><Input type="number" min={1} max={28} value={edit.dayOfMonth} onChange={(e) => setEdit({ ...edit, dayOfMonth: e.target.value })} /></Field>
+            <Field label="Paid with"><Select value={edit.method} onChange={(e) => setEdit({ ...edit, method: e.target.value })} options={['cash', 'mpesa', 'bank', 'card', 'other'].map((x) => ({ value: x, label: x }))} /></Field>
+            {accounts.length > 0 && <Field label="From which account"><Select value={edit.bankAccountId ?? ''} onChange={(e) => setEdit({ ...edit, bankAccountId: e.target.value })} placeholder="Not set" options={accounts.map((a) => ({ value: a._id, label: a.name }))} /></Field>}
+            {edit._id && <div className="sm:col-span-2"><Checkbox label="Record it every month" checked={edit.active !== false} onChange={(v) => setEdit({ ...edit, active: v })} /></div>}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -323,7 +541,35 @@ export function MpesaPage() {
           { key: 'x', header: '', render: (r: any) => (r.status === 'pending' ? <Button size="sm" variant="secondary" onClick={() => api(`/payments/intents/${r.id}/query`, { body: {} }).then(() => list.refetch()).catch(toast.error)}>Check</Button> : null) },
         ]} />
       </div>
+      <SafaricomLog />
     </div>
+  );
+}
+
+const EVENT_OUTCOMES: Record<string, { label: string; tone: 'green' | 'amber' | 'red' | 'gray' }> = {
+  matched_expected: { label: 'Matched to the till', tone: 'green' },
+  matched_expected_later: { label: 'Matched to the till', tone: 'green' },
+  recorded: { label: 'Received, not matched (use it at the till)', tone: 'amber' },
+  duplicate: { label: 'Already recorded', tone: 'gray' },
+  unknown_shortcode: { label: 'Unknown Till/Paybill number: check the M-Pesa settings', tone: 'red' },
+  malformed: { label: 'Unreadable message', tone: 'red' },
+};
+
+/** What Safaricom actually sent (C2B confirmations, STK results): shows whether confirmations arrive at all. */
+function SafaricomLog() {
+  const q = useQuery({ queryKey: ['mpesa-events'], queryFn: () => api<{ data: any[] }>('/payments/mpesa/events', { query: { limit: 30 } }).then((r) => r.data), refetchInterval: 15_000 });
+  return (
+    <Card title="Messages from Safaricom" className="mt-4">
+      <p className="mb-2 text-sm text-ink-500">Every payment confirmation Safaricom sent to this server. If a customer paid the Till and nothing shows here, Safaricom is not sending confirmations: register the C2B URLs again (Settings → Integrations) for the store number of the Till.</p>
+      <DataTable rows={q.data} loading={q.isLoading} error={q.error} empty="Nothing received from Safaricom yet" columns={[
+        { key: 't', header: 'Time', render: (r: any) => dateTime(r.at) },
+        { key: 'k', header: 'Message', render: (r: any) => ({ c2b_confirmation: 'Paybill/Till payment', c2b_validation: 'Validation', stk_callback: 'Prompt result', stk_query: 'Prompt status' } as Record<string, string>)[r.kind] ?? r.kind },
+        { key: 'n', header: 'Till/Paybill', render: (r: any) => r.payload?.BusinessShortCode ?? '' },
+        { key: 'r', header: 'Receipt', render: (r: any) => r.payload?.TransID ?? '' },
+        { key: 'a', header: 'Amount', className: 'num', render: (r: any) => (r.payload?.TransAmount ? money(Math.round(Number(r.payload.TransAmount) * 100)) : '') },
+        { key: 'o', header: 'Result', render: (r: any) => { const o = EVENT_OUTCOMES[r.outcome ?? '']; return o ? <Badge tone={o.tone}>{o.label}</Badge> : <span className="text-xs text-ink-500">{r.outcome ?? ''}</span>; } },
+      ]} />
+    </Card>
   );
 }
 

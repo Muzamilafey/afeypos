@@ -11,7 +11,16 @@ export interface Workstation {
    * (Chrome/Edge started with --kiosk-printing). bridge: straight to the printer chosen in the device bridge.
    * network: the server sends it to the till's network printer.
    */
-  printMode?: 'dialog' | 'silent' | 'bridge' | 'network';
+  printMode?: 'dialog' | 'silent' | 'bridge' | 'network' | 'server';
+  /** 'server' mode: the printer on the Afey POS computer this till prints to (chosen per device). */
+  serverPrinter?: string;
+  /** Open the cash drawer by itself when a cash sale completes (default on). */
+  openDrawerOnCash?: boolean;
+  /**
+   * Browser print modes cannot reach the drawer: the printer on the Afey POS computer the drawer is plugged
+   * into (its DK port), used to open it.
+   */
+  drawerPrinter?: string;
   /** Afey device bridge on this PC, e.g. http://127.0.0.1:9123, and its pairing token. */
   bridgeUrl?: string;
   bridgeToken?: string;

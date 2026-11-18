@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { setupApp, teardown, registerTenant, createProduct, openShift, rid, BASE, Client, type Ctx } from './helpers.js';
-import { buildStkCallback, callbackUrlProblems, urlToken } from '../src/modules/payments/mpesa.js';
+import { buildStkCallback, callbackUrlProblems, startStk, urlToken } from '../src/modules/payments/mpesa.js';
+import { resetEnv } from '../src/config/env.js';
+import { runInTenant } from '../src/lib/context.js';
 import { DarajaClient, MockMpesaGateway, explainC2BError, darajaTimestamp, stkPassword, parseStkCallback, parseDarajaDate } from '../src/integrations/mpesa/daraja.js';
 import { Tenant } from '../src/models/index.js';
 import { runAsPlatform } from '../src/lib/context.js';
@@ -289,4 +291,62 @@ describe('C2B URL registration', () => {
       fetchMock.mockRestore();
     }
   });
+
+  it('an STK prompt Safaricom refuses says why (not "could not reach M-Pesa")', async () => {
+    const cfg = (await t.client.post('/settings/integrations', { kind: 'mpesa', provider: 'daraja', name: 'Live till', environment: 'production', settings: { shortCode: '174379', type: 'till', tillNumber: '3163960' }, secrets: { consumerKey: 'k3', consumerSecret: 's3', passkey: 'p3' } })).body.data;
+    const tenant = await runAsPlatform(() => Tenant.findById(t.tenant.id).lean());
+    const start = () => runInTenant(tenant!._id, () => startStk({ tenant, clientRequestId: rid(), amountCents: 100, phone: '0712345678', configId: cfg.id }));
+    // A private / http callback address can never work with Safaricom.
+    expect(await start().catch((e) => e.code)).toBe('MPESA_CALLBACK_NOT_PUBLIC');
+    const before = process.env.API_PUBLIC_URL;
+    process.env.API_PUBLIC_URL = 'https://hq.example.co.ke';
+    resetEnv();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: any) =>
+      String(url).includes('oauth') ? new Response(JSON.stringify({ access_token: 'tok', expires_in: '3599' })) : new Response(JSON.stringify({ requestId: 'x', errorCode: '400.002.02', errorMessage: 'Bad Request - Invalid BusinessShortCode' }), { status: 400 }));
+    try {
+      const err = await start().catch((e) => e);
+      expect(err.code).toBe('MPESA_REJECTED');
+      expect(err.message).toMatch(/Invalid BusinessShortCode/);
+      expect(err.message).toMatch(/store \(head office\) number/);
+      // Buy Goods: CustomerBuyGoodsOnline to the till number.
+      const body = JSON.parse((fetchMock.mock.calls.at(-1)![1] as any).body);
+      expect(body).toMatchObject({ TransactionType: 'CustomerBuyGoodsOnline', BusinessShortCode: '174379', PartyB: '3163960', CallBackURL: expect.stringMatching(/^https:\/\/hq\.example\.co\.ke\//) });
+    } finally {
+      fetchMock.mockRestore();
+      if (before === undefined) delete process.env.API_PUBLIC_URL;
+      else process.env.API_PUBLIC_URL = before;
+      resetEnv();
+    }
+  });
 });
+
+describe('M-Pesa per branch and per till', () => {
+  it('a till uses its own M-Pesa, else its branch’s (all its tills), else the one for all branches', async () => {
+    expect((await t.client.put('/settings/modules', { enabled: ['multiTill', 'multiBranch'] })).status).toBe(200);
+    const mainBranch = t.locations.branches[0]._id;
+    const counter2 = (await t.client.post('/settings/tills', { branchId: mainBranch, warehouseId: wh, name: 'Counter 2', code: 'C2' })).body.data._id;
+    const b = (await t.client.post('/settings/branches', { name: 'Garissa Road', code: 'GRS' })).body.data;
+    const grsTill = (await t.client.post('/settings/tills', { branchId: b.branch._id, warehouseId: b.warehouse._id, name: 'GRS till', code: 'GRS1' })).body.data._id;
+    const secrets = { consumerKey: 'k', consumerSecret: 's', passkey: 'p' };
+    const forBranch = await t.client.post('/settings/integrations', { kind: 'mpesa', provider: 'mock', name: 'Garissa Road M-Pesa', branchIds: [b.branch._id], settings: { shortCode: '174379', type: 'till', tillNumber: '7770001' }, secrets });
+    expect(forBranch.status).toBe(201);
+    const forTill = await t.client.post('/settings/integrations', { kind: 'mpesa', provider: 'mock', name: 'Counter 2 M-Pesa', tillIds: [counter2], settings: { shortCode: '174379', type: 'till', tillNumber: '7770002' }, secrets });
+    expect(forTill.status).toBe(201);
+    // A till-only config also lists the till's branch (so a branch server receives it by sync).
+    expect(forTill.body.data.branchIds).toEqual([mainBranch]);
+    const payTo = async (tillId: string) => (await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 1000, tillId })).body.data.payTo;
+    expect(await payTo(counter2)).toEqual({ type: 'till', number: '7770002' });
+    expect(await payTo(grsTill)).toEqual({ type: 'till', number: '7770001' });
+    expect((await payTo(till)).number).not.toMatch(/^777000/); // the business-wide M-Pesa
+    // Without its own and without a business-wide M-Pesa, a branch never borrows another branch's.
+    const all = (await t.client.get('/settings/integrations')).body.data.filter((c: any) => c.kind === 'mpesa' && !c.branchIds.length && !c.tillIds.length);
+    for (const c of all) await t.client.patch(`/settings/integrations/${c.id}`, { branchIds: [mainBranch] });
+    const b2 = (await t.client.post('/settings/branches', { name: 'Eastleigh', code: 'EST' })).body.data;
+    const estTill = (await t.client.post('/settings/tills', { branchId: b2.branch._id, warehouseId: b2.warehouse._id, name: 'EST till', code: 'EST1' })).body.data._id;
+    const none = await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 1000, tillId: estTill });
+    expect(none.status).toBe(409);
+    expect(none.body.error.code).toBe('MPESA_NOT_CONFIGURED');
+    for (const c of all) await t.client.patch(`/settings/integrations/${c.id}`, { branchIds: [] });
+  });
+});
+

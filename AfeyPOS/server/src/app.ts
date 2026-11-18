@@ -12,13 +12,18 @@ import { errorHandler } from './http/errorHandler.js';
 import { requireTenant } from './http/tenant.js';
 import { authenticate, requireAnyModule, requireModule } from './http/auth.js';
 import { dbStatus, pingDatabase } from './db/connection.js';
-import { publicRoutes } from './modules/public/routes.js';
+import { appIconOf, publicRoutes } from './modules/public/routes.js';
+import { bridgeDownloadRoutes } from './modules/hardware/bridgeDownload.js';
+import { findTenantForRequest } from './http/tenant.js';
 import { authRoutes, recoveryRoutes } from './modules/auth/routes.js';
 import { salesRoutes } from './modules/sales/routes.js';
 import { documentRoutes } from './modules/sales/documents.js';
 import { documentPdfRoutes } from './modules/documents/routes.js';
 import { hideCostsUnlessPermitted } from './http/costVisibility.js';
 import { catalogRoutes } from './modules/catalog/routes.js';
+import { barcodeRoutes } from './modules/catalog/barcodes.js';
+import { scaleRoutes } from './modules/scales/routes.js';
+import { assistantRoutes } from './modules/assistant/routes.js';
 import { inventoryRoutes } from './modules/inventory/routes.js';
 import { partyRoutes } from './modules/parties/routes.js';
 import { purchasingRoutes } from './modules/purchasing/routes.js';
@@ -26,6 +31,8 @@ import { mpesaCallbackRoutes, mpesaRoutes } from './modules/payments/mpesa.js';
 import { gatewayCallbackRoutes, gatewayRoutes } from './modules/payments/gateways.js';
 import { payoutRoutes } from './modules/payments/payouts.js';
 import { etimsRoutes } from './modules/etims/routes.js';
+import { dashboardRoutes } from './modules/dashboard/routes.js';
+import { communicationsRoutes } from './modules/communications/routes.js';
 import { settingsRoutes } from './modules/settings/routes.js';
 import { reportRoutes } from './modules/reports/routes.js';
 import { hardwareRoutes } from './modules/hardware/routes.js';
@@ -33,6 +40,7 @@ import { biometricBridgeRoutes, biometricRoutes } from './modules/biometrics/rou
 import { staffCardRoutes } from './modules/staff/cards.js';
 import { hrRoutes } from './modules/hr/routes.js';
 import { accountingRoutes } from './modules/accounting/routes.js';
+import { expenseRoutes } from './modules/expenses/routes.js';
 import { crmRoutes } from './modules/crm/routes.js';
 import { loyaltyRoutes } from './modules/loyalty/routes.js';
 import { onlineOrderRoutes, storefrontRoutes } from './modules/store/routes.js';
@@ -42,6 +50,8 @@ import { hqSyncRoutes } from './modules/sync/hq.js';
 import { branchReadOnly } from './modules/sync/guards.js';
 import { fileRoutes } from './modules/files/routes.js';
 import { terminalHookRoutes, terminalRoutes } from './modules/terminals/routes.js';
+import { locationDeleteRoutes } from './modules/settings/locationsDelete.js';
+import { ledgerRoutes } from './modules/payments/ledgers.js';
 import './modules/notifications/service.js';
 import './jobs/scheduler.js';
 
@@ -121,6 +131,8 @@ export function createApp() {
   const v1 = Router();
   v1.get('/health', health);
   v1.use('/public', publicRoutes);
+  // The device bridge for till PCs, from this server (no GitHub or build tools needed on the till).
+  v1.use('/public/bridge', bridgeDownloadRoutes);
   // Neutral path: Safaricom rejects callback URLs containing words such as "mpesa".
   v1.use('/hooks/pay', mpesaCallbackRoutes, gatewayCallbackRoutes);
   v1.use('/hooks/terminal', terminalHookRoutes);
@@ -143,15 +155,16 @@ export function createApp() {
   tenant.use('/accounting', requireModule('accounting'));
   tenant.use('/crm', requireModule('crm'));
   tenant.use('/online-orders', requireModule('onlineStore'));
-  tenant.use(branchReadOnly);
   tenant.use('/sync', hqSyncRoutes);
   tenant.use(biometricBridgeRoutes);
   tenant.use('/store', storefrontRoutes);
   tenant.use('/auth', recoveryRoutes);
   tenant.use('/auth', authRoutes);
   tenant.use(authenticate);
+  // After sign-in: the rule depends on who is asking (owners and administrators are not restricted).
+  tenant.use(branchReadOnly);
   tenant.use(hideCostsUnlessPermitted);
-  for (const r of [salesRoutes, documentRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, loyaltyRoutes, onlineOrderRoutes, terminalRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
+  for (const r of [dashboardRoutes, communicationsRoutes, salesRoutes, documentRoutes, barcodeRoutes, scaleRoutes, assistantRoutes, catalogRoutes, inventoryRoutes, partyRoutes, purchasingRoutes, mpesaRoutes, payoutRoutes, gatewayRoutes, etimsRoutes, settingsRoutes, syncSettingsRoutes, expenseRoutes, reportRoutes, hardwareRoutes, biometricRoutes, staffCardRoutes, hrRoutes, accountingRoutes, crmRoutes, loyaltyRoutes, onlineOrderRoutes, terminalRoutes, locationDeleteRoutes, ledgerRoutes, backupRoutes, fileRoutes, documentPdfRoutes]) {
     tenant.use(r);
   }
   v1.use(tenant);
@@ -189,6 +202,26 @@ export function createApp() {
   // Local installations serve the built web app from the same server.
   if (e.WEB_DIST_DIR && fs.existsSync(e.WEB_DIST_DIR)) {
     const dist = path.resolve(e.WEB_DIST_DIR);
+    // The installed app (desktop, taskbar, phone) uses the business logo as its icon once one is set.
+    app.get('/manifest.webmanifest', async (_req, res, next) => {
+      try {
+        const manifest = JSON.parse(await fs.promises.readFile(path.join(dist, 'manifest.webmanifest'), 'utf8'));
+        const icons = appIconOf(await findTenantForRequest());
+        if (icons) {
+          const v = icons.i192.slice(0, 8);
+          manifest.icons = [
+            { src: `/api/v1/public/app-icon/192?v=${v}`, sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: `/api/v1/public/app-icon/512?v=${v}`, sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: `/api/v1/public/app-icon/maskable?v=${v}`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          ];
+          for (const sc of manifest.shortcuts ?? []) sc.icons = [{ src: `/api/v1/public/app-icon/192?v=${v}`, sizes: '192x192' }];
+        }
+        res.setHeader('Cache-Control', 'no-cache');
+        res.type('application/manifest+json').send(JSON.stringify(manifest));
+      } catch {
+        next();
+      }
+    });
     app.use(express.static(dist, {
       index: false,
       maxAge: '1h',

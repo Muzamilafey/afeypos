@@ -6,6 +6,7 @@ import { runAsPlatform, runInTenant } from '../lib/context.js';
 import { logger } from '../lib/logger.js';
 import { createBackup, pruneBackups } from '../modules/backups/service.js';
 import './tenantTasks.js';
+import '../modules/etims/health.js';
 
 /** Enqueues recurring maintenance jobs. dedupeKeys make this safe with several server processes. */
 export async function scheduleRecurring(now = new Date()) {
@@ -18,11 +19,17 @@ export async function scheduleRecurring(now = new Date()) {
     for (const t of await Tenant.find({ status: 'active' }, { _id: 1 }).lean()) {
       await runInTenant(t._id, () => enqueue('accounting.post', {}, { dedupeKey: `acct:${t._id}:${minute.slice(0, 15)}` }));
       await runInTenant(t._id, () => enqueue('store.expireUnpaid', {}, { dedupeKey: `store-expire:${t._id}:${minute.slice(0, 15)}` }));
+      await runInTenant(t._id, () => enqueue('mpesa.matchExpected', {}, { dedupeKey: `mpesa-match:${t._id}:${minute}` }));
     }
   }
   // Card terminals: health of enabled terminals and a safety net for open payments.
   for (const t of await Tenant.find({ status: 'active' }, { _id: 1 }).lean()) {
     await runInTenant(t._id, () => enqueue('terminals.health', {}, { dedupeKey: `terminals-health:${t._id}:${minute}` }));
+  }
+  // Fiscal devices (KRA eTIMS / ETR): health, retry after reconnection, lost invoices queued again (every 5 minutes).
+  const five = Math.floor(now.getTime() / 300_000);
+  for (const t of await Tenant.find({ status: 'active' }, { _id: 1 }).lean()) {
+    await runInTenant(t._id, () => enqueue('fiscal.health', {}, { dedupeKey: `fiscal-health:${t._id}:${five}`, maxAttempts: 1 }));
   }
   if (e.BACKUP_INTERVAL_HOURS > 0) {
     const bucket = Math.floor(now.getTime() / (e.BACKUP_INTERVAL_HOURS * 3600_000));

@@ -24,7 +24,7 @@ export interface BuiltDocument {
 const day = (d?: Date | string | null) => (d ? new Date(d).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' }) : '');
 const qtyText = (q: number) => String(Math.round((q ?? 0) * 1000) / 1000);
 
-async function businessOf(tenantId: unknown) {
+export async function businessOf(tenantId: unknown) {
   const t = await runAsPlatform(() => Tenant.findById(tenantId).lean());
   if (!t) throw notFound('Business');
   const logoPath = t.settings?.logoFileId ? tenantFilePath(String(t._id), t.settings.logoFileId) : null;
@@ -43,7 +43,8 @@ async function deliverTo(warehouseId: unknown) {
 
 const supplierLines = (s: any) => [s?.contactPerson ? `Attn: ${s.contactPerson}` : '', s?.address ?? '', [s?.phone, s?.email].filter(Boolean).join('  |  '), s?.taxPin ? `KRA PIN ${s.taxPin}` : ''];
 
-export async function buildDocument(tenantId: unknown, kind: DocumentKind, id: unknown): Promise<BuiltDocument> {
+/** What the document shows; rendered as PDF (download, email) or HTML (print). */
+export async function buildDocumentSpec(tenantId: unknown, kind: DocumentKind, id: unknown): Promise<{ spec: PdfDocSpec; recipient: BuiltDocument['recipient'] }> {
   const { business, currency, tenant } = await businessOf(tenantId);
   const m = (c: number | null | undefined) => formatMoney(c ?? 0, currency);
   let spec: PdfDocSpec;
@@ -86,18 +87,18 @@ export async function buildDocument(tenantId: unknown, kind: DocumentKind, id: u
   } else if (kind === 'goods_receipt') {
     const g = await GoodsReceipt.findById(id).lean();
     if (!g) throw notFound('Goods receipt');
-    const s = await Supplier.findById(g.supplierId).lean();
+    const s = g.supplierId ? await Supplier.findById(g.supplierId).lean() : null;
     const po = g.purchaseOrderId ? await PurchaseOrder.findById(g.purchaseOrderId, { number: 1 }).lean() : null;
     recipient = { name: s?.name ?? 'Supplier', email: s?.email };
     spec = {
       title: 'Goods received note', number: g.number, business,
       meta: [['Received', day(g.createdAt)], ...(g.supplierInvoiceNo ? [['Supplier invoice', g.supplierInvoiceNo] as [string, string]] : []), ...(g.invoiceDate ? [['Invoice date', day(g.invoiceDate)] as [string, string]] : []), ...(po ? [['Purchase order', po.number] as [string, string]] : []), ...(g.dueDate ? [['Payment due', day(g.dueDate)] as [string, string]] : [])],
-      party: { heading: 'Supplier', name: s?.name ?? '', lines: supplierLines(s) }, party2: { ...(await deliverTo(g.warehouseId)), heading: 'Received into' },
+      party: { heading: 'Supplier', name: s?.name ?? 'No supplier (stock received)', lines: s ? supplierLines(s) : [] }, party2: { ...(await deliverTo(g.warehouseId)), heading: 'Received into' },
       columns: [{ label: '#', width: 4 }, { label: 'Item', width: 34 }, { label: 'Batch / expiry', width: 16 }, { label: 'Quantity', width: 13, align: 'right' }, { label: 'Unit cost', width: 15, align: 'right' }, { label: 'Amount', width: 15, align: 'right' }],
       rows: g.lines.map((l, i) => [String(i + 1), `${l.name ?? ''}${l.serials?.length ? `\nS/N ${l.serials.join(', ')}` : ''}`, [l.batchNo, l.expiryDate ? `exp ${day(l.expiryDate)}` : ''].filter(Boolean).join(' '), `${qtyText(l.qty ?? 0)} ${l.unitCode ?? ''}`, m(l.unitCostCents), m(Math.round((l.qty ?? 0) * (l.unitCostCents ?? 0)))]),
       totals: [{ label: 'Subtotal', value: m(g.subtotalCents) }, { label: 'VAT', value: m(g.taxCents) }, { label: 'Total', value: m(g.totalCents), bold: true }],
       notes: [g.notes ?? ''],
-      signatures: ['Received by', 'Delivered by (supplier)'],
+      signatures: s ? ['Received by', 'Delivered by (supplier)'] : ['Received by', 'Checked by'],
     };
   } else if (kind === 'quotation') {
     const d = await SalesDocument.findById(id).lean();
@@ -150,6 +151,11 @@ export async function buildDocument(tenantId: unknown, kind: DocumentKind, id: u
       ],
     };
   }
+  return { spec, recipient };
+}
+
+export async function buildDocument(tenantId: unknown, kind: DocumentKind, id: unknown): Promise<BuiltDocument> {
+  const { spec, recipient } = await buildDocumentSpec(tenantId, kind, id);
   const safe = spec.number.replace(/[^A-Za-z0-9-]/g, '');
   return { buffer: await renderPdf(spec), filename: `${spec.title.replace(/\s+/g, '-')}-${safe}.pdf`, title: spec.title, number: spec.number, recipient };
 }

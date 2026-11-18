@@ -246,6 +246,27 @@ describe('gateway configuration', () => {
 describe('gateway payments at checkout (simulator)', () => {
   const start = (body: Record<string, unknown>) => t.client.post(`/payments/gateways/${simId}/charge`, { clientRequestId: rid(), tillId: till, ...body });
 
+  it('a payment link is sent to the customer’s phone by SMS (Pesapal-style checkout)', async () => {
+    const link = (await start({ amountCents: 25000, flow: 'link', phone: '0712345678' })).body.data;
+    expect(link.checkoutUrl).toBeTruthy();
+    expect(SimulatorGateway.charges.at(-1)!.phone).toBe('254712345678');
+    const sent = await t.client.post(`/payments/intents/${link.id}/send-link`, { phone: '0712 345 678' });
+    expect(sent.status).toBe(200);
+    expect(sent.body.data).toEqual({ sent: true, phone: '254712345678' });
+    // A phone prompt has no link to send.
+    const push = (await start({ amountCents: 1000, phone: '0712345678' })).body.data;
+    expect((await t.client.post(`/payments/intents/${push.id}/send-link`, { phone: '0712345678' })).status).toBe(404);
+  });
+
+  it('a gateway set up for some branches is offered only at their tills', async () => {
+    const br = await t.client.post('/settings/branches', { name: 'Kisumu', code: 'KSM' });
+    const other = await t.client.post('/settings/integrations', { kind: 'payment', provider: 'simulator', name: 'Kisumu only', branchIds: [br.body.data.branch._id] });
+    expect(other.status).toBe(201);
+    const here = (await t.client.get(`/payments/gateways?tillId=${till}`)).body.data.map((g: any) => g.name);
+    expect(here).toContain('Simulator');
+    expect(here).not.toContain('Kisumu only');
+  });
+
   it('pending → simulated confirmation → sale, used once', async () => {
     const p = await createProduct(t.client, { prices: { retail: 30000 }, openingStock: [{ warehouseId: wh2, qty: 10 }] });
     const r = await start({ amountCents: 30000, phone: '0712345678' });

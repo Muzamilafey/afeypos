@@ -5,15 +5,17 @@ import { roleName, useRoleCatalog, UserPermissionsEditor } from './Roles';
 import { MODULE_INFO, MODULES, PAYMENT_PROVIDER_INFO, PAYMENT_PROVIDERS, ROLE_LABELS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import { api, download } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { useLocations } from '../../lib/hooks';
+import { useLocations, type Locations } from '../../lib/hooks';
 import { dateTime, money } from '../../lib/format';
 import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { bridge, bridgeConfigured } from '../../lib/bridge';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, Stat, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { OverrideModal } from '../POS';
 import { StaffAccessPanel } from './StaffAccess';
 import { BridgePairingCard, FingerprintReadersCard, ReceiptPrinterCard } from './ThisComputer';
+import { makeAppIcons } from '../../lib/appIcon';
 
 export function BusinessSettingsPage() {
   const { me, reload } = useAuth();
@@ -28,7 +30,10 @@ export function BusinessSettingsPage() {
   const setS = (k: string, v: any) => setF({ ...f, settings: { ...s, [k]: v } });
   const save = async () => {
     try {
-      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, logoFileId: s.logoFileId ?? '', tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders, returns: { windowDays: s.returns?.windowDays ?? 14, approvalAboveCents: s.returns?.approvalAboveCents ?? 0, restockByDefault: s.returns?.restockByDefault ?? true }, staffLogin: { cardRequiresPin: s.staffLogin?.cardRequiresPin ?? true }, ...(s.crm?.birthdayGreeting ? { crm: { birthdayGreeting: { enabled: Boolean(s.crm.birthdayGreeting.enabled), channel: s.crm.birthdayGreeting.channel ?? 'sms', offer: s.crm.birthdayGreeting.offer ?? '' } } } : {}) } } });
+      // The installed app's icon is made from the logo (once per logo).
+      const appIcon = !s.logoFileId ? null : s.appIcon?.source === s.logoFileId ? s.appIcon : await makeAppIcons(s.logoFileId).catch(() => s.appIcon ?? null);
+      if (appIcon !== (s.appIcon ?? null)) setS('appIcon', appIcon);
+      await api('/settings/business', { method: 'PATCH', body: { name: f.name, contact: { email: f.contact.email || undefined, phone: f.contact.phone || undefined, address: f.contact.address || undefined }, settings: { currency: s.currency, timezone: s.timezone, locale: s.locale, taxPin: s.taxPin ?? '', defaultTaxRateBp: s.defaultTaxRateBp, pricesIncludeTax: s.pricesIncludeTax, allowNegativeStock: s.allowNegativeStock, logoFileId: s.logoFileId ?? '', appIcon, tagline: s.tagline ?? '', stkPendingTimeoutSeconds: s.stkPendingTimeoutSeconds, variableWeight: s.variableWeight, loyalty: s.loyalty, restrictedSaleHours: { start: s.restrictedSaleHours?.start ?? '', end: s.restrictedSaleHours?.end ?? '' }, dailyReportEmails: s.dailyReportEmails ?? [], creditReminders: s.creditReminders, returns: { windowDays: s.returns?.windowDays ?? 14, approvalAboveCents: s.returns?.approvalAboveCents ?? 0, restockByDefault: s.returns?.restockByDefault ?? true }, staffLogin: { cardRequiresPin: s.staffLogin?.cardRequiresPin ?? true }, ...(s.crm?.birthdayGreeting ? { crm: { birthdayGreeting: { enabled: Boolean(s.crm.birthdayGreeting.enabled), channel: s.crm.birthdayGreeting.channel ?? 'sms', offer: s.crm.birthdayGreeting.offer ?? '' } } } : {}) } } });
       await reload();
       toast.success('Settings saved');
     } catch (e) { toast.error(e); }
@@ -83,7 +88,7 @@ export function BusinessSettingsPage() {
           <div className="flex flex-wrap items-end gap-3 sm:col-span-2">
             <Checkbox label="Send customers a birthday greeting (opted-in customers, 09:00)" checked={Boolean(s.crm?.birthdayGreeting?.enabled)} onChange={(v) => setS('crm', { ...s.crm, birthdayGreeting: { channel: 'sms', ...s.crm?.birthdayGreeting, enabled: v } })} />
             {s.crm?.birthdayGreeting?.enabled && <Field label="Birthday offer line"><Input className="w-80" value={s.crm?.birthdayGreeting?.offer ?? ''} placeholder="Show this SMS for 10% off today." onChange={(e) => setS('crm', { ...s.crm, birthdayGreeting: { ...s.crm?.birthdayGreeting, offer: e.target.value } })} /></Field>}
-            <Checkbox label="Staff cards also need the PIN (recommended)" checked={s.staffLogin?.cardRequiresPin ?? true} onChange={(v) => setS('staffLogin', { cardRequiresPin: v })} />
+
             <Checkbox label="Returned items go back to the shelf by default" checked={s.returns?.restockByDefault ?? true} onChange={(v) => setS('returns', { ...s.returns, restockByDefault: v })} />
           </div>
           <Field label="Daily sales summary emails" hint="Comma separated; sent at 21:00 local time" className="sm:col-span-2"><Input value={(s.dailyReportEmails ?? []).join(', ')} onChange={(e) => setS('dailyReportEmails', e.target.value.split(',').map((x: string) => x.trim()).filter(Boolean))} /></Field>
@@ -178,7 +183,7 @@ export function UsersPage() {
   const save = async () => {
     setError(null);
     try {
-      const body: any = { name: edit.name, email: edit.email, phone: edit.phone || undefined, roles: edit.roles, extraPermissions: edit.extraPermissions ?? [], deniedPermissions: edit.deniedPermissions ?? [], branchIds: edit.branchIds ?? [], commissionRateBp: Number(edit.commissionRateBp ?? 0), employeeNo: edit.employeeNo || undefined, jobTitle: edit.jobTitle || undefined };
+      const body: any = { name: edit.name, email: edit.email, username: edit.username ?? '', phone: edit.phone || undefined, roles: edit.roles, extraPermissions: edit.extraPermissions ?? [], deniedPermissions: edit.deniedPermissions ?? [], branchIds: edit.branchIds ?? [], commissionRateBp: Number(edit.commissionRateBp ?? 0), employeeNo: edit.employeeNo || undefined, jobTitle: edit.jobTitle || undefined };
       if (edit.password) body.password = edit.password;
       if (edit.pin) body.pin = edit.pin;
       // Your own access is changed by someone else (the server refuses it too).
@@ -209,6 +214,7 @@ export function UsersPage() {
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
             <Field label="Email"><Input value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></Field>
+            <Field label="Username" hint="Optional short sign-in name for logging in and confirming, e.g. amina"><Input autoCapitalize="none" spellCheck={false} value={edit.username ?? ''} onChange={(e) => setEdit({ ...edit, username: e.target.value.toLowerCase().replace(/\s/g, '') })} /></Field>
             <Field label="Phone"><Input value={edit.phone ?? ''} onChange={(e) => setEdit({ ...edit, phone: e.target.value })} /></Field>
             <Field label="Employee number" hint={edit._id ? undefined : 'Left empty, the next EMP- number is used'}><Input value={edit.employeeNo ?? ''} onChange={(e) => setEdit({ ...edit, employeeNo: e.target.value })} /></Field>
             <Field label="Job title (printed on the card)"><Input value={edit.jobTitle ?? ''} onChange={(e) => setEdit({ ...edit, jobTitle: e.target.value })} /></Field>
@@ -247,8 +253,22 @@ export function LocationsPage() {
   const [modal, setModal] = useState<null | 'branch' | 'warehouse' | 'till'>(null);
   const [f, setF] = useState<any>({});
   const [error, setError] = useState<unknown>(null);
+  const { me } = useAuth();
+  // Deleting needs an owner or administrator to confirm on the spot (fingerprint, staff card, or login with PIN/password).
+  const [del, setDel] = useState<{ kind: 'branch' | 'warehouse' | 'till'; id: string; name: string } | null>(null);
+  const isAdmin = Boolean(me?.user.roles.some((r: string) => r === 'tenant_owner' || r === 'business_admin'));
   if (!locs.data) return <Loading />;
   const { branches, warehouses, tills } = locs.data;
+  const delButton = (kind: 'branch' | 'warehouse' | 'till', id: string, name: string) => isAdmin && (
+    <button type="button" aria-label={`Delete ${name}`} title={`Delete ${name}`} onClick={() => setDel({ kind, id, name })} className="rounded p-1 text-ink-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30"><Icon name="trash" className="h-3.5 w-3.5" /></button>
+  );
+  const runDelete = (token: string) => {
+    const d = del!;
+    setDel(null);
+    api(`/settings/${d.kind === 'branch' ? 'branches' : d.kind === 'warehouse' ? 'warehouses' : 'tills'}/${d.id}`, { method: 'DELETE', headers: { 'X-Approval': token } })
+      .then(() => { toast.success(`${d.name} deleted`); qc.invalidateQueries({ queryKey: ['locations'] }); })
+      .catch(toast.error);
+  };
   const submit = async () => {
     try {
       await api(`/settings/${modal === 'branch' ? 'branches' : modal === 'warehouse' ? 'warehouses' : 'tills'}`, { body: f });
@@ -259,13 +279,18 @@ export function LocationsPage() {
     <div className="max-w-5xl">
       <PageHeader title="Branches, stores & tills" actions={<><Button variant="secondary" onClick={() => { setF({}); setModal('branch'); }}>Add branch</Button><Button variant="secondary" onClick={() => { setF({ branchId: branches[0]?._id }); setModal('warehouse'); }}>Add store</Button><Button onClick={() => { setF({ branchId: branches[0]?._id, warehouseId: warehouses[0]?._id }); setModal('till'); }}>Add till</Button></>} />
       <div className="space-y-4">{branches.map((b) => (
-        <Card key={b._id} title={`${b.name} (${b.code})`} actions={b.hasServer ? <Badge tone="blue">own server</Badge> : undefined}>
+        <Card key={b._id} title={`${b.name} (${b.code})`} actions={<span className="flex items-center gap-2">{b.hasServer && <Badge tone="blue">own server</Badge>}{branches.length > 1 && delButton('branch', b._id, b.name)}</span>}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div><div className="label">Stock locations</div>{warehouses.filter((w) => w.branchId === b._id).map((w) => <div key={w._id} className="text-sm">{w.name} {w.isDefault && <Badge>default</Badge>}</div>)}</div>
-            <div><div className="label">Tills</div>{tills.filter((t) => t.branchId === b._id).map((t) => <div key={t._id} className="flex items-center gap-2 text-sm">{t.name} ({t.code}) {!t.active && <Badge tone="red">inactive</Badge>}</div>)}</div>
+            <div><div className="label">Stock locations</div>{warehouses.filter((w) => w.branchId === b._id).map((w) => <div key={w._id} className="flex items-center gap-2 text-sm">{w.name} {w.isDefault && <Badge>default</Badge>}{delButton('warehouse', w._id, w.name)}</div>)}</div>
+            <div><div className="label">Tills</div>{tills.filter((t) => t.branchId === b._id).map((t) => <div key={t._id} className="flex items-center gap-2 text-sm">{t.name} ({t.code}) {!t.active && <Badge tone="red">inactive</Badge>}{delButton('till', t._id, t.name)}</div>)}</div>
           </div>
         </Card>
       ))}</div>
+      {del && (
+        <OverrideModal permission="settings.manage" title={`Delete ${del.name}`} who="administrator" allowLogin
+          message={`${del.kind === 'branch' ? `Delete the branch ${del.name}, with its stores and tills.` : del.kind === 'warehouse' ? `Delete the store ${del.name}.` : `Delete the till ${del.name}.`} Past sales and reports keep it. An owner or administrator confirms with a fingerprint, staff card, or username / email with PIN or password.`}
+          onClose={() => setDel(null)} onApproved={runDelete} />
+      )}
       <Modal open={Boolean(modal)} onClose={() => setModal(null)} title={`Add ${modal}`} footer={<Button onClick={submit}>Save</Button>}>
         <div className="grid gap-3">
           {modal !== 'branch' && <Field label="Branch"><Select value={f.branchId ?? ''} onChange={(e) => setF({ ...f, branchId: e.target.value })} options={branches.map((b) => ({ value: b._id, label: b.name }))} /></Field>}
@@ -275,6 +300,151 @@ export function LocationsPage() {
           <ErrorBox error={error} />
         </div>
       </Modal>
+    </div>
+  );
+}
+
+type EtrCandidate = { kind: 'http' | 'folder' | 'program' | 'device'; name: string; url?: string; inbox?: string; outbox?: string; port?: number; answers?: boolean; detail?: string };
+
+/**
+ * "Find ETR on this computer": the ETR programs, the addresses they answer on, inbox/outbox folders and the device
+ * among USB / COM ports on the Afey POS computer. Picking one fills the form; Test then confirms it signs.
+ */
+function EtrFinder({ edit, setEdit }: { edit: any; setEdit: (e: any) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [found, setFound] = useState<{ candidates: EtrCandidate[]; programs: string[] } | null>(null);
+  const look = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setFound((await api<{ data: { candidates: EtrCandidate[]; programs: string[] } }>('/etims/etr/detect')).data);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const use = (c: EtrCandidate) => {
+    if (c.kind === 'http') setEdit({ ...edit, settings: { ...edit.settings, connection: 'http', url: c.url } });
+    if (c.kind === 'folder') setEdit({ ...edit, settings: { ...edit.settings, connection: 'folder', inbox: c.inbox, outbox: c.outbox } });
+  };
+  const usable = found?.candidates.filter((c) => c.kind === 'http' || c.kind === 'folder') ?? [];
+  const info = found?.candidates.filter((c) => c.kind === 'program' || c.kind === 'device') ?? [];
+  const chosen = (c: EtrCandidate) => (c.kind === 'http' ? edit.settings?.url === c.url : edit.settings?.inbox === c.inbox && edit.settings?.outbox === c.outbox);
+  return (
+    <section className="rounded-lg border border-brand-200 bg-brand-50/40 p-4 dark:border-brand-900 dark:bg-brand-500/5" data-testid="etr-finder">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><h3 className="text-sm font-bold">Find the ETR on this computer</h3><p className="text-xs text-ink-500">Looks for ETR programs, the address they answer on, their folders, and the device on USB / COM ports.</p></div>
+        <Button size="sm" loading={busy} onClick={look}><Icon name="search" className="h-4 w-4" />{found ? 'Look again' : 'Find ETR'}</Button>
+      </div>
+      <ErrorBox error={error} />
+      {found && (
+        <div className="mt-3 space-y-3">
+          {usable.length > 0 ? (
+            <ul className="space-y-1.5">
+              {usable.map((c) => (
+                <li key={`${c.kind}:${c.url ?? c.inbox}`} className={cx('flex flex-wrap items-center gap-2 rounded-md border bg-white p-2 text-sm dark:bg-ink-900', chosen(c) ? 'border-brand-500 ring-1 ring-brand-500' : 'border-ink-100 dark:border-ink-800')}>
+                  <Icon name={c.kind === 'http' ? 'plug' : 'file'} className="h-4 w-4 text-ink-500" />
+                  <span className="min-w-0 flex-1">
+                    <b>{c.name}</b>{' '}
+                    {c.kind === 'http' ? <span className="font-mono text-xs">{c.url}</span> : <span className="font-mono text-xs">{c.inbox} → {c.outbox}</span>}
+                    {c.kind === 'http' && <Badge tone={c.answers ? 'green' : 'amber'}>{c.answers ? 'answers' : 'no answer'}</Badge>}
+                  </span>
+                  <Button size="sm" variant={chosen(c) ? 'primary' : 'secondary'} onClick={() => use(c)}>{chosen(c) ? 'Selected' : 'Use this'}</Button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-sm text-amber-700">No ETR program address or folders found. Start the ETR program (or ask the supplier how it takes invoices), then press Look again.</p>}
+          {info.length > 0 && (
+            <div className="text-xs text-ink-600 dark:text-ink-300">
+              <div className="font-semibold">Also seen on this computer</div>
+              <ul className="mt-1 list-disc pl-5">{info.map((c) => <li key={`${c.kind}:${c.name}`}>{c.kind === 'device' ? 'Device: ' : 'Program: '}{c.name}{c.detail ? ` (${c.detail})` : ''}</li>)}</ul>
+              <p className="mt-1 text-ink-500">The device is used by its program; Afey POS talks to the program. Press <b>Save</b>, then <b>Test</b> on the device's card.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * M-Pesa account form. Prompts (STK) and payments straight to the Paybill/Till (C2B) are separate parts, each
+ * with its own switch and, if Safaricom gave two Daraja apps, its own keys. Whichever way the customer pays,
+ * the payment lands on the same sale.
+ */
+function MpesaFields({ edit, setEdit, c2bPanel }: { edit: any; setEdit: (e: any) => void; c2bPanel: ReactNode }) {
+  const daraja = edit.provider === 'daraja';
+  const st = edit.settings ?? {};
+  const till = (st.type ?? 'paybill') === 'till';
+  const stkOn = st.stkEnabled !== false;
+  const c2bOn = st.c2bEnabled !== false;
+  const set = (k: string, v: unknown) => setEdit({ ...edit, settings: { ...edit.settings, [k]: v } });
+  const text = (k: string, label: string, hint?: string, placeholder?: string) => (
+    <Field key={k} label={label} hint={hint}><Input value={st[k] ?? ''} placeholder={placeholder} onChange={(e) => set(k, e.target.value)} /></Field>
+  );
+  const secret = (k: string, label: string, hint?: string) => (
+    <Field key={k} label={<span className="inline-flex items-center gap-1"><Icon name="shield" className="h-3.5 w-3.5 text-amber-600" />{label}</span>} hint={edit.secretsSet?.includes(k) ? 'Saved. Leave blank to keep.' : hint}>
+      <Input type="password" autoComplete="new-password" value={edit.secrets?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, secrets: { ...edit.secrets, [k]: e.target.value } })} />
+    </Field>
+  );
+  const part = (on: boolean, key: string, title: string, blurb: string, body: ReactNode, testId: string) => (
+    <section data-testid={testId} className={cx('rounded-lg border p-4 transition', on ? 'border-brand-200 bg-white dark:border-brand-900 dark:bg-ink-900' : 'border-ink-200 bg-ink-50/60 dark:border-ink-800 dark:bg-ink-900/40')}>
+      <div className="flex items-start justify-between gap-3">
+        <div><h3 className="text-sm font-bold">{title}</h3><p className="text-xs text-ink-500">{blurb}</p></div>
+        <Checkbox label={on ? 'On' : 'Off'} checked={on} onChange={(v) => set(key, v)} />
+      </div>
+      {on && <div className="mt-3 space-y-3">{body}</div>}
+    </section>
+  );
+  return (
+    <div className="space-y-4">
+      <fieldset className="space-y-3">
+        <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">The account</legend>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Account type"><Select value={st.type ?? 'paybill'} onChange={(e) => set('type', e.target.value)} options={[{ value: 'paybill', label: 'Paybill (customers enter an account number)' }, { value: 'till', label: 'Buy Goods / Till number' }]} /></Field>
+          {text('shortCode', till ? 'Store (head office) number' : 'Paybill number', till ? 'From Safaricom; prompts are signed with it' : undefined)}
+          {till && text('tillNumber', 'Till number customers pay', 'The number on the till sticker')}
+        </div>
+        <p className="text-xs text-ink-500">Prompts and payments to the {till ? 'Till' : 'Paybill'} are set up separately below. Either way, the payment goes to the same sale and the same M-Pesa total in the reports.</p>
+      </fieldset>
+
+      {part(stkOn, 'stkEnabled', "Prompt on the customer's phone (STK)", 'The cashier sends a prompt; the customer enters the M-Pesa PIN.', (
+        <>
+          {daraja && <div className="grid gap-3 sm:grid-cols-2">
+            {secret('consumerKey', 'Consumer key', 'From the Daraja app with Lipa Na M-Pesa Online')}
+            {secret('consumerSecret', 'Consumer secret')}
+            {secret('passkey', 'Lipa Na M-Pesa Online passkey', `Belongs to ${st.shortCode || 'the store/Paybill number'}`)}
+          </div>}
+          {daraja && <Checkbox label="Double-check every callback with an STK status query" checked={Boolean(st.verifyCallbacksWithQuery)} onChange={(v) => set('verifyCallbacksWithQuery', v)} />}
+          {!daraja && <p className="text-xs text-ink-500">The simulator confirms prompts by itself.</p>}
+        </>
+      ), 'mpesa-part-stk')}
+
+      {part(c2bOn, 'c2bEnabled', `Customer pays the ${till ? 'Till' : 'Paybill'} (C2B)`, `The customer pays ${till ? `Till ${st.tillNumber || '…'}` : `Paybill ${st.shortCode || '…'}`} from their phone; the till finds the payment by itself.`, (
+        <>
+          {daraja && <div className="grid gap-3 sm:grid-cols-2">
+            {text('c2bShortCode', 'Number the C2B URLs are registered on', `Leave empty to use ${st.shortCode || 'the number above'}${till ? '. Some tills are registered on the till number itself.' : '.'}`, st.shortCode || undefined)}
+            <div className="hidden sm:block" />
+            {secret('c2bConsumerKey', 'C2B consumer key (separate Daraja app only)', stkOn ? 'Leave empty to use the prompt\'s keys' : 'From the Daraja app with C2B')}
+            {secret('c2bConsumerSecret', 'C2B consumer secret (separate Daraja app only)', stkOn ? 'Leave empty to use the prompt\'s keys' : undefined)}
+          </div>}
+          {c2bPanel}
+        </>
+      ), 'mpesa-part-c2b')}
+
+      {daraja && (
+        <fieldset className="space-y-3">
+          <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">More (optional)</legend>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {text('initiatorName', 'Initiator name', 'For checking M-Pesa codes with Safaricom and for payouts')}
+            {secret('securityCredential', 'Initiator security credential')}
+            {text('b2cShortCode', 'B2C short code', 'For salary payouts')}
+          </div>
+        </fieldset>
+      )}
+      {!stkOn && !c2bOn && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Both parts are off: this account cannot take payments.</p>}
     </div>
   );
 }
@@ -291,10 +461,19 @@ const PROVIDER_FIELDS: Record<string, { settings: [string, string][]; secrets: [
   console: { settings: [], secrets: [] },
   oscu: { settings: [['tin', 'KRA PIN of the business'], ['bhfId', 'KRA branch id (00 = head office)'], ['dvcSrlNo', 'Device serial number (from KRA)']], secrets: [] },
   vscu: { settings: [['tin', 'KRA PIN of the business'], ['bhfId', 'KRA branch id (00 = head office)'], ['dvcSrlNo', 'Device serial number (from KRA)'], ['baseUrl', 'VSCU address on your network, e.g. http://192.168.1.5:8088']], secrets: [] },
+  etr: {
+    settings: [['tin', 'KRA PIN of the business'], ['bhfId', 'KRA branch id (00 = head office)'], ['cuSerial', 'CU serial number (on the ETR device)'], ['connection', 'How Afey POS reaches the ETR program'],
+      ['url', 'Program address on this computer, e.g. http://127.0.0.1:4444'], ['invoicePath', 'Path invoices are sent to (default /invoice)'], ['statusPath', 'Status address from the maker\'s documentation, e.g. /invoice/{invoiceNumber} (optional; without it a lost answer goes to reconciliation)'],
+      ['inbox', 'Inbox folder the program reads, e.g. C:\\ETR\\in'], ['outbox', 'Outbox folder it answers in, e.g. C:\\ETR\\out'],
+      ['operatorNum', 'Tremol operator / cashier number (default 1)'],
+      ['timeoutSeconds', 'Seconds to wait for the device (default 30)'],
+      ['fieldInvoice', 'Answer field with the CU invoice number (only if not found)'], ['fieldSerial', 'Answer field with the CU serial (optional)'], ['fieldQr', 'Answer field with the QR link (optional)']],
+    secrets: [['authHeader', 'Key header, if the program asks for one (e.g. X-Api-Key: abc)'], ['operatorPass', 'Tremol operator password (default 0000)']],
+  },
 };
 
 const providerLabel = (kind: string, p: string) =>
-  kind === 'payment' ? PAYMENT_PROVIDER_INFO[p as PaymentProviderKey]?.label ?? p : p === 'oscu' ? 'OSCU (online, KRA servers)' : p === 'vscu' ? 'VSCU (KRA software on your network)' : p === 'mock' ? 'Simulator (testing)' : p === 'console' ? 'Development log (no delivery)' : p === 'daraja' ? 'Safaricom Daraja' : p;
+  kind === 'payment' ? PAYMENT_PROVIDER_INFO[p as PaymentProviderKey]?.label ?? p : p === 'oscu' ? 'OSCU (online, KRA servers)' : p === 'vscu' ? 'VSCU (KRA software on your network)' : p === 'etr' ? 'ETR device on the Afey POS computer' : p === 'mock' ? 'Simulator (testing)' : p === 'console' ? 'Development log (no delivery)' : p === 'daraja' ? 'Safaricom Daraja' : p;
 
 type IntegrationKind = 'mpesa' | 'payment' | 'etims' | 'sms' | 'email';
 const KIND_INFO: Record<IntegrationKind, { label: string; icon: string; blurb: string }> = {
@@ -315,6 +494,7 @@ const OTHER_PROVIDERS: Record<string, string> = {
   daraja: 'Safaricom Daraja: STK push, Paybill / Buy Goods confirmations, B2C payouts.',
   oscu: 'Online signing with KRA servers. Needs internet at the till.',
   vscu: 'KRA software running on your shop network. Keeps signing when the internet is down.',
+  etr: 'A KRA ETR device (TIMS) plugged into the Afey POS computer, through the program that came with it. Signs every receipt with its CU invoice number.',
   talksasa: 'Kenyan SMS provider with sender IDs.',
   africastalking: "Africa's Talking SMS across Africa.",
   smtp: 'Any email account or service with SMTP (Gmail, Zoho, Mailgun, your host).',
@@ -417,8 +597,12 @@ function C2BPanel({ config, onChanged }: { config: any; onChanged?: () => void }
 export function IntegrationsPage() {
   const { me } = useAuth();
   const toast = useToast();
+  const confirm = useConfirm();
+  // Removing a connection takes its saved keys with it: owners and administrators only.
+  const isAdmin = me!.user.roles.some((r) => r === 'tenant_owner' || r === 'business_admin');
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['integrations'], queryFn: () => api<{ data: any[]; providers: Record<string, string[]>; callbackUrls: Record<string, string> }>('/settings/integrations') });
+  const locs = useLocations();
   const [edit, setEdit] = useState<any>(null);
   const [testing, setTesting] = useState<any>(null);
   const [c2b, setC2b] = useState<any>(null);
@@ -455,7 +639,15 @@ export function IntegrationsPage() {
     setError(null);
     setBusy(true);
     try {
-      const body = { provider: edit.provider, name: edit.name, enabled: edit.enabled, isDefault: edit.isDefault, environment: edit.environment, settings: edit.settings, secrets: edit.secrets };
+      // Who uses it (M-Pesa): every branch, chosen branches (all their tills), or chosen tills only.
+      const scope = scopeOf(edit);
+      // M-Pesa and KRA ETR devices: whole business, chosen branches or chosen tills. Gateways: business or branches.
+      const perTill = edit.kind === 'mpesa' || edit.kind === 'etims';
+      const scoped = perTill || edit.kind === 'payment';
+      const usedBy = scoped ? { branchIds: scope === 'branches' ? edit.branchIds ?? [] : [], tillIds: perTill && scope === 'tills' ? edit.tillIds ?? [] : [] } : {};
+      if (scoped && scope === 'branches' && !usedBy.branchIds?.length) throw new Error('Choose at least one branch, or "All branches and tills"');
+      if (edit.kind === 'mpesa' && scope === 'tills' && !usedBy.tillIds?.length) throw new Error('Choose at least one till, or "All branches and tills"');
+      const body = { provider: edit.provider, name: edit.name, enabled: edit.enabled, isDefault: edit.isDefault, environment: edit.environment, settings: edit.settings, secrets: edit.secrets, ...usedBy };
       if (edit.id) await api(`/settings/integrations/${edit.id}`, { method: 'PATCH', body });
       else await api('/settings/integrations', { body: { kind: edit.kind, ...body } });
       setEdit(null); qc.invalidateQueries({ queryKey: ['integrations'] }); toast.success('Saved. Secrets are stored encrypted and never shown again.');
@@ -527,6 +719,7 @@ export function IntegrationsPage() {
                   <div><dt className="text-ink-500">Credentials</dt><dd className="mt-0.5 font-medium">{r.secretsSet.length ? `${r.secretsSet.length} saved` : 'none needed'}</dd></div>
                   <div><dt className="text-ink-500">Last test</dt><dd className="mt-0.5">{r.lastTest?.at ? <StatusPill tone={r.lastTest.ok ? 'green' : 'red'}>{r.lastTest.ok ? 'Passed' : 'Failed'}{r.lastTest.at ? ` · ${dateTime(r.lastTest.at)}` : ''}</StatusPill> : <span className="text-ink-400">Not tested yet</span>}</dd></div>
                 </dl>
+                {(r.kind === 'mpesa' || r.kind === 'payment' || r.kind === 'etims') && <p className="mt-2 text-xs text-ink-500" data-testid={`${r.kind}-used-by`}>Used by: <b>{usedByText(r, locs.data)}</b></p>}
                 {r.kind === 'mpesa' && (
                   <p className="mt-2 flex items-center gap-1.5 text-xs text-ink-500">C2B URLs: {r.c2bRegistration ? <StatusPill tone={r.c2bRegistration.ok ? 'green' : 'red'}>{r.c2bRegistration.ok ? `Registered (${r.c2bRegistration.shortCode})` : 'Registration failed'}</StatusPill> : <StatusPill tone="amber">Not registered</StatusPill>}</p>
                 )}
@@ -536,6 +729,13 @@ export function IntegrationsPage() {
                   <Button size="sm" variant="secondary" onClick={() => { setError(null); setEdit({ ...r, settings: r.kind === 'etims' ? { ...r.settings, tin: r.settings?.tin || me?.tenant.settings?.taxPin || '', bhfId: r.settings?.bhfId || '00' } : r.settings, secrets: {} }); }}>Configure</Button>
                   {r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => setC2b(r)}>Register C2B URLs</Button>}
                   {r.kind === 'etims' && <Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/settings/integrations/${r.id}/etims/initialize`, { body: {} }).then((x) => { toast.success(`eTIMS device initialised: SCU ${x.data.sdcId}`); q.refetch(); }).catch(toast.error)}>Initialise device</Button>}
+                  {r.enabled
+                    ? <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: `Turn off ${r.name}?`, message: 'It stops being used. Nothing is deleted and you can turn it on again.', confirmLabel: 'Turn off' })) api(`/settings/integrations/${r.id}`, { method: 'DELETE' }).then(() => { q.refetch(); toast.success('Turned off'); }).catch(toast.error); }}>Turn off</Button>
+                    : <Button size="sm" variant="secondary" onClick={() => api(`/settings/integrations/${r.id}`, { method: 'PATCH', body: { enabled: true } }).then(() => { q.refetch(); toast.success('Turned on'); }).catch(toast.error)}>Turn on</Button>}
+                  {isAdmin && <Button size="sm" variant="danger" onClick={async () => {
+                    if (!(await confirm({ title: `Remove ${r.name}?`, message: 'The connection and its saved keys are deleted for good. Payments already taken keep their records. This cannot be undone.', confirmLabel: 'Remove', danger: true }))) return;
+                    api(`/settings/integrations/${r.id}?remove=true`, { method: 'DELETE' }).then(() => { q.refetch(); toast.success(`${r.name} removed`); }).catch(toast.error);
+                  }}><Icon name="trash" className="h-3.5 w-3.5" />Remove</Button>}
                 </div>
               </article>
             ))}
@@ -646,6 +846,14 @@ export function IntegrationsPage() {
                 )}
               </section>
             )}
+            {(edit.kind === 'mpesa' || edit.kind === 'etims') && locs.data && (locs.data.branches.length > 1 || locs.data.tills.length > 1) && <MpesaUsedBy edit={edit} setEdit={setEdit} locs={locs.data} kind={edit.kind} />}
+            {edit.kind === 'payment' && locs.data && locs.data.branches.length > 1 && <MpesaUsedBy edit={edit} setEdit={setEdit} locs={locs.data} branchesOnly />}
+            {edit.kind === 'mpesa' ? (
+              <MpesaFields edit={edit} setEdit={setEdit} c2bPanel={edit.id
+                ? <C2BPanel config={rows.find((r) => r.id === edit.id) ?? edit} onChanged={() => q.refetch()} />
+                : <p className="rounded-lg border border-dashed border-ink-200 p-3 text-xs text-ink-500 dark:border-ink-700">Save first, then register the C2B URLs here so payments made straight to your Paybill/Till reach Afey POS.</p>} />
+            ) : (<>
+            {edit.provider === 'etr' && <EtrFinder edit={edit} setEdit={setEdit} />}
             <fieldset className="space-y-3">
               <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Account details</legend>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -654,7 +862,17 @@ export function IntegrationsPage() {
                 ) : (
                   <Field key={f.key} label={`${f.label}${f.required ? ' *' : ''}`} hint={f.help}><Input value={edit.settings?.[f.key] ?? ''} placeholder={f.placeholder} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [f.key]: e.target.value } })} /></Field>
                 ))}
-                {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => k === 'type' && edit.kind === 'mpesa' ? (
+                {(PROVIDER_FIELDS[edit.provider]?.settings ?? []).map(([k, l]) => edit.provider === 'etr' && (
+                  (k === 'url' && !['http', 'tremol'].includes(edit.settings?.connection ?? 'http'))
+                  || (['invoicePath', 'statusPath'].includes(k) && (edit.settings?.connection ?? 'http') !== 'http')
+                  || (['inbox', 'outbox'].includes(k) && edit.settings?.connection !== 'folder')
+                  || (k === 'operatorNum' && edit.settings?.connection !== 'tremol')
+                  || (['url', 'invoicePath', 'statusPath', 'inbox', 'outbox', 'operatorNum', 'timeoutSeconds', 'fieldInvoice', 'fieldSerial', 'fieldQr'].includes(k) && edit.settings?.connection === 'simulator')
+                ) ? null : k === 'connection' && edit.provider === 'etr' ? (
+                  <Field key={k} label={l}><Select value={edit.settings?.connection ?? 'http'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, connection: e.target.value } })} options={[
+                    { value: 'http', label: 'Its program listens on this computer (web address)' }, { value: 'folder', label: 'Folder exchange (inbox / outbox)' }, { value: 'tremol', label: 'Tremol control unit (ZFP Lab Server)' }, { value: 'simulator', label: 'Simulator (training, nothing sent to KRA)' },
+                  ]} /></Field>
+                ) : k === 'type' && edit.kind === 'mpesa' ? (
                   <Field key={k} label={l}><Select value={edit.settings?.type ?? 'paybill'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, type: e.target.value } })} options={[{ value: 'paybill', label: 'Paybill (customers enter an account number)' }, { value: 'till', label: 'Buy Goods / Till number' }]} /></Field>
                 ) : (k === 'tillNumber' && edit.kind === 'mpesa' && (edit.settings?.type ?? 'paybill') !== 'till') ? null : (
                   <Field key={k} label={l}><Input value={edit.settings?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [k]: k === 'port' ? Number(e.target.value) : e.target.value } })} /></Field>
@@ -674,9 +892,7 @@ export function IntegrationsPage() {
                 </div>
               </fieldset>
             )}
-            {edit.kind === 'mpesa' && (edit.id
-              ? <C2BPanel config={rows.find((r) => r.id === edit.id) ?? edit} onChanged={() => q.refetch()} />
-              : <p className="rounded-lg border border-dashed border-ink-200 p-3 text-xs text-ink-500 dark:border-ink-700">Save first, then register the C2B URLs here so payments made straight to your Paybill/Till reach Afey POS.</p>)}
+            </>)}
             {edit.kind === 'payment' && edit.webhookUrl && (
               <div><CopyField label="Webhook / callback URL" value={edit.webhookUrl} /><p className="mt-1 text-xs text-ink-500">Set this in the provider dashboard if asked. It contains a secret token.</p></div>
             )}
@@ -686,6 +902,21 @@ export function IntegrationsPage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+/** Weighing scales at a glance, managed on their own page. */
+function ScalesSummaryCard() {
+  const q = useQuery({ queryKey: ['scales'], queryFn: () => api<{ data: any[] }>('/scales').then((r) => r.data) });
+  const rows = q.data ?? [];
+  const stale = rows.filter((s) => s.pluStatus?.applies && !s.pluStatus.upToDate).length;
+  const untested = rows.filter((s) => s.status !== 'verified').length;
+  return (
+    <Card className="mb-4" title="Weighing scales" actions={<Link className="text-sm text-brand-600 hover:underline" to="/settings/hardware/scales">Manage scales</Link>}>
+      <p className="text-sm text-ink-600 dark:text-ink-300" data-testid="scales-summary">
+        {rows.length ? `${rows.length} scale${rows.length === 1 ? '' : 's'} · ${rows.length - untested} verified${untested ? ` · ${untested} need testing` : ''}${stale ? ` · ${stale} with out-of-date prices` : ''}` : 'No scales set up yet.'}
+      </p>
+    </Card>
   );
 }
 
@@ -707,6 +938,7 @@ export function HardwarePage() {
           <li>Scales, customer displays, RFID and fingerprint readers need the device bridge on the till PC; see docs/HARDWARE.md. Not every model has been tested.</li>
         </ul>
       </Card>
+      <ScalesSummaryCard />
       <ReceiptPrinterCard />
       <BridgePairingCard />
       <FingerprintReadersCard />
@@ -765,6 +997,24 @@ export function AccountPage() {
 export { money };
 
 /** Upload the business logo (PNG, JPEG or WEBP) shown on the sign-in and sign-up pages. Saved with the form. */
+/** Draws the picture at most `max` px wide/high and returns PNG (or WEBP when PNG is too big) as base64. */
+async function shrinkImage(file: File, max: number): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => { const i = new Image(); i.onload = () => resolve(i); i.onerror = reject; i.src = url; });
+    const scale = Math.min(1, max / Math.max(img.naturalWidth || max, img.naturalHeight || max));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round((img.naturalWidth || max) * scale));
+    canvas.height = Math.max(1, Math.round((img.naturalHeight || max) * scale));
+    canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+    let data = canvas.toDataURL('image/png');
+    if (data.length > 2_500_000 * 1.37) data = canvas.toDataURL('image/webp', 0.9);
+    return data.split(',')[1]!;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function BusinessLogoField({ fileId, onChange }: { fileId?: string; onChange: (id: string) => void }) {
   const toast = useToast();
   const [preview, setPreview] = useState<string | null>(null);
@@ -778,8 +1028,14 @@ function BusinessLogoField({ fileId, onChange }: { fileId?: string; onChange: (i
     return () => { if (url) URL.revokeObjectURL(url); };
   }, [fileId]);
   const upload = async (file: File) => {
-    if (file.size > 3 * 1024 * 1024) return toast.error('The logo must be smaller than 3 MB');
-    const base64 = await new Promise<string>((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1]); r.readAsDataURL(file); });
+    if (!/^image\/(png|jpeg|webp|gif|bmp|svg\+xml)$/.test(file.type)) return toast.error('Choose a picture (PNG, JPEG or WEBP)');
+    // Big photos and logos are shrunk here first (max 1024 px, kept sharp and transparent), so the 3 MB limit never gets in the way.
+    let base64: string;
+    try {
+      base64 = await shrinkImage(file, 1024);
+    } catch {
+      return toast.error('That picture could not be read. Save it as PNG or JPEG and try again.');
+    }
     try {
       const r = await api<{ data: { id: string } }>('/files', { body: { base64, purpose: 'attachment' } });
       onChange(r.data.id);
@@ -798,7 +1054,69 @@ function BusinessLogoField({ fileId, onChange }: { fileId?: string; onChange: (i
         </label>
         {fileId && <Button variant="ghost" size="sm" onClick={() => onChange('')}>Remove</Button>}
       </div>
-      <p className="mt-1 text-xs text-ink-500">Shown on the sign-in and sign-up pages. A square image of at least 256 × 256 pixels looks best.</p>
+      <p className="mt-1 text-xs text-ink-500">Shown on the sign-in page, documents and receipts, and used as the icon of the installed app (desktop, taskbar, phone). A square image of at least 512 × 512 pixels looks best.</p>
     </div>
+  );
+}
+
+type Scope = 'all' | 'branches' | 'tills';
+const scopeOf = (c: any): Scope => c.scope ?? (c.tillIds?.length ? 'tills' : c.branchIds?.length ? 'branches' : 'all');
+
+/** "Used by" line on an M-Pesa card. */
+function usedByText(c: any, locs?: Locations) {
+  const scope = scopeOf(c);
+  if (scope === 'all') return 'all branches and tills';
+  if (scope === 'branches') return `${c.branchIds.map((id: string) => locs?.branches.find((b) => b._id === id)?.name ?? '?').join(', ')} (all tills)`;
+  return c.tillIds.map((id: string) => {
+    const t = locs?.tills.find((x) => x._id === id);
+    return t ? `${t.name} (${locs?.branches.find((b) => b._id === t.branchId)?.name ?? ''})` : '?';
+  }).join(', ');
+}
+
+/**
+ * Which branches and tills use this M-Pesa account. A till uses an M-Pesa set up for that till, else its branch's
+ * (shared by all the branch's tills), else the one for all branches.
+ */
+function MpesaUsedBy({ edit, setEdit, locs, branchesOnly = false, kind = 'mpesa' }: { edit: any; setEdit: (e: any) => void; locs: Locations; branchesOnly?: boolean; kind?: string }) {
+  const thing = kind === 'etims' ? 'ETR device' : 'M-Pesa account';
+  const scope = scopeOf(edit);
+  const toggle = (key: 'branchIds' | 'tillIds', id: string, on: boolean) => setEdit({ ...edit, scope, [key]: on ? [...(edit[key] ?? []), id] : (edit[key] ?? []).filter((x: string) => x !== id) });
+  const options: { v: Scope; t: string; d: string }[] = branchesOnly
+    ? [{ v: 'all', t: 'All branches', d: 'Every branch can take payments with it' }, { v: 'branches', t: 'Chosen branches', d: 'Only these branches show it at checkout' }]
+    : [
+      { v: 'all', t: 'All branches and tills', d: `One ${thing} for the whole business` },
+      { v: 'branches', t: 'Chosen branches', d: `Every till in these branches uses this ${kind === 'etims' ? 'device' : 'account'}` },
+      { v: 'tills', t: 'Chosen tills only', d: kind === 'etims' ? 'For a separate ETR device per counter' : 'For a separate Till number per counter' },
+    ];
+  return (
+    <fieldset className="space-y-3">
+      <legend className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Used by</legend>
+      <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Used by">
+        {options.map((o) => (
+          <button key={o.v} type="button" role="radio" aria-checked={scope === o.v} onClick={() => setEdit({ ...edit, scope: o.v })}
+            className={cx('rounded-lg border p-3 text-left transition', scope === o.v ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500 dark:bg-brand-500/10' : 'border-ink-200 hover:border-ink-300 dark:border-ink-700')}>
+            <span className="block text-sm font-semibold">{o.t}</span><span className="block text-xs text-ink-500">{o.d}</span>
+          </button>
+        ))}
+      </div>
+      {scope === 'branches' && (
+        <div className="flex flex-wrap gap-4">{locs.branches.filter((b) => b.active).map((b) => <Checkbox key={b._id} label={b.name} checked={(edit.branchIds ?? []).includes(b._id)} onChange={(v) => toggle('branchIds', b._id, v)} />)}</div>
+      )}
+      {scope === 'tills' && (
+        <div className="space-y-2">
+          {locs.branches.filter((b) => b.active).map((b) => {
+            const tills = locs.tills.filter((t) => t.active && t.branchId === b._id);
+            if (!tills.length) return null;
+            return (
+              <div key={b._id}>
+                <div className="text-xs font-semibold text-ink-500">{b.name}</div>
+                <div className="mt-1 flex flex-wrap gap-4">{tills.map((t) => <Checkbox key={t._id} label={`${t.name} (${t.code})`} checked={(edit.tillIds ?? []).includes(t._id)} onChange={(v) => toggle('tillIds', t._id, v)} />)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <p className="text-xs text-ink-500">{branchesOnly ? 'Tills of the chosen branches offer this payment method at checkout.' : kind === 'etims' ? 'Each till signs with the ETR device set up for that till, otherwise its branch’s, otherwise the one for the whole business. A cashier can pick another one the till may use at checkout.' : 'Each till uses the M-Pesa set up for that till, otherwise its branch’s, otherwise the one for all branches. Register the C2B URLs for each account (button on its card).'}</p>
+    </fieldset>
   );
 }

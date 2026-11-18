@@ -49,6 +49,7 @@ export function GatewayPanel({ gateways, amount, tillId, customer, intent, setIn
   const [email, setEmail] = useState(walkIn ? '' : (customer?.email ?? ''));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (gw && !gw.flows.includes(flow)) setFlow(gw.flows[0]);
@@ -60,14 +61,28 @@ export function GatewayPanel({ gateways, amount, tillId, customer, intent, setIn
   const wholeOnly = flow === 'push' && amount !== null && amount % 100 !== 0;
   const pending = intent?.status === 'pending' && intent.provider === gw.provider;
 
+  const sendLink = async (id: string, to: string) => {
+    setSending(true);
+    try {
+      await api(`/payments/intents/${id}/send-link`, { body: { phone: to } });
+      toast.success(`Payment link sent to ${to}: the customer opens it and pays (M-Pesa prompt, Airtel Money or card)`);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSending(false);
+    }
+  };
+
   const start = async () => {
     setError(null);
     setBusy(true);
     try {
       const r = await api<{ data: any }>(`/payments/gateways/${gw.id}/charge`, {
-        body: { clientRequestId: newRequestId(), amountCents: amount, flow, phone: flow === 'push' ? phone : undefined, email: email || undefined, channel: flow === 'push' ? channel || undefined : undefined, tillId, customerName: walkIn ? undefined : customer?.name },
+        body: { clientRequestId: newRequestId(), amountCents: amount, flow, phone: phone || undefined, email: email || undefined, channel: flow === 'push' ? channel || undefined : undefined, tillId, customerName: walkIn ? undefined : customer?.name },
       });
       setIntent(r.data);
+      // A payment link goes straight to the customer's phone when a number was entered.
+      if (flow === 'link' && phone && r.data.checkoutUrl) await sendLink(r.data.id, phone);
     } catch (e) {
       setError(e);
     } finally {
@@ -103,10 +118,11 @@ export function GatewayPanel({ gateways, amount, tillId, customer, intent, setIn
               <Field label="Network"><Select value={channel} onChange={(e) => setChannel(e.target.value)} options={gw.channels.map((c) => ({ value: c.value, label: c.label }))} /></Field>
             )}
             {flow === 'push' && <Field label="Customer phone"><Input placeholder="e.g. 0712345678" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" /></Field>}
+            {flow === 'link' && <Field label="Customer phone (optional)" hint="The payment link is sent to this phone by SMS"><Input placeholder="e.g. 0712345678" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" /></Field>}
             {flow === 'link' && <Field label="Customer email (optional)"><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>}
           </div>
           <Button onClick={start} loading={busy} disabled={!amount || (flow === 'push' && !phone) || wholeOnly}>
-            {flow === 'push' ? `Send ${money(amount ?? 0)} request` : 'Create payment link'} · {gw.label}
+            {flow === 'push' ? `Send ${money(amount ?? 0)} request` : phone ? `Send payment link to ${phone}` : 'Create payment link'} · {gw.label}
           </Button>
           {wholeOnly && <p className="text-xs text-amber-600">Mobile money accepts whole amounts only.</p>}
           {currency !== gw.currency && <p className="text-xs text-ink-500">Charged in {currency}.</p>}
@@ -126,6 +142,10 @@ export function GatewayPanel({ gateways, amount, tillId, customer, intent, setIn
               <div className="min-w-0 space-y-2 text-xs">
                 <a href={intent.checkoutUrl} target="_blank" rel="noreferrer" className="block break-all text-brand-700 underline dark:text-brand-200">{intent.checkoutUrl}</a>
                 <Button size="sm" variant="secondary" onClick={() => navigator.clipboard?.writeText(intent.checkoutUrl).then(() => toast.success('Link copied'), () => toast.error('Copy failed'))}>Copy link</Button>
+                <div className="flex gap-1">
+                  <Input aria-label="Send the link to phone" className="py-1" placeholder="Customer phone" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" />
+                  <Button size="sm" loading={sending} disabled={!phone} onClick={() => sendLink(intent.id, phone)}>Send to phone</Button>
+                </div>
               </div>
             </div>
           )}

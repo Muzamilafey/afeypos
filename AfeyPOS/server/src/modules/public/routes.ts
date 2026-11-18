@@ -3,6 +3,7 @@ import { BUSINESS_PROFILES, BUSINESS_TYPES, MODULE_INFO } from '@afeypos/shared'
 import { env } from '../../config/env.js';
 import { runInTenant } from '../../lib/context.js';
 import { parse } from '../../http/validate.js';
+import { AppError, notFound } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { findTenantForRequest } from '../../http/tenant.js';
 import { authLimiter, appUrl } from '../auth/routes.js';
@@ -20,9 +21,33 @@ router.get('/config', async (req, res) => {
     branchCode: e.DEPLOYMENT_MODE === 'branch' ? (e.BRANCH_CODE ?? null) : null,
     setupRequired: !tenant,
     tenant: tenant
-      ? { name: tenant.name, slug: tenant.slug, businessType: effectiveBusinessType(tenant.businessType), status: tenant.status, tagline: tenant.settings?.tagline ?? null, logoUrl: tenant.settings?.logoFileId ? `/api/v1/public/logo?v=${tenant.settings.logoFileId.slice(0, 8)}` : null }
+      ? { name: tenant.name, slug: tenant.slug, businessType: effectiveBusinessType(tenant.businessType), status: tenant.status, tagline: tenant.settings?.tagline ?? null, logoUrl: tenant.settings?.logoFileId ? `/api/v1/public/logo?v=${tenant.settings.logoFileId.slice(0, 8)}` : null, appIconUrl: appIconOf(tenant) ? `/api/v1/public/app-icon/192?v=${appIconOf(tenant)!.i192.slice(0, 8)}` : null }
       : null,
   });
+});
+
+/** The app icons made from the current logo, if any (made in the browser when the logo is saved). */
+export function appIconOf(tenant: { settings?: any } | null) {
+  const a = tenant?.settings?.appIcon;
+  return a?.i192 && a.source && a.source === tenant?.settings?.logoFileId ? (a as { i192: string; i512: string; m512: string }) : null;
+}
+
+const DEFAULT_ICONS = { '192': '/icons/icon-192.png', '512': '/icons/icon-512.png', maskable: '/icons/maskable-512.png' } as const;
+
+/** Icon of the installed app (desktop, taskbar, phone): the business logo, or Afey's when none is set. */
+router.get('/app-icon/:kind', async (req, res) => {
+  const kind = String(req.params.kind) as keyof typeof DEFAULT_ICONS;
+  if (!DEFAULT_ICONS[kind]) throw notFound('Icon');
+  const tenant = await findTenantForRequest(req);
+  const icons = appIconOf(tenant);
+  const file = icons ? tenantFilePath(String(tenant!._id), kind === '192' ? icons.i192 : kind === '512' ? icons.i512 : icons.m512) : null;
+  if (!file) {
+    res.redirect(302, DEFAULT_ICONS[kind]);
+    return;
+  }
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.type('image/png').sendFile(file);
 });
 
 /** The business logo for the sign-in page (public on purpose: it is shown before anyone signs in). */
@@ -47,6 +72,9 @@ router.get('/business-types', (_req, res) => {
 
 /** One-time installation setup: creates the business and its owner. Refused once set up. */
 router.post('/register', authLimiter, async (req, res) => {
+  if (env().DEPLOYMENT_MODE === 'branch') {
+    throw new AppError(409, 'BRANCH_SERVER', 'This is a branch server: the business, staff and products arrive from head office by sync. Do not set it up here.');
+  }
   const input = parse(registrationSchema, req.body);
   const { tenant, owner } = await provisionTenant(input);
   await runInTenant(tenant._id, () => audit(req, { action: 'business.setup', entity: 'Tenant', entityId: tenant._id, details: { businessType: tenant.businessType, owner: owner.email } }));

@@ -78,7 +78,7 @@ const loyaltyTxSchema = new Schema(
   {
     customerId: { type: ObjectId, required: true },
     points: { type: Number, required: true },
-    kind: { type: String, enum: ['earn', 'redeem', 'bonus', 'adjust', 'reverse'], required: true },
+    kind: { type: String, enum: ['earn', 'redeem', 'bonus', 'adjust', 'reverse', 'expire'], required: true },
     saleId: ObjectId,
     saleNumber: String,
     branchId: ObjectId,

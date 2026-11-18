@@ -27,6 +27,8 @@ const paymentIntentSchema = new Schema(
      *  verify   = the cashier entered a receipt code and we asked Safaricom (Transaction Status API).
      */
     awaiting: { type: String, enum: ['expected', 'verify'] },
+    /** Payments the cashier said are not this customer's ("Not this payment"): never matched to this wait again. */
+    skipReceipts: { type: [String], default: undefined },
     originatorConversationId: String,
     conversationId: String,
     /** Gateway intents: our reference sent to the provider, the provider's own id, and the hosted checkout URL. */
@@ -47,6 +49,8 @@ const paymentIntentSchema = new Schema(
     allocatedCents: { type: Number, default: 0 },
     allocatedAt: Date,
     lastQueriedAt: Date,
+    /** Safaricom confirmed the money after this payment had been marked failed/expired/cancelled: usable on a sale. */
+    lateConfirmedAt: Date,
     completedAt: Date,
   },
   { timestamps: true },
@@ -64,7 +68,7 @@ export type PaymentIntentDoc = InstanceType<typeof PaymentIntent>;
 
 const mpesaEventSchema = new Schema(
   {
-    kind: { type: String, enum: ['stk_callback', 'c2b_validation', 'c2b_confirmation', 'stk_query', 'gateway_webhook', 'gateway_verify', 'txn_status', 'b2c_result', 'async_timeout'], required: true },
+    kind: { type: String, enum: ['stk_callback', 'c2b_validation', 'c2b_confirmation', 'stk_query', 'gateway_webhook', 'gateway_verify', 'txn_status', 'b2c_result', 'async_timeout', 'stk_request'], required: true },
     provider: String,
     configId: ObjectId,
     payload: Schema.Types.Mixed,
@@ -121,7 +125,10 @@ const integrationConfigSchema = new Schema(
     enabled: { type: Boolean, default: true },
     isDefault: { type: Boolean, default: false },
     environment: { type: String, enum: ['sandbox', 'production'], default: 'sandbox' },
+    /** Branches that use this config; empty = every branch (unless tillIds limits it). */
     branchIds: { type: [ObjectId], default: [] },
+    /** Only these tills use it (e.g. a separate M-Pesa Till per counter); empty = every till of its branches. */
+    tillIds: { type: [ObjectId], default: [] },
     /** Non-secret settings (shortcode, sender id, smtp host...). */
     settings: { type: Schema.Types.Mixed, default: {} },
     /** AES-256-GCM encrypted JSON of secrets. Never returned by the API. */

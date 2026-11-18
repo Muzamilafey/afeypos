@@ -11,10 +11,10 @@
  */
 import { Types, type Model } from 'mongoose';
 import {
-  AttendanceRecord, AuditLog, CustomRole, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
-  IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
+  AssistantConfig, AttendanceRecord, AuditLog, CustomRole, CustomerActivity, OnlineOrder, BiometricTemplate, Branch, Brand, CashMovement, Category, Customer, CustomerPrice, Expense, GoodsReceipt,
+  FiscalDeviceState, FiscalTransaction, IntegrationConfig, LedgerEntry, MpesaEvent, NotificationTemplate, PaymentIntent, Product, Promotion, PurchaseOrder, Sale, SaleReturn,
   SalesDocument, SerialItem, Shift, StockAdjustment, StockBatch, StockLevel, StockMovement, Stocktake, StockTransfer, Supplier,
-  SupplierQuotation, SupplierReturn, Tenant, Till, UnitOfMeasure, User, Voucher, LoyaltyTransaction, Warehouse, PaymentTerminal, TerminalTransaction,
+  SupplierQuotation, SupplierReturn, RemoteStockRequest, Tenant, Till, UnitOfMeasure, User, Voucher, LoyaltyTransaction, Warehouse, PaymentTerminal, TerminalTransaction,
 } from '../../models/index.js';
 
 export interface BranchScope {
@@ -33,6 +33,8 @@ export interface SyncSpec {
   owner?: (doc: any, b: BranchScope) => boolean;
   /** HQ sends a branch only records matching this filter. */
   downFilter?: (b: BranchScope) => Record<string, unknown>;
+  /** Raised when downFilter starts sending older records too: branches then download this collection again from the start. */
+  cursorVersion?: number;
 }
 
 const inBranch = (doc: any, b: BranchScope) => String(doc.branchId) === b.branchId;
@@ -46,17 +48,21 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: Branch, dir: 'down', field: 'updatedAt' },
   { model: Warehouse, dir: 'down', field: 'updatedAt' },
   { model: Till, dir: 'down', field: 'updatedAt' },
-  { model: User, dir: 'down', field: 'updatedAt' },
+  // Head office owns these, but an owner or administrator may also add and change them on a branch server
+  // (see sync/guards.ts), so they travel both ways: whoever saved last wins, as everywhere else.
+  { model: User, dir: 'both', field: 'updatedAt' },
   // Custom roles give users their permissions on branch servers too.
-  { model: CustomRole, dir: 'down', field: 'updatedAt' },
-  { model: Category, dir: 'down', field: 'updatedAt' },
-  { model: Brand, dir: 'down', field: 'updatedAt' },
-  { model: UnitOfMeasure, dir: 'down', field: 'updatedAt' },
-  { model: Product, dir: 'down', field: 'updatedAt' },
-  { model: CustomerPrice, dir: 'down', field: 'updatedAt' },
-  { model: Promotion, dir: 'down', field: 'updatedAt' },
-  { model: Supplier, dir: 'down', field: 'updatedAt' },
+  { model: CustomRole, dir: 'both', field: 'updatedAt' },
+  { model: Category, dir: 'both', field: 'updatedAt' },
+  { model: Brand, dir: 'both', field: 'updatedAt' },
+  { model: UnitOfMeasure, dir: 'both', field: 'updatedAt', cursorVersion: 2 },
+  { model: Product, dir: 'both', field: 'updatedAt' },
+  { model: CustomerPrice, dir: 'both', field: 'updatedAt' },
+  { model: Promotion, dir: 'both', field: 'updatedAt' },
+  { model: Supplier, dir: 'both', field: 'updatedAt' },
   { model: NotificationTemplate, dir: 'down', field: 'updatedAt' },
+  // AI assistant settings (key encrypted with the shared ENCRYPTION_KEY) so branch servers answer too.
+  { model: AssistantConfig, dir: 'down', field: 'updatedAt' },
   { model: IntegrationConfig, dir: 'down', field: 'updatedAt', downFilter: (b) => ({ $or: [{ branchIds: { $size: 0 } }, { branchIds: { $in: ids(new Set([b.branchId])) } }] }) },
 
   // ---- edited on both sides ----
@@ -68,6 +74,8 @@ export const SYNC_SPECS: SyncSpec[] = [
   },
   { model: PurchaseOrder, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
   { model: SupplierQuotation, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
+  // Stock changes asked for at head office for a branch that runs its own server: the branch applies them.
+  { model: RemoteStockRequest, dir: 'both', field: 'updatedAt', owner: inWarehouses, downFilter: (b) => ({ warehouseId: { $in: ids(b.warehouseIds) } }) },
   { model: BiometricTemplate, dir: 'both', field: 'updatedAt' },
   { model: CustomerActivity, dir: 'both', field: 'updatedAt' },
   // Vouchers can be sold at one branch and spent at another. Offline branches cannot see a balance spent
@@ -92,7 +100,12 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: SupplierReturn, dir: 'up', field: 'updatedAt', owner: inWarehouses },
   { model: Expense, dir: 'up', field: 'updatedAt', owner: inBranch },
   // Paybill/Till payments reach HQ (public callbacks) and belong to the branch that owns the M-Pesa config.
-  { model: PaymentIntent, dir: 'both', field: 'updatedAt', owner: inBranch, downFilter: (b) => ({ branchId: new Types.ObjectId(b.branchId) }) },
+  // With one M-Pesa for all branches, a payment no till was waiting for has no branch yet: every branch gets a
+  // copy to see it, and the branch whose cashier uses it claims it at HQ first (/sync/mpesa-claim), so it is used once.
+  {
+    model: PaymentIntent, dir: 'both', field: 'updatedAt', owner: inBranch, cursorVersion: 2,
+    downFilter: (b) => ({ $or: [{ branchId: new Types.ObjectId(b.branchId) }, { branchId: null, provider: 'mpesa', source: 'c2b', status: 'succeeded' }] }),
+  },
   { model: MpesaEvent, dir: 'up', field: 'at' },
   // Card terminals connect to the server their tills use, so a branch server owns its terminals and their payments.
   { model: PaymentTerminal, dir: 'up', field: 'updatedAt', owner: inBranch },
@@ -101,6 +114,9 @@ export const SYNC_SPECS: SyncSpec[] = [
   { model: AttendanceRecord, dir: 'up', field: 'at' },
   { model: LoyaltyTransaction, dir: 'up', field: 'at' },
   { model: AuditLog, dir: 'up', field: 'at' },
+  // Fiscal devices are reached by the server they are plugged into: its log and device health reach HQ for monitoring.
+  { model: FiscalTransaction, dir: 'up', field: 'updatedAt' },
+  { model: FiscalDeviceState, dir: 'up', field: 'updatedAt' },
 ];
 
 /**

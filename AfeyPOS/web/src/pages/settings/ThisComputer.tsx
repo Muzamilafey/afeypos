@@ -3,12 +3,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useLocations } from '../../lib/hooks';
-import { bridge, bridgeConfigured, bridgeStatus, type BridgeStatus } from '../../lib/bridge';
-import { PRINT_MODES, printMode, type PrintMode } from '../../lib/printing';
+import { bridge, bridgeConfigured, bridgeInstallerCmd, bridgeStatus, pairBridge, type BridgeStatus } from '../../lib/bridge';
+import { drawerRoute, openCashDrawer, PRINT_MODES, printMode, type PrintMode } from '../../lib/printing';
 import { getWorkstation, setWorkstation } from '../../lib/workstation';
 import { dateTime } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, cx, ErrorBox, Field, Input, Modal, Select, useToast } from '../../components/ui';
+import { Icon } from '../../components/icons';
 
 type BridgePrinter = { type: 'system'; name: string } | { type: 'network'; host: string; port?: number } | { type: 'device'; path: string } | { type: 'windows-share'; share: string };
 
@@ -22,6 +23,17 @@ export function ReceiptPrinterCard() {
   const [auto, setAuto] = useState(Boolean(getWorkstation().autoPrint));
   const [width, setWidth] = useState(getWorkstation().receiptWidth ?? 42);
   const paired = bridgeConfigured();
+  // Printers installed on the computer Afey POS runs on: a shop install can print to them with nothing else to set up.
+  const [serverPrinter, setServerPrinter] = useState(getWorkstation().serverPrinter ?? '');
+  const [drawer, setDrawer] = useState(getWorkstation().openDrawerOnCash !== false);
+  const [drawerPrinter, setDrawerPrinter] = useState(getWorkstation().drawerPrinter ?? '');
+  // Browser printing cannot reach the drawer: it is opened through a printer on the Afey POS computer instead.
+  const browserMode = mode === 'dialog' || mode === 'silent';
+  const local = useQuery({
+    queryKey: ['local-printers'],
+    queryFn: () => api<{ data: { available: boolean; reason?: string; printers: { name: string; isDefault: boolean; port?: string }[] } }>('/hardware/printers/local').then((r) => r.data),
+    enabled: mode === 'server' || browserMode, retry: false,
+  });
   const printers = useQuery({ queryKey: ['bridge-printers'], queryFn: () => bridge<{ configured: Record<string, BridgePrinter>; system: { name: string; default?: boolean; port?: string }[]; devices: string[] }>('/printers', undefined, 15_000), enabled: mode === 'bridge' && paired, retry: false });
   const current = printers.data?.configured?.receipt;
   const [choice, setChoice] = useState<string>('');
@@ -80,6 +92,34 @@ export function ReceiptPrinterCard() {
           )}
         </div>
       )}
+      {mode === 'server' && (
+        <div className="mt-4 rounded-lg border border-ink-100 p-3 dark:border-ink-800">
+          {local.isLoading ? <p className="text-sm text-ink-500">Looking for printers on the Afey POS computer…</p>
+            : local.isError ? <ErrorBox error={local.error} />
+              : !local.data?.available ? <p className="text-sm text-amber-700">{local.data?.reason}</p>
+                : (
+                  <>
+                    <p className="mb-2 text-sm">This till prints to: <b data-testid="server-printer">{serverPrinter || 'Not chosen yet'}</b></p>
+                    <div className="grid items-end gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                      <Field label="Printer on the Afey POS computer">
+                        <Select value={serverPrinter} onChange={(e) => { setServerPrinter(e.target.value); save({ serverPrinter: e.target.value }); }} placeholder="Choose a printer"
+                          options={(local.data.printers ?? []).map((p) => ({ value: p.name, label: `${p.name}${p.isDefault ? ' (default)' : ''}${p.port ? ` · ${p.port}` : ''}` }))} />
+                      </Field>
+                      <Button variant="secondary" onClick={() => local.refetch()}><Icon name="refresh" className="h-4 w-4" />Look again</Button>
+                      <Button loading={busy} disabled={!serverPrinter} onClick={async () => {
+                        setBusy(true);
+                        try {
+                          await api('/hardware/printers/local/test', { body: { printer: serverPrinter, width, openDrawer: drawer } });
+                          toast.success('Test slip sent: check the printer');
+                        } catch (e) { toast.error(e); } finally { setBusy(false); }
+                      }}>Print test</Button>
+                    </div>
+                    {!local.data.printers.length && <p className="mt-2 text-sm text-amber-700">{local.data.reason}</p>}
+                    <p className="mt-2 text-xs text-ink-500">The printer is remembered on this device only, so each till can use its own. Receipts are sent as a raw ESC/POS job: they print at once, with no print window, and the paper is cut.</p>
+                  </>
+                )}
+        </div>
+      )}
       {mode === 'silent' && (
         <div className="mt-4 rounded-lg bg-ink-50 p-3 text-xs text-ink-600 dark:bg-ink-800/50 dark:text-ink-300">
           <p className="mb-1 font-semibold">Set the receipt printer as the computer's default printer, then start the browser like this (e.g. a desktop shortcut):</p>
@@ -88,6 +128,26 @@ export function ReceiptPrinterCard() {
         </div>
       )}
       {mode === 'network' && <p className="mt-3 text-xs text-ink-500">Add the printer under <b>Hardware devices</b> below (type Receipt printer, connection Network, the till) or set it on the till under Branches &amp; tills.</p>}
+
+      <div className="mt-4 rounded-lg border border-ink-100 p-3 dark:border-ink-800" data-testid="cash-drawer-settings">
+        <h3 className="text-sm font-bold">Cash drawer</h3>
+        <p className="mb-2 text-xs text-ink-500">The drawer is plugged into the receipt printer (its DK / drawer port). It opens as soon as a cash sale is completed, before the receipt prints.</p>
+        <Checkbox label="Open the cash drawer on cash sales" checked={drawer} onChange={(v) => { setDrawer(v); save({ openDrawerOnCash: v }); }} />
+        {browserMode && (
+          local.data?.available ? (
+            <Field label="Printer the drawer is plugged into" className="mt-2" hint="Receipts print through the browser, which cannot open a drawer: Afey POS opens it through this printer instead.">
+              <Select value={drawerPrinter} onChange={(e) => { setDrawerPrinter(e.target.value); save({ drawerPrinter: e.target.value || undefined }); }} placeholder="Choose the receipt printer"
+                options={[{ value: '', label: 'None' }, ...(local.data.printers ?? []).map((p) => ({ value: p.name, label: `${p.name}${p.isDefault ? ' (default)' : ''}` }))]} />
+            </Field>
+          ) : <p className="mt-2 text-xs text-amber-700">With browser printing the drawer can only open if the printer driver does it (e.g. the Epson or Xprinter driver setting "Open cash drawer"). For Afey POS to open it, choose "Printer on the Afey POS computer" or the device bridge above.</p>
+        )}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="secondary" disabled={!drawerRoute()} onClick={() => openCashDrawer({ reason: 'Test from Hardware → This computer' }).then((ok) => (ok ? toast.success('Drawer command sent: the drawer should open') : toast.error('Choose how this computer reaches the drawer first'))).catch(toast.error)}>
+            <Icon name="wallet" className="h-4 w-4" />Open drawer now
+          </Button>
+          {!drawerRoute() && <span className="text-xs text-ink-500">No route to the drawer on this computer yet.</span>}
+        </div>
+      </div>
     </Card>
   );
 }
@@ -124,9 +184,48 @@ export function BridgePairingCard() {
       setBusy(false);
     }
   };
+  const download = () => {
+    const blob = new Blob([bridgeInstallerCmd()], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'Install Afey bridge.cmd';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  };
+  const connect = async () => {
+    setBusy(true);
+    setError(null);
+    setStatus(null);
+    try {
+      setStatus(await pairBridge());
+      const now = getWorkstation();
+      setUrl(now.bridgeUrl ?? url);
+      setToken(now.bridgeToken ?? '');
+      toast.success('Connected to the device bridge on this computer');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Card className="mb-4" title="This computer: device bridge">
-      <p className="mb-3 text-sm text-ink-600 dark:text-ink-300">USB printers, scales, displays and fingerprint readers on this till are reached through the Afey device bridge. Install it on this PC, then enter its address and the <code>pairingToken</code> from its <code>config.json</code>. These settings stay on this computer only.</p>
+      <p className="mb-3 text-sm text-ink-600 dark:text-ink-300">For a receipt printer (and cash drawer), scale, display or fingerprint reader plugged into <b>this</b> PC by USB. Do this on the till PC itself, in Windows.</p>
+      <ol className="mb-3 space-y-2 text-sm" data-testid="bridge-steps">
+        <li className="flex flex-wrap items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-500 text-xs font-bold text-white">1</span>
+          <Button size="sm" onClick={download}><Icon name="download" className="h-4 w-4" />Download the bridge installer</Button>
+          <span className="text-xs text-ink-500">Made for this Afey POS ({window.location.origin}).</span></li>
+        <li className="flex items-start gap-2"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-500 text-xs font-bold text-white">2</span>
+          <span>Open <b>Install Afey bridge.cmd</b> from Downloads and answer <b>Yes</b> when Windows asks. If the browser warns about the file, choose <i>Keep</i>; if Windows shows "Windows protected your PC", choose <i>More info → Run anyway</i>. Wait until it says <i>Done</i> (a few minutes the first time).</span></li>
+        <li className="flex flex-wrap items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-500 text-xs font-bold text-white">3</span>
+          <Button size="sm" loading={busy} onClick={connect}><Icon name="plug" className="h-4 w-4" />Connect</Button>
+          <span className="text-xs text-ink-500">Then choose the printer in the card above: "Straight to the receipt printer (device bridge)".</span></li>
+      </ol>
+      <details className="rounded-lg border border-ink-100 p-3 text-sm dark:border-ink-800">
+        <summary className="cursor-pointer font-semibold">Set up by hand (address and pairing token)</summary>
+        <p className="mb-3 mt-2 text-xs text-ink-500">Only if Connect does not work: the token is in <code>C:\AfeyBridge\app\bridge\config.json</code>. These settings stay on this computer only.</p>
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Bridge address"><Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:9123" /></Field>
         <Field label="Pairing token" className="sm:col-span-2"><Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} /></Field>
@@ -136,6 +235,7 @@ export function BridgePairingCard() {
         <Button loading={busy} onClick={test}>Test connection</Button>
         {(w.bridgeUrl || w.bridgeToken) && <Button variant="ghost" onClick={() => { setWorkstation({ bridgeUrl: undefined, bridgeToken: undefined }); setToken(''); toast.success('Unpaired'); }}>Unpair</Button>}
       </div>
+      </details>
       {status && (
         <div className="mt-3 flex flex-wrap gap-2 text-sm" data-testid="bridge-status">
           <Badge tone="green">Bridge connected</Badge>

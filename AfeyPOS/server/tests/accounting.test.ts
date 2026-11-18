@@ -137,3 +137,48 @@ describe('manual journals and closing the books', () => {
     expect(accounts.find((a: any) => a.name === 'Electricity')).toMatchObject({ code: '6100', type: 'expense', balanceCents: 10_000 });
   });
 });
+
+describe('dashboards', () => {
+  it('the accounting dashboard agrees with the profit & loss and the balance sheet', async () => {
+    const d = (await t.client.get('/accounting/dashboard')).body.data;
+    expect(d.monthly).toHaveLength(12);
+    expect(d.monthly.at(-1).month).toBe(today().slice(0, 7));
+    const pl = (await t.client.get('/accounting/profit-loss')).body.data;
+    expect(d.thisMonth.revenueCents).toBe(pl.netSalesCents);
+    expect(d.thisMonth.grossProfitCents).toBe(pl.grossProfitCents);
+    expect(d.thisMonth.netProfitCents).toBe(pl.netProfitCents);
+    expect(d.thisMonth.expensesByAccount.length).toBeGreaterThan(0);
+    const bs = (await t.client.get('/accounting/balance-sheet')).body.data;
+    const ar = bs.assets.find((a: any) => a.subtype === 'receivable')?.amountCents ?? 0;
+    expect(d.balances.receivablesCents).toBe(ar);
+    expect(d.balances.cashAccounts.length).toBeGreaterThan(0);
+    const vat = (await t.client.get('/accounting/vat')).body.data;
+    expect(d.thisMonth.vat.netPayableCents).toBe(vat.netPayableCents);
+  });
+
+  it('each role gets its own dashboard, limited to what it may see', async () => {
+    await t.client.post('/settings/users', { name: 'Cashier One', email: 'c1@books.test', password: 'Passw0rd!x', roles: ['cashier'] });
+    await t.client.post('/settings/users', { name: 'Buyer', email: 'buy@books.test', password: 'Passw0rd!x', roles: ['procurement_officer'] });
+    const { Client } = await import('./helpers.js');
+    const cashier = new Client(ctx.api, 'books');
+    await cashier.login('c1@books.test', 'Passw0rd!x');
+    const c = (await cashier.get('/dashboard/me')).body.data;
+    expect(c.mySales.today).toMatchObject({ count: 0, totalCents: 0 });
+    expect(c.mySales.week).toHaveLength(7);
+    expect(c.purchasing).toBeUndefined();
+    expect(c.stock.valueCents).toBeNull();
+    expect((await cashier.get('/accounting/dashboard')).status).toBe(403);
+
+    // The owner rang up the sales: they are the owner's, not the cashier's.
+    const o = (await t.client.get('/dashboard/me')).body.data;
+    expect(o.mySales.today.count).toBeGreaterThanOrEqual(3);
+    expect(o.stock.valueCents).toBeGreaterThan(0);
+
+    const buyer = new Client(ctx.api, 'books');
+    await buyer.login('buy@books.test', 'Passw0rd!x');
+    const b = (await buyer.get('/dashboard/me')).body.data;
+    expect(b.mySales).toBeUndefined();
+    expect(b.purchasing.owedCents).toBeGreaterThanOrEqual(0);
+    expect(b.stock.low).toBeDefined();
+  });
+});

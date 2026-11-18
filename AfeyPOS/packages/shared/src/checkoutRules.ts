@@ -13,6 +13,8 @@ export interface CheckoutRules {
     clearNeedsApproval: boolean;
     /** Cashiers may hold (park) sales and resume them. */
     holdAllowed: boolean;
+    /** Largest quantity of one item on a sale line (in its selling unit); 0 = no limit. More needs a supervisor. */
+    maxQtyPerLine: number;
   };
   discounts: {
     /** Cashiers may give discounts at all (without it every discount needs approval). */
@@ -38,9 +40,79 @@ export interface CheckoutRules {
     /** A cashier may only have one open shift at a time. */
     oneOpenShiftPerCashier: boolean;
   };
+  /** M-Pesa at the till. */
+  mpesa: {
+    /** Choosing M-Pesa starts watching for a payment to the Paybill/Till in the background, with nothing to press. */
+    watchTillPayments: boolean;
+    /** A payment that covers the whole sale completes it by itself (and prints the receipt). */
+    autoComplete: boolean;
+  };
+  /** Price list at the till. */
+  pricing: {
+    /** Show a Retail / Wholesale switch at checkout. Off: every sale is retail (or the customer's own price list). */
+    wholesaleAtTill: boolean;
+    /** Switching a sale to wholesale needs a supervisor's approval (sales.price.override). */
+    wholesaleNeedsApproval: boolean;
+    /** Products with a "wholesale from quantity" get the wholesale price on a line reaching that quantity. Off: retail only. */
+    wholesaleByQuantity: boolean;
+    /** Round each sale's payable total to the nearest whole shilling (the difference is recorded as rounding). */
+    roundToWholeShilling: boolean;
+  };
+  /** KRA eTIMS / ETR stamp on the printed receipt. */
+  kra: {
+    /** Seconds the till waits for KRA (or the ETR device) to sign the sale before printing. */
+    waitSeconds: number;
+    /** When KRA has not answered in time, print the receipt without the stamp (else wait for a reprint). */
+    printUnsigned: boolean;
+  };
+  /** How the checkout page shows products. */
+  display: {
+    /** Show a grid of product pictures to tap (supermarket style), beside scanning. Off: the scan-first layout. */
+    productGrid: boolean;
+  };
+  /** Till security. */
+  security: {
+    /** Lock the till after this many minutes without use; the cashier unlocks with PIN, card or password. 0 = never. */
+    lockAfterMinutes: number;
+  };
+  /** Stock transfers between stores and branches. */
+  transfers: {
+    /** A manager (inventory.adjust.approve) approves a transfer before it can be dispatched. */
+    approvalRequired: boolean;
+  };
+  /** Whether the till collects the customer's phone number, and what it does with it. */
+  customer: {
+    /**
+     * off: the till never asks and the sale belongs to nobody (no customer is shown or assigned).
+     * ask: the cashier may type the phone number at checkout.
+     * mpesa: the number of whoever paid by M-Pesa is used by itself.
+     * both: either way.
+     */
+    phone: 'off' | 'ask' | 'mpesa' | 'both';
+    /** A customer is created from the number (so the loyalty points have an owner). */
+    createFromPhone: boolean;
+    /** Points are awarded for the sale when a customer was found or created. */
+    awardLoyalty: boolean;
+    /** The cashier must enter a number before the sale can be completed ("ask" and "both" only). */
+    required: boolean;
+  };
   /** Pages a user whose only role is Cashier can open (navigation keys). Checkout is always allowed. */
   cashierPages: string[];
+  /** Ways to pay offered at checkout (and accepted by the server). */
+  paymentMethods: string[];
 }
+
+/** Payment methods the owner can offer or hide at checkout. */
+export const PAYMENT_METHOD_OPTIONS: { key: string; label: string; hint?: string }[] = [
+  { key: 'cash', label: 'Cash' },
+  { key: 'mpesa', label: 'M-Pesa', hint: 'Prompt on the phone, Paybill/Till, or a receipt code' },
+  { key: 'card', label: 'Card', hint: 'Bank card terminal or card machine' },
+  { key: 'gateway', label: 'Mobile money & online cards', hint: 'Payment gateways (Pesapal, Paystack...)' },
+  { key: 'bank', label: 'Bank transfer' },
+  { key: 'credit', label: 'On account (customer credit)' },
+  { key: 'loyalty', label: 'Loyalty points' },
+  { key: 'voucher', label: 'Gift voucher' },
+];
 
 /** Pages an owner can allow or hide for cashiers (their permissions already exclude everything else). */
 export const CASHIER_PAGE_OPTIONS: { key: string; label: string }[] = [
@@ -56,10 +128,18 @@ export const CASHIER_PAGE_OPTIONS: { key: string; label: string }[] = [
 ];
 
 export const CHECKOUT_RULE_DEFAULTS: CheckoutRules = {
-  items: { removeNeedsApproval: false, reduceQtyNeedsApproval: false, clearNeedsApproval: false, holdAllowed: true },
+  items: { removeNeedsApproval: false, reduceQtyNeedsApproval: false, clearNeedsApproval: false, holdAllowed: true, maxQtyPerLine: 0 },
   discounts: { allowed: true, lineLimitBp: 1000, saleLimitBp: 1000, maxAmountCents: 0 },
   shifts: { required: true, minOpeningFloatCents: 0, blindClose: false, closeNeedsApproval: false, maxCashInDrawerCents: 0, oneOpenShiftPerCashier: true },
+  mpesa: { watchTillPayments: true, autoComplete: true },
+  pricing: { wholesaleAtTill: false, wholesaleNeedsApproval: false, wholesaleByQuantity: true, roundToWholeShilling: false },
+  kra: { waitSeconds: 30, printUnsigned: true },
+  security: { lockAfterMinutes: 0 },
+  transfers: { approvalRequired: false },
+  display: { productGrid: false },
+  customer: { phone: 'both', createFromPhone: true, awardLoyalty: true, required: false },
   cashierPages: CASHIER_PAGE_OPTIONS.map((p) => p.key),
+  paymentMethods: PAYMENT_METHOD_OPTIONS.map((p) => p.key),
 };
 
 const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
@@ -76,6 +156,7 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
       reduceQtyNeedsApproval: bool(s.items?.reduceQtyNeedsApproval, d.items.reduceQtyNeedsApproval),
       clearNeedsApproval: bool(s.items?.clearNeedsApproval, d.items.clearNeedsApproval),
       holdAllowed: bool(s.items?.holdAllowed, d.items.holdAllowed),
+      maxQtyPerLine: int(s.items?.maxQtyPerLine, d.items.maxQtyPerLine, 100000),
     },
     discounts: {
       allowed: bool(s.discounts?.allowed, d.discounts.allowed),
@@ -91,11 +172,46 @@ export function mergeCheckoutRules(saved: unknown, legacy: { requireOpenShift?: 
       maxCashInDrawerCents: int(s.shifts?.maxCashInDrawerCents, d.shifts.maxCashInDrawerCents),
       oneOpenShiftPerCashier: bool(s.shifts?.oneOpenShiftPerCashier, d.shifts.oneOpenShiftPerCashier),
     },
+    mpesa: {
+      watchTillPayments: bool(s.mpesa?.watchTillPayments, d.mpesa.watchTillPayments),
+      autoComplete: bool(s.mpesa?.autoComplete, d.mpesa.autoComplete),
+    },
+    pricing: {
+      wholesaleAtTill: bool(s.pricing?.wholesaleAtTill, d.pricing.wholesaleAtTill),
+      wholesaleNeedsApproval: bool(s.pricing?.wholesaleNeedsApproval, d.pricing.wholesaleNeedsApproval),
+      wholesaleByQuantity: bool(s.pricing?.wholesaleByQuantity, d.pricing.wholesaleByQuantity),
+      roundToWholeShilling: bool(s.pricing?.roundToWholeShilling, d.pricing.roundToWholeShilling),
+    },
+    security: { lockAfterMinutes: int(s.security?.lockAfterMinutes, d.security.lockAfterMinutes, 240) },
+    display: { productGrid: bool(s.display?.productGrid, d.display.productGrid) },
+    transfers: { approvalRequired: bool(s.transfers?.approvalRequired, d.transfers.approvalRequired) },
+    kra: {
+      waitSeconds: int(s.kra?.waitSeconds, d.kra.waitSeconds, 120),
+      printUnsigned: bool(s.kra?.printUnsigned, d.kra.printUnsigned),
+    },
+    customer: {
+      phone: (['off', 'ask', 'mpesa', 'both'] as const).includes(s.customer?.phone) ? s.customer.phone : d.customer.phone,
+      createFromPhone: bool(s.customer?.createFromPhone, d.customer.createFromPhone),
+      awardLoyalty: bool(s.customer?.awardLoyalty, d.customer.awardLoyalty),
+      required: bool(s.customer?.required, d.customer.required),
+    },
     cashierPages: Array.isArray(s.cashierPages) ? s.cashierPages.filter((k: unknown) => CASHIER_PAGE_OPTIONS.some((p) => p.key === k)) : d.cashierPages,
+    paymentMethods: paymentMethodsOf(s.paymentMethods),
   };
 }
 
 /** True for a user whose only built-in role is Cashier (the page list applies to them). */
 export function isPlainCashier(roles: readonly string[]): boolean {
   return roles.length > 0 && roles.every((r) => r === 'cashier');
+}
+
+/** Saved payment methods; nothing valid saved means all of them (a till always needs a way to be paid). */
+function paymentMethodsOf(v: unknown): string[] {
+  const list = Array.isArray(v) ? PAYMENT_METHOD_OPTIONS.map((o) => o.key).filter((k) => v.includes(k)) : [];
+  return list.length ? list : CHECKOUT_RULE_DEFAULTS.paymentMethods;
+}
+
+/** True when the method may be used at checkout. Methods not in the list of options (e.g. "other") are not limited. */
+export function paymentMethodAllowed(rules: Pick<CheckoutRules, 'paymentMethods'>, method: string): boolean {
+  return !PAYMENT_METHOD_OPTIONS.some((o) => o.key === method) || rules.paymentMethods.includes(method);
 }

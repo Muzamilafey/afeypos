@@ -18,8 +18,9 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('standalone', 'hq', 'branch')][string]$Mode = $(if ($env:AFEY_MODE) { $env:AFEY_MODE } else { 'standalone' }),
-  [int]$Port = $(if ($env:AFEY_PORT) { [int]$env:AFEY_PORT } else { 9999 }),
+  # Left out on an upgrade: the computer keeps its mode (branch stays branch) and port.
+  [ValidateSet('', 'standalone', 'hq', 'branch')][string]$Mode = $(if ($env:AFEY_MODE) { $env:AFEY_MODE } else { '' }),
+  [int]$Port = $(if ($env:AFEY_PORT) { [int]$env:AFEY_PORT } else { 0 }),
   [string]$PublicUrl = $env:AFEY_PUBLIC_URL,
   [string]$HqUrl = '',
   [string]$SyncToken = '',
@@ -109,15 +110,23 @@ Get-File "https://codeload.github.com/$Repo/zip/$Ref" "$tmp\afeypos.zip"
 Expand-Archive -Path "$tmp\afeypos.zip" -DestinationPath "$tmp\src" -Force
 $top = (Get-ChildItem "$tmp\src" -Directory | Select-Object -First 1).FullName
 $src = if (Test-Path "$top\AfeyPOS\package.json") { "$top\AfeyPOS" } elseif (Test-Path "$top\package.json") { $top } else { Fail "The download does not contain Afey POS ($Repo, $Ref)" }
-Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $app | Out-Null
+# Leave the running server stopped while its files are replaced (install.ps1 starts it again).
+New-Item -ItemType Directory -Force -Path (Join-Path $app 'server') | Out-Null
+New-Item -ItemType File -Force -Path (Join-Path $app 'server\.maintenance') | Out-Null
+Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
+# The keeper too (it can outlive its task), or it would keep the new one from starting.
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" | Where-Object { $_.CommandLine -like '*run-server.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*dist\server.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 # Mirror the new version; keep the configuration, data and installed packages.
-robocopy $src $app /MIR /XD node_modules data .git /XF .env /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $src $app /MIR /XD node_modules data .git logs /XF .env .maintenance /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { Fail "Copying the files to $app failed (robocopy code $LASTEXITCODE)" }
 $global:LASTEXITCODE = 0
 
 # ---------- install / upgrade ----------
-$installArgs = @{ Mode = $Mode; Port = $Port; InstallDir = $app; DataDir = (Join-Path $Root 'data'); MongoDataDir = (Join-Path $Root 'mongodb') }
+$installArgs = @{ InstallDir = $app; DataDir = (Join-Path $Root 'data'); MongoDataDir = (Join-Path $Root 'mongodb') }
+if ($Mode) { $installArgs.Mode = $Mode }
+if ($Port) { $installArgs.Port = $Port }
 if ($PublicUrl) { $installArgs.PublicUrl = $PublicUrl }
 if ($HqUrl) { $installArgs.HqUrl = $HqUrl }
 if ($SyncToken) { $installArgs.SyncToken = $SyncToken }

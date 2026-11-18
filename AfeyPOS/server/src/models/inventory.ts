@@ -108,6 +108,8 @@ const transferSchema = new Schema(
     status: { type: String, enum: ['draft', 'in_transit', 'received', 'cancelled'], default: 'draft' },
     notes: String,
     createdBy: ObjectId,
+    approvedBy: ObjectId,
+    approvedAt: Date,
     dispatchedBy: ObjectId,
     dispatchedAt: Date,
     receivedBy: ObjectId,
@@ -124,7 +126,7 @@ const stocktakeSchema = new Schema(
     warehouseId: { type: ObjectId, required: true },
     status: { type: String, enum: ['counting', 'posted', 'cancelled'], default: 'counting' },
     categoryId: ObjectId,
-    lines: [{ productId: { type: ObjectId, required: true }, expectedQty: Number, countedQty: Number, unitCostCents: Number, countedBy: ObjectId, _id: false }],
+    lines: [{ productId: { type: ObjectId, ref: 'Product', required: true }, expectedQty: Number, countedQty: Number, unitCostCents: Number, countedBy: ObjectId, _id: false }],
     startedBy: ObjectId,
     postedBy: ObjectId,
     postedAt: Date,
@@ -134,3 +136,34 @@ const stocktakeSchema = new Schema(
 );
 stocktakeSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 export const Stocktake = tenantModel('Stocktake', stocktakeSchema, { branchScope: [{ path: 'warehouseId', kind: 'warehouse' }] });
+
+/**
+ * A stock change asked for on a server that does not own the warehouse (e.g. head office adding opening stock
+ * for a branch that runs its own server). It syncs to the owning server, which applies it as a normal
+ * movement and marks it applied; the new stock level then syncs back. Nothing changes stock twice: the
+ * request is applied once, on its owner, and only while pending.
+ */
+const remoteStockRequestSchema = new Schema(
+  {
+    productId: { type: ObjectId, ref: 'Product', required: true },
+    warehouseId: { type: ObjectId, ref: 'Warehouse', required: true },
+    branchId: { type: ObjectId, required: true },
+    type: { type: String, enum: ['opening', 'purchase_receipt'], default: 'opening' },
+    /** The document it comes from (e.g. the goods receipt at head office). */
+    ref: { type: { type: String }, id: ObjectId, number: String },
+    qty: { type: Number, required: true },
+    unitCostCents: Number,
+    batchNo: String,
+    expiryDate: Date,
+    serials: { type: [String], default: undefined },
+    reason: String,
+    status: { type: String, enum: ['pending', 'applied', 'failed'], default: 'pending' },
+    appliedAt: Date,
+    error: String,
+    requestedBy: ObjectId,
+    requestedOn: String,
+  },
+  { timestamps: true },
+);
+remoteStockRequestSchema.index({ tenantId: 1, status: 1, warehouseId: 1 });
+export const RemoteStockRequest = tenantModel('RemoteStockRequest', remoteStockRequestSchema);

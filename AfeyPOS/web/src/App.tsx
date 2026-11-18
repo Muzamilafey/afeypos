@@ -6,6 +6,7 @@ import { AppShell } from './layouts/AppShell';
 import { Loading, EmptyState } from './components/ui';
 import { ForgotPasswordPage, LoginPage, SetupPage, ResetPasswordPage, VerifyEmailPage } from './pages/Auth';
 import { DashboardPage } from './pages/Dashboard';
+import { CommunicationsPage } from './pages/Communications';
 import { POSPage } from './pages/POS';
 import { SaleDetailPage, SalesPage, ShiftsPage } from './pages/sales/Sales';
 import { ReturnsPage } from './pages/sales/Returns';
@@ -20,6 +21,7 @@ import { RolesPage } from './pages/settings/Roles';
 import { PurchasingPage } from './pages/sales/Purchasing';
 import { DocumentsPage } from './pages/sales/Documents';
 import { ProductEditPage, ProductsPage } from './pages/inventory/Products';
+import { ProductWizardPage } from './pages/inventory/ProductWizard';
 import { AdjustmentsPage, LabelsPage, MovementsPage, StockLevelsPage, StocktakesPage, TransfersPage } from './pages/inventory/Inventory';
 import { PartiesPage, PartyDetailPage } from './pages/parties/Parties';
 import { AuditPage, ExpensesPage, MpesaPage, OnlinePaymentsPage, PromotionsPage, ReportsPage, RepairsPage } from './pages/Finance';
@@ -27,8 +29,19 @@ import { AccountPage, BusinessSettingsPage, HardwarePage, IntegrationsPage, Loca
 import { SyncPage } from './pages/settings/Sync';
 import { ReceiptSettingsPage } from './pages/settings/Receipts';
 import { CheckoutRulesPage } from './pages/settings/CheckoutRules';
+import { CardTerminalsPage } from './pages/settings/CardTerminals';
+import { ScalesPage } from './pages/settings/Scales';
+import { AssistantPage } from './pages/Assistant';
+import { HardwareCentrePage } from './pages/settings/HardwareCentre';
+import { FiscalDevicesPage } from './pages/settings/FiscalDevices';
+import { TillButtonsPage } from './pages/settings/TillButtons';
+import { CustomerDisplayPage } from './pages/CustomerDisplay';
+import { CashPaymentsPage, MpesaLogsPage, MpesaReceivedPage } from './pages/PaymentLedgers';
 import { LoyaltyPage, VouchersPage } from './pages/Loyalty';
 import { BarcodeVerifyPage, BrandsPage, CategoriesPage, StockAlertsPage, UnitsPage } from './pages/inventory/Catalog';
+import { ImportProductsPage } from './pages/inventory/ImportProducts';
+import { StockAnalysisPage } from './pages/reports/StockAnalysis';
+import { ReceiveStockPage } from './pages/inventory/ReceiveStock';
 import { EtimsPage } from './pages/Etims';
 
 function Protected({ children }: { children: ReactNode }) {
@@ -50,6 +63,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/customer-display" element={<CustomerDisplayPage />} />
       <Route path="/register" element={<Navigate to="/setup" replace />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -65,8 +79,12 @@ export function App() {
         <Route path="documents/:type" element={<Gate perm="sales.read"><DocumentsPage /></Gate>} />
         <Route path="repairs" element={<Gate module="repairs"><RepairsPage /></Gate>} />
         <Route path="products" element={<Gate perm="products.read"><ProductsPage /></Gate>} />
+        <Route path="products/import" element={<Gate perm="products.manage"><ImportProductsPage /></Gate>} />
+        <Route path="products/new" element={<Gate perm="products.manage"><ProductWizardPage /></Gate>} />
+        <Route path="products/new/classic" element={<Gate perm="products.manage"><ProductEditPage /></Gate>} />
         <Route path="products/:id" element={<Gate perm="products.read"><ProductEditPage /></Gate>} />
         <Route path="inventory" element={<Gate perm="inventory.read"><StockLevelsPage /></Gate>} />
+        <Route path="inventory/receive" element={<Gate perm="inventory.receive" module="inventory"><ReceiveStockPage /></Gate>} />
         <Route path="inventory/units" element={<Gate perm="products.read"><UnitsPage /></Gate>} />
         <Route path="inventory/categories" element={<Gate perm="products.read"><CategoriesPage /></Gate>} />
         <Route path="inventory/brands" element={<Gate perm="products.read"><BrandsPage /></Gate>} />
@@ -86,14 +104,21 @@ export function App() {
         <Route path="suppliers/:id" element={<Gate perm="suppliers.read"><PartyDetailPage kind="supplier" /></Gate>} />
         <Route path="promotions" element={<Gate perm="prices.manage" module="promotions"><PromotionsPage /></Gate>} />
         <Route path="reports" element={<Gate perm="reports.read"><ReportsPage /></Gate>} />
+        {/* One report per menu entry; each report's data checks its own permission (HR, accounts, stock…). */}
+        <Route path="reports/stock-analysis" element={<Gate perm="inventory.read" module="reports"><StockAnalysisPage /></Gate>} />
+        <Route path="reports/:view" element={<Gate module="reports"><ReportsPage /></Gate>} />
         <Route path="expenses" element={<Gate perm="expenses.manage"><ExpensesPage /></Gate>} />
         <Route path="payments/mpesa" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaPage /></Gate>} />
+        <Route path="payments/mpesa/received" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaReceivedPage /></Gate>} />
+        <Route path="payments/mpesa/logs" element={<Gate perm="payments.reconcile" module="mpesa"><MpesaLogsPage /></Gate>} />
+        <Route path="payments/cash" element={<Gate perm="payments.reconcile"><CashPaymentsPage /></Gate>} />
         <Route path="payments/online" element={<Gate perm="payments.reconcile" module="payments"><OnlinePaymentsPage /></Gate>} />
         <Route path="online-orders" element={<Gate perm="orders.manage" module="onlineStore"><OnlineOrdersPage /></Gate>} />
         <Route path="settings/online-shop" element={<Gate perm="settings.manage" module="onlineStore"><StoreSettingsPage /></Gate>} />
         <Route path="settings/store-studio" element={<Gate perm="settings.manage" module="onlineStore"><StoreStudioPage /></Gate>} />
         <Route path="accounting" element={<Gate perm="accounting.read" module="accounting"><AccountingPage /></Gate>} />
         <Route path="accounting/ledger/:code" element={<Gate perm="accounting.read" module="accounting"><LedgerPage /></Gate>} />
+        <Route path="communications" element={<Gate perm="comms.send"><CommunicationsPage /></Gate>} />
         <Route path="crm" element={<Gate perm="customers.read" module="crm"><CrmPage /></Gate>} />
         <Route path="payments/payouts" element={<Gate perm="payouts.request" module="mpesa"><PayoutsPage /></Gate>} />
         <Route path="hr/employees" element={<Gate perm="hr.manage" module="hr"><EmployeesPage /></Gate>} />
@@ -106,15 +131,22 @@ export function App() {
         <Route path="audit" element={<Gate perm="audit.read"><AuditPage /></Gate>} />
         <Route path="settings" element={<Gate perm="settings.manage"><BusinessSettingsPage /></Gate>} />
         <Route path="settings/receipts" element={<Gate perm="settings.manage" module="pos"><ReceiptSettingsPage /></Gate>} />
+        <Route path="settings/till-buttons" element={<Gate perm="settings.manage" module="pos"><TillButtonsPage /></Gate>} />
         <Route path="loyalty" element={<Gate perm="customers.read" module="loyalty"><LoyaltyPage /></Gate>} />
         <Route path="vouchers" element={<Gate perm="vouchers.manage"><VouchersPage /></Gate>} />
         <Route path="settings/checkout-rules" element={<Gate perm="settings.manage" module="pos"><CheckoutRulesPage /></Gate>} />
+        <Route path="settings/payments/terminals" element={<Gate perm="terminals.manage" module="pos"><CardTerminalsPage /></Gate>} />
+        <Route path="payments/card-terminals" element={<Gate perm="terminals.reconcile" module="pos"><CardTerminalsPage /></Gate>} />
         <Route path="settings/users" element={<Gate perm="users.manage"><UsersPage /></Gate>} />
         <Route path="settings/roles" element={<Gate perm="users.manage"><RolesPage /></Gate>} />
         <Route path="settings/locations" element={<Gate perm="branches.manage"><LocationsPage /></Gate>} />
         <Route path="settings/sync" element={<Gate perm="settings.manage"><SyncPage /></Gate>} />
         <Route path="settings/integrations" element={<Gate perm="integrations.manage"><IntegrationsPage /></Gate>} />
         <Route path="settings/hardware" element={<Gate perm="hardware.manage"><HardwarePage /></Gate>} />
+ <Route path="assistant" element={<Gate perm="assistant.use"><AssistantPage /></Gate>} />
+        <Route path="settings/hardware/scales" element={<Gate perm="hardware.manage"><ScalesPage /></Gate>} />
+        <Route path="settings/hardware/compatibility" element={<Gate perm="hardware.manage"><HardwareCentrePage /></Gate>} />
+        <Route path="settings/fiscal" element={<Gate perm="reports.financial" module="etims"><FiscalDevicesPage /></Gate>} />
         <Route path="account" element={<AccountPage />} />
         <Route path="support" element={<SupportPage />} />
         <Route path="*" element={<EmptyState title="Page not found" />} />

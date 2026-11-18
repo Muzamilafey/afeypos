@@ -39,6 +39,7 @@ export const PERMISSIONS = [
   'sales.price.override',
   'sales.void',
   'sales.items.remove',
+  'sales.qty.override',
   'vouchers.manage',
   'loyalty.manage',
   'sales.return',
@@ -57,6 +58,7 @@ export const PERMISSIONS = [
   'terminals.refund',
   'terminals.reconcile',
   'expenses.manage',
+  'expenses.approve',
   // HR, accounting, CRM, online orders
   'hr.manage',
   'payroll.manage',
@@ -64,11 +66,13 @@ export const PERMISSIONS = [
   'accounting.read',
   'accounting.manage',
   'crm.manage',
+  'comms.send',
   'orders.manage',
   // reporting
   'reports.read',
   'reports.financial',
   'audit.read',
+  'assistant.use',
   'commissions.read',
 ] as const;
 
@@ -102,9 +106,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'inventory.read', 'inventory.adjust', 'inventory.adjust.approve', 'inventory.transfer', 'inventory.stocktake', 'inventory.receive',
     'customers.read', 'customers.manage', 'suppliers.read', 'credit.approve', 'customers.payments',
     'purchasing.read',
-    'sales.create', 'sales.read', 'sales.read.all', 'sales.discount', 'sales.discount.override', 'sales.price.override', 'sales.void', 'sales.items.remove', 'vouchers.manage', 'loyalty.manage', 'sales.return', 'returns.approve', 'sales.credit',
+    'sales.create', 'sales.read', 'sales.read.all', 'sales.discount', 'sales.discount.override', 'sales.price.override', 'sales.void', 'sales.items.remove', 'sales.qty.override', 'vouchers.manage', 'loyalty.manage', 'sales.return', 'returns.approve', 'sales.credit',
     'quotations.manage', 'shifts.open', 'shifts.manage', 'cash.movement', 'payments.reconcile', 'terminals.refund', 'terminals.reconcile', 'expenses.manage',
-    'reports.read', 'commissions.read', 'biometrics.enroll', 'hardware.manage', 'hr.manage', 'crm.manage', 'orders.manage',
+    'reports.read', 'assistant.use', 'commissions.read', 'biometrics.enroll', 'hardware.manage', 'hr.manage', 'crm.manage', 'comms.send', 'orders.manage',
   ],
   inventory_manager: [
     'products.read', 'products.manage', 'products.cost', 'inventory.read', 'inventory.adjust', 'inventory.adjust.approve', 'inventory.transfer',
@@ -116,7 +120,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   cashier: ['products.read', 'inventory.read', 'customers.read', 'sales.create', 'sales.read', 'sales.discount', 'shifts.open', 'cash.movement', 'customers.payments', 'orders.manage'],
   accountant: [
     'products.read', 'products.cost', 'inventory.read', 'customers.read', 'suppliers.read', 'suppliers.pay', 'purchasing.read', 'sales.read', 'sales.read.all',
-    'payments.reconcile', 'terminals.reconcile', 'payouts.request', 'expenses.manage', 'customers.payments', 'reports.read', 'reports.financial', 'commissions.read', 'audit.read',
+    'payments.reconcile', 'terminals.reconcile', 'payouts.request', 'expenses.manage', 'expenses.approve', 'customers.payments', 'reports.read', 'reports.financial', 'commissions.read', 'audit.read',
     'payroll.manage', 'accounting.read', 'accounting.manage',
   ],
   auditor: [
@@ -195,6 +199,7 @@ export const PERMISSION_INFO: Record<Permission, { label: string; group: (typeof
   'vouchers.manage': { label: 'Issue, sell and cancel gift vouchers', group: 'Selling', sensitive: true },
   'loyalty.manage': { label: 'Run the loyalty program: cards and point adjustments', group: 'Customers & suppliers', sensitive: true },
   'sales.items.remove': { label: 'Remove scanned items or clear a sale (when Checkout rules require approval)', group: 'Selling', sensitive: true },
+  'sales.qty.override': { label: 'Sell more than the quantity limit on one line (Checkout rules)', group: 'Selling', sensitive: true },
   'sales.return': { label: 'Process returns and refunds', group: 'Selling', sensitive: true },
   'returns.approve': { label: 'Approve returns outside the policy', group: 'Selling', sensitive: true },
   'sales.credit': { label: 'Sell on credit', group: 'Selling', sensitive: true },
@@ -205,6 +210,7 @@ export const PERMISSION_INFO: Record<Permission, { label: string; group: (typeof
   'shifts.manage': { label: 'Manage all shifts and tills', group: 'Till & cash', sensitive: true },
   'cash.movement': { label: 'Cash in / cash out (drawer)', group: 'Till & cash', sensitive: true },
   'expenses.manage': { label: 'Record expenses', group: 'Till & cash', sensitive: true },
+  'expenses.approve': { label: 'Approve expenses, budgets and recurring bills', group: 'Till & cash', sensitive: true },
   'payments.reconcile': { label: 'Reconcile M-Pesa and online payments', group: 'Payments', sensitive: true },
   'payouts.request': { label: 'Request M-Pesa payouts', group: 'Payments', sensitive: true },
   'payouts.approve': { label: 'Approve and send M-Pesa payouts', group: 'Payments', sensitive: true },
@@ -214,12 +220,14 @@ export const PERMISSION_INFO: Record<Permission, { label: string; group: (typeof
   'hr.manage': { label: 'Manage employees, leave and attendance', group: 'People', sensitive: true },
   'payroll.manage': { label: 'Prepare payroll', group: 'People', sensitive: true },
   'payroll.approve': { label: 'Approve and pay payroll', group: 'People', sensitive: true },
+  'comms.send': { label: 'Send SMS & email to customers, staff and suppliers', group: 'Customers & suppliers', sensitive: true },
   'crm.manage': { label: 'Run CRM and campaigns', group: 'Customers & suppliers' },
   'accounting.read': { label: 'See the books', group: 'Accounts', sensitive: true },
   'accounting.manage': { label: 'Post journals and close periods', group: 'Accounts', sensitive: true },
   'reports.read': { label: 'See sales and stock reports', group: 'Reports' },
   'reports.financial': { label: 'See profit, tax and financial reports', group: 'Reports', sensitive: true },
   'audit.read': { label: 'See the audit trail', group: 'Reports', sensitive: true },
+  'assistant.use': { label: 'Ask the AI business assistant (answers only from what the user may see)', group: 'Reports' },
   'commissions.read': { label: 'See commissions', group: 'Reports' },
 };
 

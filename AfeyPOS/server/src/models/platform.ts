@@ -21,6 +21,8 @@ const tenantSettingsSchema = new Schema(
     receipt: Schema.Types.Mixed,
     /** What cashiers may do alone (Settings > Checkout rules; see CHECKOUT_RULE_DEFAULTS in shared). */
     checkoutRules: Schema.Types.Mixed,
+    /** How the till's buttons look (Settings > Till buttons): icon, picture, label and colours per button. */
+    tillButtons: Schema.Types.Mixed,
     /** Bank card machines (PDQ) at the tills: the cashier picks one and keys in its approval code. */
     cardTerminals: { type: [{ name: String, bank: String, terminalId: String, _id: false }], default: [] },
     variableWeight: {
@@ -31,6 +33,10 @@ const tenantSettingsSchema = new Schema(
       valueType: { type: String, enum: ['weight', 'price'], default: 'weight' },
       valueDecimals: { type: Number, default: 3 },
     },
+    /** Scale label layouts (see ScaleBarcodeFormat in shared); when empty the single variableWeight layout applies. */
+    scaleBarcodeFormats: { type: [Schema.Types.Mixed], default: undefined },
+    /** GS1 restricted-circulation prefix for internal (in-store) EAN-13 codes; default "04". */
+    internalBarcodePrefix: String,
     /** Loyalty program (see LOYALTY_DEFAULTS in shared). */
     loyalty: {
       name: String,
@@ -44,6 +50,8 @@ const tenantSettingsSchema = new Schema(
     stkPendingTimeoutSeconds: { type: Number, default: 180 },
     /** Uploaded file id (see modules/files) shown on the sign-in page and documents. */
     logoFileId: { type: String },
+    /** Square PNG app icons made from the logo (desktop / phone app icon); `source` is the logo they were made from. */
+    appIcon: { source: { type: String }, i192: { type: String }, i512: { type: String }, m512: { type: String } },
     tagline: { type: String },
     /** Liquor licensing: age-restricted products can only be sold inside these local hours (HH:mm). */
     restrictedSaleHours: { start: { type: String }, end: { type: String } },
@@ -84,6 +92,10 @@ const tenantSettingsSchema = new Schema(
     accounting: { lockDate: String },
     staffLogin: { cardRequiresPin: { type: Boolean, default: true } },
     /** Returns policy: older sales or bigger refunds need someone with returns.approve. */
+    /** Expenses above this amount wait for someone with expenses.approve (0 = never). */
+    expenses: {
+      approvalAboveCents: { type: Number, default: 0 },
+    },
     returns: {
       windowDays: { type: Number, default: 14 },
       approvalAboveCents: { type: Number, default: 0 },

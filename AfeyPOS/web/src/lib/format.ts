@@ -39,3 +39,24 @@ export function daysAgoLocal(days: number): string {
 const PAYMENT_LABELS: Record<string, string> = { cash: 'Cash', mpesa: 'M-Pesa', card: 'Card', bank: 'Bank', credit: 'On account', loyalty: 'Loyalty points', voucher: 'Gift voucher', gateway: 'Mobile money / online', other: 'Other' };
 /** Payment method label; gateway payments show their provider (e.g. "Paystack"). */
 export const paymentLabel = (method: string, provider?: string | null) => (method === 'gateway' && provider ? paymentProviderLabel(provider) : (PAYMENT_LABELS[method] ?? method));
+
+/**
+ * Part of a phone number for the till screen: 254712345678 → 0712 ••• 678. Safaricom's own masking
+ * (e.g. 2547****678) is shown as sent; a hashed number (newer C2B confirmations) is not shown at all.
+ */
+export function maskPhone(phone?: string | null): string {
+  const p = String(phone ?? '').trim();
+  if (!p || /^[a-f0-9]{32,}$/i.test(p)) return '';
+  if (/[*x•]/i.test(p)) return p.replace(/^254/, '0');
+  const d = p.replace(/\D/g, '');
+  if (d.length < 9) return '';
+  const local = d.startsWith('254') ? `0${d.slice(3)}` : d.startsWith('0') ? d : `0${d}`;
+  return `${local.slice(0, 4)} ••• ${local.slice(-3)}`;
+}
+
+/** Who paid an M-Pesa payment, as M-Pesa reported it: "JANE WANJIKU (0712 ••• 678)". */
+export function mpesaPayer(i: { payerName?: string | null; phone?: string | null }): string {
+  const name = String(i.payerName ?? '').trim().replace(/\s+/g, ' ');
+  const phone = maskPhone(i.phone);
+  return name && phone ? `${name} (${phone})` : name || phone;
+}

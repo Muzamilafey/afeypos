@@ -16,8 +16,9 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('standalone', 'hq', 'branch')][string]$Mode = 'standalone',
-  [int]$Port = 9999,
+  # Empty / 0 = keep what this computer already uses (an upgrade), else standalone on 9999.
+  [ValidateSet('', 'standalone', 'hq', 'branch')][string]$Mode = '',
+  [int]$Port = 0,
   [string]$PublicUrl = '',
   [string]$ShopHost = '',
   [string]$HqUrl = '',
@@ -54,7 +55,29 @@ $mongoBin = Split-Path $mongodPath
 Write-Host "mongod: $mongodPath"
 
 Step 'Configuring MongoDB as a single-node replica set'
+# Afey POS runs its own MongoDB service (AfeyMongoDB). Another MongoDB on this PC (often the "MongoDB" service on
+# 27017, perhaps with a password) is left alone: ours keeps its remembered port if free, else the first free port
+# from 27018.
 New-Item -ItemType Directory -Force -Path $MongoDataDir, "$MongoDataDir\db", "$MongoDataDir\log" | Out-Null
+$cfgPath = Join-Path $MongoDataDir 'mongod.cfg'
+function Test-PortInUse([int]$p) { [bool](Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue) }
+$svc = Get-Service -Name 'AfeyMongoDB' -ErrorAction SilentlyContinue
+if ($svc -and $svc.Status -ne 'Stopped') { Stop-Service AfeyMongoDB -Force; Start-Sleep -Seconds 2 }
+$mongoPort = 0
+if (Test-Path $cfgPath) {
+  $m = Select-String -Path $cfgPath -Pattern '^\s*port:\s*(\d+)' | Select-Object -First 1
+  if ($m) { $mongoPort = [int]$m.Matches[0].Groups[1].Value }
+}
+if (-not $mongoPort) { $mongoPort = 27018 }
+# MongoDB's own Windows service uses 27017 when it runs (it may be stopped right now): never share that port.
+$otherMongo = Get-Service -Name 'MongoDB' -ErrorAction SilentlyContinue
+if ($otherMongo -and $mongoPort -eq 27017) { $mongoPort = 27018 }
+if (Test-PortInUse $mongoPort) {
+  Write-Host "Port $mongoPort is used by another program (another MongoDB?); Afey POS keeps its own database on a free port"
+  $mongoPort = 27018
+  while (Test-PortInUse $mongoPort) { $mongoPort++; if ($mongoPort -gt 27100) { Fail 'No free port for the Afey POS database between 27018 and 27100' } }
+}
+Write-Host "Database port: $mongoPort"
 $cfg = @"
 storage:
   dbPath: $MongoDataDir\db
@@ -64,26 +87,52 @@ systemLog:
   logAppend: true
 net:
   bindIp: 127.0.0.1
-  port: 27017
+  port: $mongoPort
 replication:
   replSetName: rs0
 "@
-Set-Content -Path "$MongoDataDir\mongod.cfg" -Value $cfg -Encoding ASCII
-$svc = Get-Service -Name 'AfeyMongoDB' -ErrorAction SilentlyContinue
+Set-Content -Path $cfgPath -Value $cfg -Encoding ASCII
+# New-Service passes the quoted program path intact (sc.exe create mangles embedded quotes in Windows PowerShell 5.1).
+$bin = "`"$mongodPath`" --config `"$cfgPath`" --service"
 if (-not $svc) {
-  & sc.exe create AfeyMongoDB binPath= "`"$mongodPath`" --config `"$MongoDataDir\mongod.cfg`" --service" start= auto DisplayName= "Afey POS MongoDB" | Out-Null
-  & sc.exe failure AfeyMongoDB reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+  New-Service -Name 'AfeyMongoDB' -BinaryPathName $bin -DisplayName 'Afey POS MongoDB' -StartupType Automatic | Out-Null
+} else {
+  # Upgrades: point the existing service at this mongod and configuration.
+  Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\AfeyMongoDB' -Name ImagePath -Value $bin
 }
-Start-Service AfeyMongoDB
-Start-Sleep -Seconds 5
+& sc.exe failure AfeyMongoDB reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+try { Start-Service AfeyMongoDB } catch {
+  Get-Content "$MongoDataDir\log\mongod.log" -Tail 20 -ErrorAction SilentlyContinue
+  Fail "The Afey POS database service did not start: $($_.Exception.Message) (see the log above)"
+}
+# Our own database must be the one answering before going on.
+$up = $false
+for ($i = 0; $i -lt 30; $i++) { if (Test-PortInUse $mongoPort) { $up = $true; break }; Start-Sleep -Seconds 1 }
+if (-not $up) {
+  Get-Content "$MongoDataDir\log\mongod.log" -Tail 20 -ErrorAction SilentlyContinue
+  Fail "The Afey POS database did not start on port $mongoPort (see the log above)"
+}
+$mongoUri = "mongodb://127.0.0.1:$mongoPort/afeypos?replicaSet=rs0"
 
 Step 'Configuring, installing and building Afey POS (a few minutes the first time)'
-# An upgrade replaces files the running server uses: stop it first.
+# An upgrade replaces files the running server uses: stop it first (and keep the keeper from restarting it).
+New-Item -ItemType File -Force -Path (Join-Path $InstallDir 'server\.maintenance') | Out-Null
 Stop-ScheduledTask -TaskName 'AfeyPOS' -ErrorAction SilentlyContinue
+# The keeper too (it can outlive its task), or it would keep the new one from starting.
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" | Where-Object { $_.CommandLine -like '*run-server.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*dist\server.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 # scripts\setup.mjs writes server\.env (new secrets the first time, existing values kept afterwards),
 # runs npm ci and the build, and initialises the database replica set.
-$setupArgs = @('scripts\setup.mjs', '--mode', $Mode, '--port', "$Port", '--data-dir', $DataDir)
+# An upgrade keeps the mode and port in server\.env unless new ones are given: a branch server stays a branch.
+$envFile = Join-Path $InstallDir 'server\.env'
+$existing = if (Test-Path $envFile) { Get-Content $envFile } else { @() }
+function Get-EnvValue($name) { $l = $existing | Where-Object { $_ -match "^$name=" } | Select-Object -First 1; if ($l) { ($l -split '=', 2)[1].Trim() } else { '' } }
+$useMode = if ($Mode) { $Mode } else { Get-EnvValue 'DEPLOYMENT_MODE' }
+if ($useMode -notin @('standalone', 'hq', 'branch')) { $useMode = 'standalone' }
+$envPort = Get-EnvValue 'PORT'
+$usePort = if ($Port) { $Port } elseif ($envPort -match '^\d+$') { [int]$envPort } else { 9999 }
+$setupArgs = @('scripts\setup.mjs', '--mode', $useMode, '--port', "$usePort", '--data-dir', $DataDir, '--mongo-uri', $mongoUri)
 if ($PublicUrl) { $setupArgs += @('--public-url', $PublicUrl) }
 if ($ShopHost) { $setupArgs += @('--shop-host', $ShopHost) }
 if ($HqUrl) { $setupArgs += @('--hq-url', $HqUrl) }
@@ -100,12 +149,22 @@ $envFile = Join-Path $InstallDir 'server\.env'
 icacls $envFile /inheritance:r /grant:r "Administrators:F" "SYSTEM:F" | Out-Null
 Write-Host "Configuration: $envFile. BACK UP THIS FILE: without ENCRYPTION_KEY stored secrets cannot be decrypted."
 
-Step 'Registering the Afey POS service (Scheduled Task, runs at startup as SYSTEM)'
+Step 'Registering the Afey POS service (starts with Windows, restarts itself, never stops)'
+# The database service restarts by itself if it ever fails.
+sc.exe failure AfeyMongoDB reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+Set-Service -Name 'AfeyMongoDB' -StartupType Automatic
+# The task runs a keeper (installer\windows\run-server.ps1) as SYSTEM: at startup, before anyone signs in, and every
+# 5 minutes in case the keeper itself was stopped. The keeper starts the server again whenever it stops.
+$keeper = Join-Path $InstallDir 'installer\windows\run-server.ps1'
 $nodeExe = (Get-Command node).Source
-$action = New-ScheduledTaskAction -Execute $nodeExe -Argument '--env-file=.env dist\server.js' -WorkingDirectory (Join-Path $InstallDir 'server')
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName 'AfeyPOS' -Action $action -Trigger $trigger -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$keeper`" -InstallDir `"$InstallDir`" -Node `"$nodeExe`"" -WorkingDirectory $InstallDir
+$triggers = @(
+  (New-ScheduledTaskTrigger -AtStartup),
+  (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5))
+)
+$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName 'AfeyPOS' -Action $action -Trigger $triggers -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+Remove-Item (Join-Path $InstallDir 'server\.maintenance') -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName 'AfeyPOS'
 
 Step 'Scheduling a daily backup at 22:30'
@@ -114,22 +173,33 @@ $bTrigger = New-ScheduledTaskTrigger -Daily -At '22:30'
 Register-ScheduledTask -TaskName 'AfeyPOS Backup' -Action $bAction -Trigger $bTrigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
 
 if (-not $SkipFirewall) {
-  Step "Allowing tills on the local network to reach port $Port"
+  Step "Allowing tills on the local network to reach port $usePort"
   # Recreated each run so the rule follows the port (it was 4000 before 9999 became the default).
   Get-NetFirewallRule -DisplayName 'Afey POS' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-  New-NetFirewallRule -DisplayName 'Afey POS' -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
+  New-NetFirewallRule -DisplayName 'Afey POS' -Direction Inbound -Protocol TCP -LocalPort $usePort -Action Allow -Profile Private,Domain | Out-Null
 }
 
 Step 'Waiting for the server to start'
 $ok = $false
-for ($i = 0; $i -lt 30; $i++) {
-  try { $h = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 2; if ($h.status -eq 'ok') { $ok = $true; break } } catch { Start-Sleep -Seconds 2 }
+# The first start after an upgrade updates the database indexes (and a branch server's first sync): up to 3 minutes.
+$until = (Get-Date).AddMinutes(3)
+while ((Get-Date) -lt $until) {
+  try { $h = Invoke-RestMethod "http://127.0.0.1:$usePort/health" -TimeoutSec 3; if ($h.status -eq 'ok') { $ok = $true; break } } catch { Start-Sleep -Seconds 3 }
 }
 if ($ok) {
   Write-Host "`nAfey POS is running." -ForegroundColor Green
   $url = ((Get-Content (Join-Path $InstallDir 'server\.env')) -match '^PUBLIC_APP_URL=' | Select-Object -First 1) -replace '^PUBLIC_APP_URL=', ''
-  if ($Mode -eq 'branch') { Write-Host "Open http://localhost:$Port on this computer, or $url on other tills. Within a minute the business, staff and products arrive from head office: sign in with your head-office accounts." }
-  else { Write-Host "Open http://localhost:$Port on this computer, or $url on other tills, and create the owner account." }
+  if ($useMode -eq 'branch') { Write-Host "Open http://localhost:$usePort on this computer, or $url on other tills. Within a minute the business, staff and products arrive from head office: sign in with your head-office accounts." }
+  else { Write-Host "Open http://localhost:$usePort on this computer, or $url on other tills, and create the owner account." }
 } else {
-  Write-Warning "The server did not answer yet. Check: Get-ScheduledTaskInfo AfeyPOS, and docs/TROUBLESHOOTING.md"
+  Write-Warning "The server did not answer within 3 minutes. What it said:"
+  # Show the reason right here: the keeper's log and the end of the server's last error output.
+  $logs = Join-Path $InstallDir 'logs'
+  Get-Content (Join-Path $logs 'keeper.log') -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  keeper: $_" }
+  $err = Get-ChildItem $logs -Filter 'server-*.log.err' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+  if ($err) { Get-Content $err.FullName -Tail 25 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  server: $_" -ForegroundColor Yellow } }
+  $out = Get-ChildItem $logs -Filter 'server-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+  if ($out) { Get-Content $out.FullName -Tail 10 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  server: $_" } }
+  Write-Host "  Database service: $((Get-Service AfeyMongoDB -ErrorAction SilentlyContinue).Status)"
+  Write-Host "  It may still be starting: try  irm http://localhost:$usePort/health  in a minute. More: installer\windows\status.ps1"
 }

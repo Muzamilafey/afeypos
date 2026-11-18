@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { CASHIER_PAGE_OPTIONS, KENYA_BANKS, type CheckoutRules } from '@afeypos/shared';
+import { CASHIER_PAGE_OPTIONS, PAYMENT_METHOD_OPTIONS, KENYA_BANKS, type CheckoutRules } from '@afeypos/shared';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { Button, Card, cx, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, useToast } from '../../components/ui';
+import { Button, Card, Checkbox, cx, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
 
 interface Terminal { name: string; bank: string; terminalId: string }
@@ -63,6 +63,18 @@ export function CheckoutRulesPage() {
             <Toggle label="Lowering a quantity needs a supervisor" help="Changing 3 to 2 counts as removing an item." checked={rules.items.reduceQtyNeedsApproval} onChange={(v) => set('items', { reduceQtyNeedsApproval: v })} />
             <Toggle label="Clearing the whole sale needs a supervisor" checked={rules.items.clearNeedsApproval} onChange={(v) => set('items', { clearNeedsApproval: v })} />
             <Toggle label="Cashiers may hold and resume sales" checked={rules.items.holdAllowed} onChange={(v) => set('items', { holdAllowed: v })} />
+            <div className="py-3">
+              <Field label="Most of one item on a sale line" hint="0 = no limit. More needs a supervisor (e.g. stop 50 × sugar by mistake or bulk buying at retail).">
+                <Input type="number" min={0} value={rules.items.maxQtyPerLine} onChange={(e) => set('items', { maxQtyPerLine: Math.max(0, Number(e.target.value) || 0) })} />
+              </Field>
+            </div>
+            <div className="py-3">
+              <Field label="Lock the till after (minutes without use)" hint="0 = never. The cashier unlocks with their PIN, staff card or password; the sale on screen is kept.">
+                <Input type="number" min={0} max={240} value={rules.security.lockAfterMinutes} onChange={(e) => set('security', { lockAfterMinutes: Math.max(0, Math.min(240, Number(e.target.value) || 0)) })} />
+              </Field>
+            </div>
+            <Toggle label="Show products as a grid of pictures at the checkout" help="Supermarket style: the checkout page shows a grid of product pictures to tap. A product with no picture shows the business logo. Off: the usual scan-and-search checkout." checked={rules.display?.productGrid ?? false} onChange={(v) => set('display', { productGrid: v })} />
+            <Toggle label="Stock transfers need a manager's approval before dispatch" help="Staff request a transfer; a manager approves it (or dispatches it themselves)." checked={rules.transfers.approvalRequired} onChange={(v) => set('transfers', { approvalRequired: v })} />
           </div>
           <p className="mt-2 text-xs text-ink-500">Supervisors are users with the permission <b>Remove scanned items</b> (Branch manager and above). Change it in <Link className="text-brand-600 hover:underline" to="/settings/roles">Roles &amp; permissions</Link>.</p>
         </Card>
@@ -88,6 +100,74 @@ export function CheckoutRulesPage() {
             <Field label="Minimum opening float"><MoneyInput value={rules.shifts.minOpeningFloatCents} onChange={(v) => set('shifts', { minOpeningFloatCents: v ?? 0 })} /></Field>
             <Field label="Cash pickup above" hint="The till warns to hand over cash. 0 = never"><MoneyInput value={rules.shifts.maxCashInDrawerCents} onChange={(v) => set('shifts', { maxCashInDrawerCents: v ?? 0 })} /></Field>
           </div>
+        </Card>
+
+        <Card title={<span className="flex items-center gap-2"><Icon name="wallet" className="h-4 w-4 text-emerald-500" />Payment methods at checkout</span>}>
+          <p className="mb-2 text-xs text-ink-500">Only the ticked ways to pay appear on the checkout page, and the server refuses the others. Keep at least one.</p>
+          <div className="grid gap-1.5 sm:grid-cols-2" data-testid="payment-methods">
+            {PAYMENT_METHOD_OPTIONS.map((p) => {
+              const on = rules.paymentMethods.includes(p.key);
+              const last = on && rules.paymentMethods.length === 1;
+              return (
+                <label key={p.key} title={last ? 'At least one way to pay stays on' : undefined} className={cx('flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-sm transition', on ? 'border-brand-300 bg-brand-50/60 dark:border-brand-500/40 dark:bg-brand-500/10' : 'border-ink-200 dark:border-ink-700')}>
+                  <input type="checkbox" aria-label={p.label} className="mt-0.5 h-4 w-4 rounded border-ink-300 text-brand-600" checked={on} disabled={last} onChange={(e) => { setRules({ ...rules, paymentMethods: e.target.checked ? [...rules.paymentMethods, p.key] : rules.paymentMethods.filter((k) => k !== p.key) }); setDirty(true); }} />
+                  <span>{p.label}{p.hint && <span className="block text-xs text-ink-500">{p.hint}</span>}</span>
+                </label>
+              );
+            })}
+          </div>
+        </Card>
+
+        <Card title={<span className="flex items-center gap-2"><Icon name="phone" className="h-4 w-4 text-emerald-500" />M-Pesa at the till</span>}>
+          <div className="space-y-2">
+            <Checkbox label="Watch for a payment to the Paybill/Till as soon as M-Pesa is chosen" checked={rules.mpesa.watchTillPayments} onChange={(v) => set('mpesa', { watchTillPayments: v })} />
+            <p className="pl-6 text-xs text-ink-500">The till starts looking by itself, with nothing to press: the customer just pays. The cashier can still send a prompt or type the M-Pesa code.</p>
+            <Checkbox label="Complete the sale by itself when the payment covers it" checked={rules.mpesa.autoComplete} onChange={(v) => set('mpesa', { autoComplete: v })} />
+            <p className="pl-6 text-xs text-ink-500">The receipt prints at once (with the KRA QR code when eTIMS is on). Without this the cashier presses Complete sale.</p>
+          </div>
+        </Card>
+
+        <Card title={<span className="flex items-center gap-2"><Icon name="receipt" className="h-4 w-4 text-emerald-600" />KRA stamp on receipts</span>}>
+          <div className="space-y-2">
+            <Field label="Seconds to wait for the KRA stamp before printing" hint="The till shows a countdown and prints as soon as eTIMS / the ETR signs, with the KRA QR code. 0 = print at once.">
+              <Input type="number" min={0} max={120} value={rules.kra.waitSeconds} onChange={(e) => set('kra', { waitSeconds: Math.max(0, Math.min(120, Number(e.target.value) || 0)) })} />
+            </Field>
+            <Checkbox label="If KRA has not answered in time, print without the stamp" checked={rules.kra.printUnsigned} onChange={(v) => set('kra', { printUnsigned: v })} />
+            <p className="pl-6 text-xs text-ink-500">Off: the till waits for the stamp and you print once it arrives. Either way the sale is signed as soon as KRA answers, and a reprint carries the stamp.</p>
+          </div>
+        </Card>
+
+        <Card title={<span className="flex items-center gap-2"><Icon name="tag" className="h-4 w-4 text-amber-500" />Retail or wholesale</span>}>
+          <div className="divide-y divide-ink-100 dark:divide-ink-800">
+            <Toggle label="Show a Retail / Wholesale switch at checkout" help="Off: every sale at the till uses retail prices (customers set to wholesale still get theirs). On: the cashier can switch a sale to wholesale prices; products without a wholesale price stay at retail." checked={rules.pricing.wholesaleAtTill} onChange={(v) => set('pricing', { wholesaleAtTill: v })} />
+            <Toggle label="Wholesale price from a quantity" help="Products with a 'wholesale from quantity' get their wholesale price by themselves when one line reaches it (e.g. 12 or more). Off: retail price whatever the quantity." checked={rules.pricing.wholesaleByQuantity} onChange={(v) => set('pricing', { wholesaleByQuantity: v })} />
+            {rules.pricing.wholesaleAtTill && <Toggle label="Wholesale needs a supervisor" help="A supervisor approves wholesale sales on the till (staff card + PIN, fingerprint or email + PIN)." checked={rules.pricing.wholesaleNeedsApproval} onChange={(v) => set('pricing', { wholesaleNeedsApproval: v })} />}
+            <Toggle label="Round the total to the nearest whole shilling" help="The payable is rounded to the nearest 1 shilling (e.g. 99.90 becomes 100.00, 100.30 becomes 100.00). The difference is recorded as rounding. Useful where cents are not used and for M-Pesa, which takes whole shillings." checked={rules.pricing.roundToWholeShilling ?? false} onChange={(v) => set('pricing', { roundToWholeShilling: v })} />
+          </div>
+        </Card>
+
+        <Card title={<span className="flex items-center gap-2"><Icon name="users" className="h-4 w-4 text-amber-500" />Customer &amp; loyalty at checkout</span>}>
+          <p className="mb-2 text-xs text-ink-500">Whether the till collects the buyer's phone number, so loyalty points have an owner. Turned off, the till never asks and sales belong to nobody.</p>
+          <div className="grid gap-2 sm:grid-cols-2" data-testid="customer-rules">
+            {([
+              ['off', 'Do not collect it', 'No customer is shown or assigned to the sale'],
+              ['ask', 'Ask at checkout', 'The cashier types the number when the customer wants points'],
+              ['mpesa', 'From the M-Pesa payment', 'The number that paid is used by itself, nothing to type'],
+              ['both', 'Both', 'Typed if the cashier enters one, otherwise from the M-Pesa payment'],
+            ] as const).map(([v, t, d]) => (
+              <button key={v} type="button" role="radio" aria-checked={rules.customer.phone === v} onClick={() => { set('customer', { phone: v }); }}
+                className={cx('rounded-lg border p-3 text-left transition', rules.customer.phone === v ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500 dark:bg-brand-500/10' : 'border-ink-200 hover:border-ink-300 dark:border-ink-700')}>
+                <span className="block text-sm font-semibold">{t}</span><span className="block text-xs text-ink-500">{d}</span>
+              </button>
+            ))}
+          </div>
+          {rules.customer.phone !== 'off' && (
+            <div className="mt-3 space-y-2">
+              <Checkbox label="Add a customer for a number that is not known yet" checked={rules.customer.createFromPhone} onChange={(v) => set('customer', { createFromPhone: v })} />
+              <Checkbox label="Give loyalty points for the sale" checked={rules.customer.awardLoyalty} onChange={(v) => set('customer', { awardLoyalty: v })} />
+              {rules.customer.phone !== 'mpesa' && <Checkbox label="The cashier must enter a number before completing a sale" checked={rules.customer.required} onChange={(v) => set('customer', { required: v })} />}
+            </div>
+          )}
         </Card>
 
         <Card title={<span className="flex items-center gap-2"><Icon name="lock" className="h-4 w-4 text-sky-500" />Pages cashiers can open</span>}>

@@ -5,10 +5,11 @@ import { STANDARD_UNITS, type ProductField } from '@afeypos/shared';
 import { api, download } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useList, useLocations } from '../../lib/hooks';
-import { money, qty } from '../../lib/format';
+import { date, money, qty } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
-import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, useToast } from '../../components/ui';
+import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, MoneyInput, PageHeader, Select, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { EtimsItemClassPicker } from '../../components/EtimsItemClassPicker';
 
 const FIELD_LABELS: Partial<Record<ProductField, string>> = {
   brand: 'Brand', dimensions: 'Dimensions', grade: 'Grade', specifications: 'Specifications', size: 'Size', color: 'Colour', material: 'Material', model: 'Model',
@@ -27,19 +28,44 @@ export function ProductsPage() {
   const [params] = useSearchParams();
   const [q, setQ] = useState(params.get('q') ?? '');
   useEffect(() => setQ(params.get('q') ?? ''), [params]);
-  const [importing, setImporting] = useState(false);
-  const list = useList(['products'], '/products', { page, q: q || undefined, limit: 25 });
+  const [filter, setFilter] = useState<string | null>(null);
+  const list = useList(['products'], '/products', { page, q: q || undefined, limit: 25, lowStock: filter === 'lowStock' ? 'true' : undefined });
+  const stats = useQuery({ queryKey: ['catalog-stats'], queryFn: () => api<{ data: Record<string, number> }>('/catalog/stats').then((r) => r.data) });
+  const [selected, setSelected] = useState<string[]>([]);
+  const toggle = (id: string, on: boolean) => setSelected((x) => (on ? [...new Set([...x, id])] : x.filter((y) => y !== id)));
+  const rows = (list.data?.data ?? []) as any[];
+  const shown = rows.filter((r) => !filter || filter === 'lowStock'
+    || (filter === 'noBarcode' && r.type === 'stock' && !r.barcodes?.length)
+    || (filter === 'noPrice' && !r.prices?.retail)
+    || (filter === 'weighedNoPlu' && r.soldByWeight && !r.plu)
+    || (filter === 'belowCost' && r.costCents > 0 && r.prices?.retail > 0 && r.costCents > r.prices.retail));
+  const tiles: [string, string, string?][] = [['active', 'Active products'], ['noBarcode', 'No barcode', 'amber'], ['noPrice', 'No price', 'red'], ['belowCost', 'Price below cost', 'red'], ['weighedNoPlu', 'Weighed, no PLU', 'amber'], ['lowStock', 'Low stock', 'amber']];
   return (
     <div>
       <PageHeader title="Products" actions={<>
         <Button variant="secondary" onClick={() => download('/products-export.csv', 'products.csv')}><Icon name="download" className="h-4 w-4" />Export</Button>
-        {can('products.manage') && <Button variant="secondary" onClick={() => setImporting(true)}><Icon name="upload" className="h-4 w-4" />Import CSV</Button>}
+        {can('products.manage') && <Button variant="secondary" onClick={() => nav('/products/import')}><Icon name="upload" className="h-4 w-4" />Import products</Button>}
         {can('products.manage') && <Button onClick={() => nav('/products/new')}><Icon name="plus" className="h-4 w-4" />New product</Button>}
       </>} />
+      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" data-testid="product-stats">
+        {tiles.map(([k, label, tone]) => {
+          const n = stats.data?.[k] ?? 0;
+          const on = filter === k;
+          return (
+            <button key={k} type="button" onClick={() => setFilter(on || k === 'active' ? null : k)} aria-pressed={on}
+              className={`card p-3 text-left transition hover:border-brand-400 ${on ? 'ring-2 ring-brand-500' : ''}`}>
+              <div className="text-xs text-ink-500">{label}</div>
+              <div className={`text-xl font-semibold ${n && tone === 'red' ? 'text-red-600' : n && tone === 'amber' ? 'text-amber-600' : ''}`}>{n}</div>
+            </button>
+          );
+        })}
+      </div>
+      {can('products.manage') && selected.length > 0 && <BulkBar ids={selected} onDone={() => { setSelected([]); list.refetch(); stats.refetch(); }} />}
       <div className="card">
-        <div className="border-b border-ink-100 p-3 dark:border-ink-800"><Input className="max-w-sm" placeholder="Search name, SKU, barcode or department" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} /></div>
-        <DataTable rows={list.data?.data} loading={list.isLoading} error={list.error} page={page} total={list.data?.total} limit={25} onPage={setPage} onRowClick={(r: any) => nav(`/products/${r._id}`)} empty="No products yet"
+        <div className="border-b border-ink-100 p-3 dark:border-ink-800"><Input className="max-w-sm" placeholder="Search name, SKU, barcode or department" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />{can('products.manage') && shown.length > 0 && <Button size="sm" variant="ghost" className="ml-2" onClick={() => { const all = shown.every((r) => selected.includes(r._id)); shown.forEach((r) => toggle(r._id, !all)); }}>{shown.every((r) => selected.includes(r._id)) ? 'Clear selection' : 'Select this page'}</Button>}{filter && filter !== 'lowStock' && <span className="ml-3 text-xs text-ink-500">Filter applies to this page of results</span>}</div>
+        <DataTable rows={shown} loading={list.isLoading} error={list.error} page={page} total={list.data?.total} limit={25} onPage={setPage} onRowClick={(r: any) => nav(`/products/${r._id}`)} empty="No products yet"
           columns={[
+            ...(can('products.manage') ? [{ key: 'sel', header: '', render: (r: any) => <input type="checkbox" aria-label={`Select ${r.sku}`} checked={selected.includes(r._id)} onClick={(e) => e.stopPropagation()} onChange={(e) => toggle(r._id, e.target.checked)} /> }] : []),
             { key: 'name', header: 'Product', render: (r: any) => <div><div className="font-medium">{r.name}</div><div className="text-xs text-ink-500">{r.attributes?.author ? `${r.attributes.author} · ` : ''}{r.sku}{r.barcodes?.[0] ? ` · ${r.barcodes[0].code}` : ''}</div></div> },
             { key: 'type', header: 'Type', render: (r: any) => (r.type === 'stock' ? (r.trackSerials ? <Badge tone="blue">serialised</Badge> : r.trackBatches ? <Badge tone="blue">batches</Badge> : 'stock') : r.type) },
             { key: 'price', header: 'Retail', className: 'num', render: (r: any) => money(r.prices?.retail) },
@@ -48,36 +74,51 @@ export function ProductsPage() {
             { key: 'status', header: '', render: (r: any) => (!r.active ? <Badge>archived</Badge> : null) },
           ]} />
       </div>
-      {importing && <ImportModal onClose={() => setImporting(false)} />}
     </div>
   );
 }
 
-function ImportModal({ onClose }: { onClose: () => void }) {
-  const qc = useQueryClient();
-  const [csv, setCsv] = useState('');
-  const [result, setResult] = useState<any>(null);
-  const [error, setError] = useState<unknown>(null);
-  const run = async (commit: boolean) => {
-    setError(null);
+/** Bulk actions on the selected products. Price changes show a preview before anything is saved. */
+function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
+  const toast = useToast();
+  const { can } = useAuth();
+  const cats = useQuery({ queryKey: ['categories'], queryFn: () => api<{ data: any[] }>('/categories').then((r) => r.data) });
+  const [pct, setPct] = useState('');
+  const [preview, setPreview] = useState<any[] | null>(null);
+  const run = async (body: Record<string, unknown>, label?: string) => {
     try {
-      const r = await api<{ data: any }>('/products-import', { body: { csv, commit } });
-      setResult(r.data);
-      if (r.data.committed) qc.invalidateQueries({ queryKey: ['products'] });
-    } catch (e) { setError(e); }
+      const r = await api<{ data: any[] }>('/catalog/bulk', { body: { productIds: ids, ...body } });
+      if (body.action === 'update-prices' && body.dryRun !== false) { setPreview(r.data); return; }
+      const done = r.data.filter((x) => !String(x.result).startsWith('skipped')).length;
+      toast.success(`${label ?? 'Done'}: ${done} of ${r.data.length}`);
+      setPreview(null);
+      onDone();
+    } catch (e) { toast.error(e); }
   };
+  const priceBody = { action: 'update-prices', mode: 'percent', value: Math.round(Number(pct) * 100), roundTo: 100 };
   return (
-    <Modal open onClose={onClose} title="Import products from CSV" size="lg" footer={<><Button variant="secondary" onClick={() => run(false)} disabled={!csv}>Check file</Button><Button onClick={() => run(true)} disabled={!result || result.errors > 0 || result.committed}>Import</Button></>}>
-      <p className="mb-2 text-sm text-ink-500">Columns: sku, name, type, category, baseUnit, barcode, cost, retail, wholesale, contractor, taxRatePercent, reorderLevel, active. Existing SKUs are updated. Export first to get a template.</p>
-      <input type="file" accept=".csv,text/csv" onChange={async (e) => { const f = e.target.files?.[0]; if (f) { setCsv(await f.text()); setResult(null); } }} />
-      <ErrorBox error={error} />
-      {result && (
-        <div className="mt-3 text-sm">
-          <p>{result.committed ? 'Imported.' : `${result.results.length} rows checked, ${result.errors} errors.`}</p>
-          <ul className="mt-2 max-h-60 overflow-y-auto">{result.results.filter((r: any) => r.action === 'error').map((r: any) => <li key={r.row} className="text-red-600">Row {r.row} ({r.sku || 'no SKU'}): {r.error}</li>)}</ul>
+    <div className="card mb-3 p-3" data-testid="bulk-bar">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <b>{ids.length} selected</b>
+        <Button size="sm" variant="secondary" onClick={() => run({ action: 'generate-barcodes' }, 'In-store barcodes added')}>Generate barcodes</Button>
+        <Button size="sm" variant="secondary" onClick={() => run({ action: 'assign-plus' }, 'PLUs assigned')}>Assign PLUs</Button>
+        <Select className="w-44" aria-label="Move to category" value="" onChange={(e) => e.target.value && run({ action: 'set-category', categoryId: e.target.value === '-' ? null : e.target.value }, 'Category set')} placeholder="Move to category…" options={[{ value: '-', label: 'No category' }, ...(cats.data ?? []).map((c) => ({ value: c._id, label: c.name }))]} />
+        <Button size="sm" variant="secondary" onClick={() => run({ action: 'archive' }, 'Archived')}>Archive</Button>
+        <Button size="sm" variant="secondary" onClick={() => download('/products-export.csv', 'products.csv')}>Export</Button>
+        {can('prices.manage') && <>
+          <Input className="w-24" aria-label="Price change %" placeholder="+/- %" value={pct} onChange={(e) => setPct(e.target.value)} />
+          <Button size="sm" variant="secondary" disabled={!pct || Number.isNaN(Number(pct))} onClick={() => run(priceBody)}>Preview prices</Button>
+        </>}
+      </div>
+      {preview && (
+        <div className="mt-3">
+          <table className="w-full text-sm" data-testid="price-preview"><tbody>
+            {preview.map((x) => <tr key={x.productId} className="border-t border-ink-100 dark:border-ink-800"><td className="py-1">{x.name}</td><td className="num">{x.before ? money(x.before) : '—'}</td><td className="num">{x.after ? money(x.after) : '—'}</td><td className={x.result.startsWith('skipped') ? 'text-amber-700' : ''}>{x.result}</td></tr>)}
+          </tbody></table>
+          <div className="mt-2 flex gap-2"><Button size="sm" onClick={() => run({ ...priceBody, dryRun: false }, 'Prices changed')}>Apply these prices</Button><Button size="sm" variant="secondary" onClick={() => setPreview(null)}>Cancel</Button></div>
         </div>
       )}
-    </Modal>
+    </div>
   );
 }
 
@@ -86,12 +127,12 @@ type ProductForm = Record<string, any>;
 const emptyProduct = (baseUnit = 'pc'): ProductForm => ({
   name: '', sku: '', type: 'stock', categoryId: '', description: '', baseUnit, units: [], barcodes: [], costCents: 0, prices: { retail: null, wholesale: null, contractor: null }, priceTiers: [],
   minOrderQty: 0, taxRateBp: null, trackStock: true, trackBatches: false, trackSerials: false, allowFractional: false, reorderLevel: 0, reorderQty: 0, attributes: {},
-  warrantyMonths: 0, requiresPrescription: false, ageRestricted: false, minAge: 18, soldByWeight: false, plu: '', active: true,
+  warrantyMonths: 0, requiresPrescription: false, ageRestricted: false, minAge: 18, soldByWeight: false, plu: '', active: true, minPriceCents: null, branchPrices: [], maxStock: 0, binLocation: '',
 });
 
 export function ProductEditPage() {
   const { id } = useParams();
-  const isNew = id === 'new';
+  const isNew = !id || id === 'new';
   const nav = useNavigate();
   const toast = useToast();
   const qc = useQueryClient();
@@ -123,14 +164,15 @@ export function ProductEditPage() {
     setBusy(true);
     setError(null);
     try {
-      const body: ProductForm = { ...p, categoryId: p.categoryId || null, brandId: p.brandId || null, plu: p.plu || null, prices: Object.fromEntries(Object.entries(p.prices).filter(([, v]) => v !== null && v !== undefined)) };
-      for (const k of ['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants', 'stock', 'parentId'] as const) delete body[k];
+      const body: ProductForm = { ...p, categoryId: p.categoryId || null, brandId: p.brandId || null, supplierId: p.supplierId || null, binLocation: p.binLocation || undefined, plu: p.plu || null, prices: Object.fromEntries(Object.entries(p.prices).filter(([, v]) => v !== null && v !== undefined)) };
+      for (const k of ['_id', 'tenantId', 'createdAt', 'updatedAt', '__v', 'levels', 'variants', 'stock', 'parentId', 'pendingStock'] as const) delete body[k];
       if (isNew && opening.qty && Number(opening.qty) > 0) {
         const wh = locs.data?.warehouses.find((w) => w.isDefault) ?? locs.data?.warehouses[0];
         body.openingStock = [{ warehouseId: wh?._id, qty: Number(opening.qty), unitCostCents: opening.costCents ?? p.costCents, batchNo: opening.batchNo || undefined, expiryDate: opening.expiryDate || undefined, serials: opening.serials ? opening.serials.split(/[,\s]+/).filter(Boolean) : undefined }];
       }
-      const r = isNew ? await api<{ data: any }>('/products', { body }) : await api<{ data: any }>(`/products/${id}`, { method: 'PUT', body });
+      const r = isNew ? await api<{ data: any; pendingStock?: number }>('/products', { body }) : await api<{ data: any }>(`/products/${id}`, { method: 'PUT', body });
       toast.success('Product saved');
+      if ((r as { pendingStock?: number }).pendingStock) toast.info('Opening stock was sent to the branch server: it shows once that branch syncs.');
       qc.invalidateQueries({ queryKey: ['products'] });
       nav(`/products/${r.data._id}`, { replace: true });
     } catch (e) { setError(e); } finally { setBusy(false); }
@@ -172,6 +214,8 @@ export function ProductEditPage() {
             {has('requiresPrescription') && <Checkbox label="Prescription only (POM)" checked={p.requiresPrescription} onChange={(v) => set('requiresPrescription', v)} />}
             {has('ageRestricted') && <><Checkbox label="Age restricted" checked={p.ageRestricted} onChange={(v) => set('ageRestricted', v)} />{p.ageRestricted && <Field label="Minimum age"><Input type="number" value={p.minAge} onChange={(e) => set('minAge', Number(e.target.value))} /></Field>}</>}
             {has('plu') && <Field label="Scale PLU code" hint="Used for variable-weight barcodes"><Input value={p.plu} onChange={(e) => set('plu', e.target.value)} /></Field>}
+            <Field label="Shelf / bin location"><Input value={p.binLocation ?? ''} onChange={(e) => set('binLocation', e.target.value)} /></Field>
+            <Field label="Maximum stock" hint="0 = no limit"><Input type="number" min={0} value={p.maxStock ?? 0} onChange={(e) => set('maxStock', Number(e.target.value))} /></Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="Reorder level"><Input type="number" min={0} value={p.reorderLevel} onChange={(e) => set('reorderLevel', Number(e.target.value))} /></Field>
               <Field label="Reorder qty"><Input type="number" min={0} value={p.reorderQty} onChange={(e) => set('reorderQty', Number(e.target.value))} /></Field>
@@ -182,13 +226,23 @@ export function ProductEditPage() {
         {caps.modules.includes('etims') && (
           <Card title="KRA eTIMS">
             <div className="space-y-3">
-              <Field label="Item classification code" hint="KRA's code for this kind of item (from the eTIMS code list)"><Input inputMode="numeric" value={p.etims?.itemClsCd ?? ''} onChange={(e) => set('etims', { ...p.etims, itemClsCd: e.target.value.replace(/\D/g, '') })} /></Field>
-              <Field label="Tax type" hint="Leave as automatic to follow the VAT rate">
-                <Select value={p.etims?.taxTyCd ?? ''} onChange={(e) => set('etims', { ...p.etims, taxTyCd: e.target.value })} placeholder="Automatic (from VAT rate)"
-                  options={[{ value: 'B', label: 'B: VAT 16%' }, { value: 'E', label: 'E: VAT 8%' }, { value: 'C', label: 'C: zero-rated' }, { value: 'A', label: 'A: exempt' }, { value: 'D', label: 'D: non-VAT' }]} />
-              </Field>
-              {p.etims?.itemCd && <div className="text-xs text-ink-500">Item code {p.etims.itemCd}{p.etims.registeredAt ? ' · registered with KRA' : ' · not registered yet'}</div>}
-              {p.etims?.error && <div className="text-xs text-red-600">{p.etims.error}</div>}
+              <Checkbox label="Send this product to KRA (eTIMS)" checked={!p.etims?.doNotSend}
+                onChange={(v) => set('etims', { ...p.etims, doNotSend: !v })} />
+              {p.etims?.doNotSend ? (
+                <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                  This product is not registered with KRA and is left off fiscal receipts. Make sure leaving it off is allowed for your business.
+                </p>
+              ) : (
+                <>
+                  <EtimsItemClassPicker value={p.etims?.itemClsCd ?? ''} onChange={(code) => set('etims', { ...p.etims, itemClsCd: code })} />
+                  <Field label="Tax type" hint="Leave as automatic to follow the VAT rate">
+                    <Select value={p.etims?.taxTyCd ?? ''} onChange={(e) => set('etims', { ...p.etims, taxTyCd: e.target.value })} placeholder="Automatic (from VAT rate)"
+                      options={[{ value: 'B', label: 'B: VAT 16%' }, { value: 'E', label: 'E: VAT 8%' }, { value: 'C', label: 'C: zero-rated' }, { value: 'A', label: 'A: exempt' }, { value: 'D', label: 'D: non-VAT' }]} />
+                  </Field>
+                  {p.etims?.itemCd && <div className="text-xs text-ink-500">Item code {p.etims.itemCd}{p.etims.registeredAt ? ' · registered with KRA' : ' · not registered yet'}</div>}
+                  {p.etims?.error && <div className="text-xs text-red-600">{p.etims.error}</div>}
+                </>
+              )}
             </div>
           </Card>
         )}
@@ -211,22 +265,34 @@ export function ProductEditPage() {
         <Card title="Prices" className="lg:col-span-2">
           <div className="grid gap-3 sm:grid-cols-4">
             {can('products.cost') && <Field label="Cost (per base unit)"><MoneyInput value={p.costCents} onChange={(v) => set('costCents', v ?? 0)} /></Field>}
-            {caps.priceLists.map((pl) => <Field key={pl} label={`${pl} price`}><MoneyInput value={p.prices?.[pl]} onChange={(v) => set('prices', { ...p.prices, [pl]: v })} /></Field>)}
+            <Field label="Selling price"><MoneyInput value={p.prices?.retail} onChange={(v) => set('prices', { ...p.prices, retail: v })} /></Field>
             <Field label="Tax rate %" hint="Blank = business default"><Input inputMode="decimal" value={p.taxRateBp === null || p.taxRateBp === undefined ? '' : p.taxRateBp / 100} onChange={(e) => set('taxRateBp', e.target.value === '' ? null : Math.round(Number(e.target.value) * 100))} /></Field>
           </div>
-          {can('products.cost') && p.prices?.retail && p.costCents ? <p className="mt-2 text-xs text-ink-500">Retail margin {Math.round(((p.prices.retail - p.costCents) / p.prices.retail) * 100)}% (before tax)</p> : null}
+          {can('products.cost') && p.prices?.retail && p.costCents ? <p className="mt-2 text-xs text-ink-500">Margin {Math.round(((p.prices.retail - p.costCents) / p.prices.retail) * 100)}% (before tax)</p> : null}
+          <div className="mt-3 grid gap-3 sm:grid-cols-4">
+            <Field label="Minimum price" hint="Lower needs a manager at the till"><MoneyInput value={p.minPriceCents} onChange={(v) => set('minPriceCents', v)} /></Field>
+            <Field label="Wholesale price"><MoneyInput value={p.prices?.wholesale} onChange={(v) => set('prices', { ...p.prices, wholesale: v })} /></Field>
+            <Field label="Wholesale from quantity" hint={`${p.baseUnit} on one line; 0 = never`}><Input type="number" min={0} step="any" value={p.wholesaleMinQty ?? 0} onChange={(e) => set('wholesaleMinQty', Number(e.target.value))} /></Field>
+            {(locs.data?.branches.length ?? 0) > 1 && can('prices.manage') && (locs.data!.branches as any[]).map((b) => {
+              const cur = (p.branchPrices ?? []).find((x: any) => String(x.branchId) === b._id);
+              return (
+                <Field key={b._id} label={`${b.name} price`} hint="Blank = same as everywhere">
+                  <MoneyInput value={cur?.retail ?? null} onChange={(v) => set('branchPrices', [...(p.branchPrices ?? []).filter((x: any) => String(x.branchId) !== b._id), ...(v !== null ? [{ branchId: b._id, retail: v }] : [])])} />
+                </Field>
+              );
+            })}
+          </div>
           {caps.modules.includes('bulkDiscounts') && (
             <div className="mt-4">
               <div className="label">Quantity price tiers (price per base unit)</div>
               {p.priceTiers.map((t: any, i: number) => (
                 <div key={i} className="mb-2 flex gap-2">
-                  <Select value={t.priceList} onChange={(e) => set('priceTiers', p.priceTiers.map((x: any, j: number) => (j === i ? { ...x, priceList: e.target.value } : x)))} options={caps.priceLists.map((x) => ({ value: x, label: x }))} />
                   <Input type="number" placeholder="Min qty" value={t.minQty} onChange={(e) => set('priceTiers', p.priceTiers.map((x: any, j: number) => (j === i ? { ...x, minQty: Number(e.target.value) } : x)))} />
                   <MoneyInput value={t.priceCents} onChange={(v) => set('priceTiers', p.priceTiers.map((x: any, j: number) => (j === i ? { ...x, priceCents: v ?? 0 } : x)))} />
                   <Button variant="ghost" onClick={() => set('priceTiers', p.priceTiers.filter((_: any, j: number) => j !== i))}><Icon name="x" className="h-4 w-4" /></Button>
                 </div>
               ))}
-              <Button size="sm" variant="secondary" onClick={() => set('priceTiers', [...p.priceTiers, { priceList: caps.priceLists[0], minQty: 10, priceCents: p.prices?.retail ?? 0 }])}>Add tier</Button>
+              <Button size="sm" variant="secondary" onClick={() => set('priceTiers', [...p.priceTiers, { priceList: 'retail', minQty: 10, priceCents: p.prices?.retail ?? 0 }])}>Add tier</Button>
             </div>
           )}
         </Card>
@@ -250,7 +316,7 @@ export function ProductEditPage() {
                   <Input placeholder="Code" list="afey-units" value={u.code} onChange={(e) => { const known = unitList.data?.find((x) => x.code === e.target.value); upd({ code: e.target.value, ...(known && !u.name ? { name: known.name } : {}) }); }} />
                   <Input placeholder="Name" value={u.name} onChange={(e) => upd({ name: e.target.value })} />
                   <Input placeholder={`Factor (${p.baseUnit})`} type="number" step="any" value={u.factor} onChange={(e) => upd({ factor: Number(e.target.value) })} />
-                  {caps.priceLists.slice(0, 2).map((pl) => <MoneyInput key={pl} placeholder={`${pl} price`} value={u.prices?.[pl]} onChange={(v) => upd({ prices: { ...u.prices, [pl]: v } })} />)}
+                  <MoneyInput placeholder="Selling price" value={u.prices?.retail} onChange={(v) => upd({ prices: { ...u.prices, retail: v } })} />
                   <Button variant="ghost" onClick={() => set('units', p.units.filter((x: any) => x !== u))}><Icon name="x" className="h-4 w-4" /></Button>
                 </div>
               );
@@ -272,11 +338,69 @@ export function ProductEditPage() {
         {editable && <ImagesCard images={p.images ?? []} onChange={(images) => set('images', images)} />}
         {!isNew && existing.data?.levels && (
           <Card title="Stock by location" className="lg:col-span-3">
+            {(existing.data.pendingStock ?? []).map((r: any) => (
+              <div key={r._id} className={`mb-2 rounded-lg px-3 py-2 text-sm ${r.status === 'failed' ? 'bg-red-50 text-red-700 dark:bg-red-950/30' : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30'}`} data-testid="pending-stock">
+                {r.status === 'failed' ? `The branch could not add ${qty(r.qty)} ${p.baseUnit} to ${locs.data?.warehouses.find((w) => w._id === r.warehouseId)?.name ?? 'its store'}: ${r.error}` : `${qty(r.qty)} ${p.baseUnit} opening stock for ${locs.data?.warehouses.find((w) => w._id === r.warehouseId)?.name ?? 'a branch store'} is waiting for that branch server to sync.`}
+              </div>
+            ))}
             <ul className="text-sm">{existing.data.levels.map((l: any) => <li key={l._id} className="flex justify-between py-1"><span>{locs.data?.warehouses.find((w) => w._id === l.warehouseId)?.name}</span><span className="tabular-nums">{qty(l.qty)} {p.baseUnit} · reserved {qty(l.reserved)} · in transit {qty(l.inTransit)} · avg cost {money(l.avgCostCents)}</span></li>)}</ul>
           </Card>
         )}
+        {!isNew && can('purchasing.read') && <PurchaseHistoryCard productId={p._id ?? id!} unit={p.baseUnit} />}
+        {!isNew && can('purchasing.read') && <SupplierPricesCard productId={p._id ?? id!} unit={p.baseUnit} />}
       </div>
     </div>
+  );
+}
+
+/** Who sells this product: price, lead time and delivery record per supplier, best overall first. */
+function SupplierPricesCard({ productId, unit }: { productId: string; unit: string }) {
+  const q = useQuery({ queryKey: ['supplier-prices', productId], queryFn: () => api<{ data: { suppliers: any[]; best: string | null; basis: string } }>(`/products/${productId}/supplier-prices`).then((r) => r.data) });
+  const rows = q.data?.suppliers ?? [];
+  if (!rows.length) return null;
+  return (
+    <Card title="Supplier prices" className="lg:col-span-3">
+      <table className="w-full text-sm" data-testid="supplier-prices">
+        <thead><tr className="text-left text-xs text-ink-500"><th className="py-1">Supplier</th><th className="num">Last cost / {unit}</th><th className="num">Range</th><th className="num">Latest quote</th><th className="num">Lead time</th><th className="num">On time</th><th className="num">Complete</th><th className="num">Score</th></tr></thead>
+        <tbody>{rows.map((r) => (
+          <tr key={r.supplierId} className="border-t border-ink-100 dark:border-ink-800">
+            <td className="py-1.5 font-medium">{r.supplier}{r.supplierId === q.data?.best && <Badge tone="green">best overall</Badge>}{r.main && <Badge tone="blue">main</Badge>}</td>
+            <td className="num">{r.lastCostCents !== null ? money(r.lastCostCents) : '—'}</td>
+            <td className="num text-xs">{r.minCostCents !== null ? `${money(r.minCostCents)}–${money(r.maxCostCents)}` : '—'}</td>
+            <td className="num">{r.quoteCents !== null ? money(r.quoteCents) : '—'}</td>
+            <td className="num">{r.leadTimeDays} d</td>
+            <td className="num">{r.onTimePct === null ? '—' : `${r.onTimePct}%`}</td>
+            <td className="num">{r.fillRatePct === null ? '—' : `${r.fillRatePct}%`}</td>
+            <td className="num font-semibold">{r.score ?? '—'}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+      <p className="mt-2 text-xs text-ink-500">{q.data?.basis}</p>
+    </Card>
+  );
+}
+
+/** Every delivery of this product: when, from whom, how many and at what buying price. */
+function PurchaseHistoryCard({ productId, unit }: { productId: string; unit: string }) {
+  const { can } = useAuth();
+  const q = useQuery({ queryKey: ['purchase-history', productId], queryFn: () => api<any>('/reports/purchase-history', { query: { productId } }) });
+  const d = q.data;
+  if (!d?.data?.length) return null;
+  const s = d.summary;
+  return (
+    <Card title="Purchase history" className="lg:col-span-3">
+      {can('products.cost') && <p className="mb-2 text-sm text-ink-500">{s.deliveries} deliveries · {qty(s.qty)} {unit} · {money(s.spentCents)} spent · buying price {money(s.lowestCostCents)} to {money(s.highestCostCents)}</p>}
+      <table className="min-w-full text-sm">
+        <thead><tr><th className="th">Received</th><th className="th">GRN</th><th className="th">Supplier</th><th className="th">Invoice</th><th className="th num">Qty</th>{can('products.cost') && <><th className="th num">Unit cost</th><th className="th num">Total</th></>}</tr></thead>
+        <tbody>{d.data.map((r: any, i: number) => (
+          <tr key={i}>
+            <td className="td">{date(r.receivedAt)}</td><td className="td">{r.number}</td><td className="td">{r.supplier}</td><td className="td">{r.invoiceNo || '—'}</td>
+            <td className="td num">{qty(r.qty)} {r.unitCode}</td>
+            {can('products.cost') && <><td className="td num">{money(r.unitCostCents)}</td><td className="td num">{money(r.totalCents)}</td></>}
+          </tr>
+        ))}</tbody>
+      </table>
+    </Card>
   );
 }
 

@@ -116,7 +116,7 @@ describe('signing sales, credit notes and voids', () => {
     expect(r.status).toBe(201);
     await runJobs();
     let s = (await t.client.get(`/sales/${r.body.data._id}`)).body.data;
-    expect(s.etims.status).toBe('pending');
+    expect(s.etims.status).toBe('device_disconnected');
     expect(s.etims.error).toMatch(/Network error/);
     expect((await t.client.get(`/sales/${r.body.data._id}/receipt?format=text`)).text).toContain('awaiting signature');
     await runJobs();
@@ -126,5 +126,47 @@ describe('signing sales, credit notes and voids', () => {
     const status = await t.client.get('/etims/status');
     expect(status.body.data.sales.signed).toBeGreaterThanOrEqual(3);
     expect(status.body.data.failed).toHaveLength(0);
+  });
+});
+
+describe('products excluded from KRA', () => {
+  it('leaves "do not send" items off fiscal invoices and skips a sale made only of them', async () => {
+    const taxed = await createProduct(t.client, { name: 'Milk 500ml', sku: 'KMILK', prices: { retail: 6000 }, taxRateBp: 1600, etims: { itemClsCd: '50202200' }, openingStock: [{ warehouseId: wh, qty: 10 }] });
+    const excluded = await createProduct(t.client, { name: 'Charity envelope', sku: 'KCHAR', prices: { retail: 5000 }, taxRateBp: 0, etims: { doNotSend: true }, openingStock: [{ warehouseId: wh, qty: 10 }] });
+    await runJobs();
+    // The excluded product is not registered as a KRA item.
+    expect(MockEtimsGateway.items.find((i) => i.itemNm === 'Charity envelope')).toBeUndefined();
+
+    // A sale of only the excluded product reserves no invoice number.
+    const onlyExcluded = (await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: excluded._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 5000 }] })).body.data;
+    expect((await t.client.get(`/sales/${onlyExcluded._id}`)).body.data.etims).toBeFalsy();
+
+    // A mixed sale is fiscalised but the excluded line is left off the invoice sent to KRA.
+    const before = MockEtimsGateway.sales.length;
+    const mixed = (await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: taxed._id, qty: 1 }, { productId: excluded._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 11000 }] })).body.data;
+    expect((await t.client.get(`/sales/${mixed._id}`)).body.data.etims.status).toBe('pending');
+    await runJobs();
+    expect(MockEtimsGateway.sales.length).toBe(before + 1);
+    const sent = MockEtimsGateway.sales.at(-1)!;
+    expect(sent.totItemCnt).toBe(1);
+    expect(sent.itemList.map((i: any) => i.itemNm)).toEqual(['Milk 500ml']);
+  });
+});
+
+describe('choosing the ETR device', () => {
+  it('a till lists the devices it may sign with, and the sale is signed by the chosen one', async () => {
+    // A second ETR device, set up for this till only, comes first for it.
+    const second = await t.client.post('/settings/integrations', { kind: 'etims', provider: 'mock', name: 'Counter 2 ETR', settings: { tin: 'p051234567x', bhfId: '01', dvcSrlNo: 'DVC-002' }, tillIds: [till] });
+    expect(second.status).toBe(201);
+    const devices = (await t.client.get(`/etims/devices?tillId=${till}`)).body.data;
+    expect(devices.map((d: any) => d.name)).toEqual(['Counter 2 ETR', 'eTIMS (simulator)']);
+    expect(devices[0]).toMatchObject({ isDefault: true, mode: 'oscu', bhfId: '01', serial: 'DVC-002' });
+
+    // Without a choice the till's own device signs; with one, the device asked for.
+    const product = await createProduct(t.client, { name: 'Soda 500ml', sku: 'KSODA', prices: { retail: 10000 }, openingStock: [{ warehouseId: wh, qty: 10 }] });
+    const sale = (await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: product._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 10000 }] })).body.data;
+    expect(String((await t.client.get(`/sales/${sale._id}`)).body.data.etims.configId)).toBe(second.body.data.id);
+    const chosen = (await t.client.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: product._id, qty: 1 }], payments: [{ method: 'cash', amountCents: 10000 }], etimsConfigId: cfgId })).body.data;
+    expect(String((await t.client.get(`/sales/${chosen._id}`)).body.data.etims.configId)).toBe(cfgId);
   });
 });

@@ -17,6 +17,8 @@ export interface LoyaltyProgram {
   welcomeBonus: number;
   /** Earning speed per CRM tier name, in basis points (10000 = normal, 15000 = 1.5 times). */
   tierMultipliersBp: Record<string, number>;
+  /** Points not used within this many months of being earned expire (oldest first); 0 = never. */
+  pointsExpireMonths: number;
 }
 
 export const LOYALTY_DEFAULTS: LoyaltyProgram = {
@@ -27,6 +29,7 @@ export const LOYALTY_DEFAULTS: LoyaltyProgram = {
   maxRedeemBp: 10000,
   welcomeBonus: 0,
   tierMultipliersBp: {},
+  pointsExpireMonths: 0,
 };
 
 const int = (v: unknown, d: number, min = 0, max = Number.MAX_SAFE_INTEGER) => (typeof v === 'number' && Number.isInteger(v) && v >= min ? Math.min(v, max) : d);
@@ -44,6 +47,7 @@ export function mergeLoyalty(saved: unknown): LoyaltyProgram {
     maxRedeemBp: int(s.maxRedeemBp, LOYALTY_DEFAULTS.maxRedeemBp, 0, 10000),
     welcomeBonus: int(s.welcomeBonus, LOYALTY_DEFAULTS.welcomeBonus, 0, 1_000_000),
     tierMultipliersBp: tiers,
+    pointsExpireMonths: int(s.pointsExpireMonths, LOYALTY_DEFAULTS.pointsExpireMonths, 0, 120),
   };
 }
 

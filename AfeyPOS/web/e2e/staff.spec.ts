@@ -36,7 +36,7 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   await page.goto('/settings/users');
   await page.getByRole('button', { name: 'Add user' }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('Name').fill('Juma Cashier');
+  await dialog.getByLabel('Name', { exact: true }).fill('Juma Cashier');
   await dialog.getByLabel('Email').fill('juma@mandera.test');
   await dialog.getByLabel('Password').fill('Juma12345');
   await dialog.getByLabel(/Till PIN/).fill('2468');
@@ -55,7 +55,7 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   // Register the reader and start the bridge with its key.
   await page.goto('/settings/hardware');
   await page.getByRole('button', { name: 'Register reader' }).click();
-  await page.getByRole('dialog').getByLabel('Name').fill('Till 1 reader');
+  await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Till 1 reader');
   await page.getByRole('dialog').getByLabel('Make').selectOption('simulator');
   await page.getByRole('dialog').getByRole('button', { name: 'Register' }).click();
   const reader = JSON.parse((await page.getByTestId('reader-config').textContent())!);
@@ -69,6 +69,9 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   await expect.poll(async () => fetch(`http://127.0.0.1:${BRIDGE_PORT}/status`).then((r) => r.status).catch(() => 0)).toBe(401);
 
   // Pair this browser with the bridge.
+  // The simple setup (download the installer, Connect) is shown first; this bridge runs on a test port, so pair by hand.
+  await expect(page.getByTestId('bridge-steps')).toContainText('Download the bridge installer');
+  await page.getByText('Set up by hand (address and pairing token)').click();
   await page.getByLabel('Bridge address').fill(`http://127.0.0.1:${BRIDGE_PORT}`);
   await page.getByLabel('Pairing token').fill(TOKEN);
   await page.getByRole('button', { name: 'Test connection' }).click();
@@ -83,30 +86,27 @@ test('staff card and fingerprint sign-in', async ({ page, context }) => {
   await page.locator('[aria-haspopup="menu"]').click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
-  // Card + PIN.
+  // The card alone: scanning it (code + Enter) signs in, no PIN.
   await page.getByRole('radio', { name: 'Staff card' }).click();
+  await expect(page.getByLabel('PIN')).toHaveCount(0);
   await page.getByLabel('Staff card').fill(code.toLowerCase());
   await page.getByLabel('Staff card').press('Enter');
-  await page.getByLabel('PIN').fill('2468');
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: 'test-results/card-login.png' });
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Quick start' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /here is your day/ })).toBeVisible();
   await page.locator('[aria-haspopup="menu"]').click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
   // Fingerprint: touch only, no email.
   await page.getByRole('radio', { name: 'Fingerprint' }).click();
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Quick start' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /here is your day/ })).toBeVisible();
   await page.locator('[aria-haspopup="menu"]').click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
   // Clock in with the card from the sign-in screen.
   await page.getByRole('button', { name: 'Clock in / out' }).click();
+  await expect(page.getByRole('dialog').getByLabel('PIN')).toHaveCount(0);
   await page.getByRole('dialog').getByLabel('Staff card').fill(code);
-  await page.getByRole('dialog').getByLabel('PIN').fill('2468');
-  await page.getByRole('button', { name: 'Clock with card' }).click();
+  await page.getByRole('dialog').getByLabel('Staff card').press('Enter');
   await expect(page.getByRole('status')).toContainText('Juma Cashier: clocked in');
   await page.getByRole('button', { name: 'Use fingerprint' }).click();
   await expect(page.getByRole('status')).toContainText('Juma Cashier: clocked out');

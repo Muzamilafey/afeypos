@@ -8,6 +8,7 @@ import { ConfirmProvider, ToastProvider } from './components/ui';
 import { ApiError } from './lib/api';
 import { applyTheme } from './lib/workstation';
 import { initPwa } from './lib/pwa';
+import { applyFavicon } from './lib/appIcon';
 import '@fontsource/open-sans/400.css';
 import '@fontsource/open-sans/600.css';
 import '@fontsource/open-sans/700.css';
@@ -15,6 +16,7 @@ import './styles/index.css';
 
 applyTheme();
 initPwa();
+void applyFavicon();
 
 const queryClient = new QueryClient({
   defaultOptions: {

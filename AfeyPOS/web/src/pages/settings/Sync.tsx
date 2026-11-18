@@ -4,7 +4,8 @@ import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { dateTime } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
-import { Badge, Button, Card, ErrorBox, Loading, Modal, PageHeader, useToast } from '../../components/ui';
+import { Badge, Button, Card, ErrorBox, Loading, Modal, PageHeader, useConfirm, useToast } from '../../components/ui';
+import { OverrideModal } from '../POS';
 
 interface HqStatus {
   role: 'hq';
@@ -22,6 +23,7 @@ interface BranchStatus {
   lastSuccessAt?: string;
   last?: { startedAt: string; finishedAt?: string; ok: boolean; error?: string; pushed: Record<string, number>; pulled: Record<string, number> };
   conflicts: Conflict[];
+  check?: { branchFound: boolean; branchName?: string; warehouses: number; tills: number; totals: { branches: number; warehouses: number; tills: number }; storesWithoutBranch: string[] };
 }
 interface Conflict { _id: string; collectionName: string; docId: string; reason: string; branchCode?: string; at: string }
 
@@ -71,10 +73,17 @@ function HqSync({ data, onChange }: { data: HqStatus; onChange: () => void }) {
   const qc = useQueryClient();
   const [issued, setIssued] = useState<{ branch: string; env: Record<string, string>; keyFingerprint: string } | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const issue = async (id: string, code: string) => {
+  const confirm = useConfirm();
+  // New tokens and stopping a branch server need an administrator to confirm on the spot.
+  const [approval, setApproval] = useState<{ message: string; run: (token: string) => Promise<void> } | null>(null);
+  const issue = (id: string, code: string, renew: boolean) => setApproval({
+    message: renew ? `Issue a new token for ${code}? Its server stops syncing until the new token is in its .env.` : `Give ${code} its own server?`,
+    run: (t) => doIssue(id, code, t),
+  });
+  const doIssue = async (id: string, code: string, approvalToken: string) => {
     setError(null);
     try {
-      const r = await api<{ data: { env: Record<string, string>; keyFingerprint: string } }>(`/settings/branches/${id}/sync-token`, { body: {} });
+      const r = await api<{ data: { env: Record<string, string>; keyFingerprint: string } }>(`/settings/branches/${id}/sync-token`, { body: {}, headers: { 'X-Approval': approvalToken } });
       setIssued({ branch: code, env: r.data.env, keyFingerprint: r.data.keyFingerprint });
       onChange();
       qc.invalidateQueries({ queryKey: ['locations'] });
@@ -82,9 +91,9 @@ function HqSync({ data, onChange }: { data: HqStatus; onChange: () => void }) {
       setError(e);
     }
   };
-  const revoke = async (id: string) => {
-    if (!window.confirm('Stop this branch server from syncing? Its stock will be managed from head office again.')) return;
-    await api(`/settings/branches/${id}/sync-token`, { method: 'DELETE' }).then(onChange).catch(toast.error);
+  const revoke = async (id: string, code: string) => {
+    if (!(await confirm({ title: `Stop ${code}'s server?`, message: 'It can no longer sync, and its stock is managed from head office again.', confirmLabel: 'Continue', danger: true }))) return;
+    setApproval({ message: `Stop ${code}'s branch server from syncing.`, run: (t) => api(`/settings/branches/${id}/sync-token`, { method: 'DELETE', headers: { 'X-Approval': t } }).then(onChange) });
   };
   return (
     <>
@@ -98,8 +107,8 @@ function HqSync({ data, onChange }: { data: HqStatus; onChange: () => void }) {
           { key: 'e', header: '', render: (b) => (b.sync.lastError ? <span className="text-xs text-red-600">{b.sync.lastError}</span> : null) },
           { key: 'a', header: '', render: (b) => (
             <div className="flex gap-1">
-              <Button size="sm" variant="secondary" onClick={() => issue(b.id, b.code)}>{b.hasServer ? 'New token' : 'Give it its own server'}</Button>
-              {b.hasServer && <Button size="sm" variant="ghost" onClick={() => revoke(b.id)}>Stop</Button>}
+              <Button size="sm" variant="secondary" onClick={() => issue(b.id, b.code, b.hasServer)}>{b.hasServer ? 'New token' : 'Give it its own server'}</Button>
+              {b.hasServer && <Button size="sm" variant="ghost" onClick={() => revoke(b.id, b.code)}>Stop</Button>}
             </div>
           ) },
         ]} />
@@ -107,6 +116,10 @@ function HqSync({ data, onChange }: { data: HqStatus; onChange: () => void }) {
         <div className="mt-2"><ErrorBox error={error} /></div>
       </Card>
       <Conflicts rows={data.conflicts} onChange={onChange} />
+      {approval && (
+        <OverrideModal permission="settings.manage" title="Administrator confirmation" who="administrator" allowLogin message={`${approval.message} An owner or administrator confirms with a fingerprint, staff card, or username / email with PIN or password.`}
+          onClose={() => setApproval(null)} onApproved={(t) => { const a = approval; setApproval(null); a.run(t).catch(toast.error); }} />
+      )}
       {issued && (
         <Modal open onClose={() => setIssued(null)} title={`Branch server for ${issued.branch}`} size="lg" footer={<Button onClick={() => setIssued(null)}>Done</Button>}>
           <p className="mb-2 text-sm">Put these lines in the branch server's <code>server/.env</code>. The token is shown only once.</p>
@@ -152,7 +165,44 @@ function BranchSync({ data, onChange }: { data: BranchStatus; onChange: () => vo
         )}
         {!data.enabled && <p className="mt-3 text-sm text-amber-700">Automatic sync is off (SYNC_ENABLED=false in server/.env).</p>}
       </Card>
+      {data.check && <BranchCheck code={data.branchCode} check={data.check} onChange={onChange} />}
       <Conflicts rows={data.conflicts} onChange={onChange} />
     </>
+  );
+}
+
+/** Whether this server has what it needs to sell: its own branch, that branch's stores and tills. */
+function BranchCheck({ code, check, onChange }: { code: string; check: NonNullable<BranchStatus['check']>; onChange: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const ok = check.branchFound && check.warehouses > 0 && check.tills > 0 && !check.storesWithoutBranch.length;
+  const again = async () => {
+    setBusy(true);
+    try {
+      await api('/settings/sync/resync', { body: { scope: 'down' } });
+      const r = await api<{ data: BranchStatus['last'] }>('/settings/sync/run', { body: {} });
+      if (r.data?.ok) toast.success('Downloaded everything again from head office');
+      else toast.error(r.data?.error ?? 'Sync failed');
+      onChange();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const row = (good: boolean, text: string) => <li className="flex items-start gap-2"><Badge tone={good ? 'green' : 'red'}>{good ? 'OK' : 'Missing'}</Badge><span>{text}</span></li>;
+  return (
+    <Card title="This server's branch" className="mt-4" actions={<Button variant="secondary" loading={busy} onClick={again}>Download everything again</Button>}>
+      <ul className="space-y-2 text-sm" data-testid="branch-check">
+        {row(check.branchFound, check.branchFound ? `Branch ${code}: ${check.branchName}` : `Branch ${code} has not arrived from head office (BRANCH_CODE must match the branch code at head office exactly)`)}
+        {row(check.warehouses > 0, `${check.warehouses} store${check.warehouses === 1 ? '' : 's'} of branch ${code}`)}
+        {row(check.tills > 0, `${check.tills} till${check.tills === 1 ? '' : 's'} of branch ${code}`)}
+        {check.storesWithoutBranch.length > 0 && row(false, `Stores whose branch is missing here: ${check.storesWithoutBranch.join(', ')}`)}
+      </ul>
+      <p className="mt-3 text-xs text-ink-500">
+        On this server: {check.totals.branches} branches, {check.totals.warehouses} stores, {check.totals.tills} tills.
+        {ok ? ' Everything needed to sell is here.' : ' If something is missing, press Download everything again (safe: nothing is lost), then check "Records that need attention" below.'}
+      </p>
+    </Card>
   );
 }

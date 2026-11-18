@@ -3,7 +3,7 @@ import { supervisorCoversBranch, userPermissions } from '../../lib/access.js';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { CASHIER_PAGE_OPTIONS, isPlainCashier, mergeCheckoutRules, NAVIGATION, navigationFor, type Permission } from '@afeypos/shared';
-import { AttendanceRecord, Session, Till, User, IdempotencyRecord } from '../../models/index.js';
+import { AttendanceRecord, BiometricTemplate, Session, Till, User, IdempotencyRecord } from '../../models/index.js';
 import { authenticateCard } from '../staff/cards.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { authenticate, signedIn, signShortToken, verifyShortToken } from '../../http/auth.js';
@@ -18,15 +18,18 @@ import {
   revokeAllSessions, revokeSession, rotateRefresh, setRefreshCookie,
 } from './service.js';
 
-export const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: () => (env().NODE_ENV === 'test' ? 100_000 : 30), standardHeaders: 'draft-7', legacyHeaders: false, message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts, please try again later' } } });
+export const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: () => (env().NODE_ENV === 'test' ? 100_000 : env().AUTH_RATE_LIMIT), standardHeaders: 'draft-7', legacyHeaders: false, message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts, please try again later' } } });
 
 const router = Router();
 
-const loginSchema = z.object({ email: z.string().trim().toLowerCase().email(), password: z.string().min(1).max(200) });
+// "email" also takes a username.
+const loginSchema = z.object({ email: z.string().trim().toLowerCase().min(3).max(200), password: z.string().min(1).max(200) });
+/** A user by email or username (anything with an @ is an email). */
+export const userByLogin = (login: string) => User.findOne(login.includes('@') ? { email: login } : { username: login });
 
 router.post('/login', authLimiter, async (req, res) => {
   const body = parse(loginSchema, req.body);
-  const user = await User.findOne({ email: body.email });
+  const user = await userByLogin(body.email);
   const u = await checkCredentials(User, user, body.password);
   if (u.twoFactor?.enabled) {
     const mfaToken = signShortToken({ sub: String(u._id), tid: String(req.tenant!._id) }, 'mfa', 300);
@@ -54,10 +57,10 @@ router.post('/mfa', authLimiter, async (req, res) => {
 
 /** Quick PIN sign-in for cashiers on a shared till. PIN users cannot have 2FA bypassed: users with 2FA must use password. */
 router.post('/pin-login', authLimiter, async (req, res) => {
-  const body = parse(z.object({ email: z.string().trim().toLowerCase().email().optional(), pin: z.string().regex(/^\d{4,8}$/) }), req.body);
+  const body = parse(z.object({ email: z.string().trim().toLowerCase().min(3).max(200).optional(), pin: z.string().regex(/^\d{4,8}$/) }), req.body);
   const lookupHash = pinLookupHash(String(req.tenant!._id), body.pin);
   const u = body.email
-    ? await User.findOne({ email: body.email, status: 'active' })
+    ? await userByLogin(body.email).where({ status: 'active' })
     : await User.findOne({ pinLookupHash: lookupHash, status: 'active' });
   if (u?.lockedUntil && u.lockedUntil > new Date()) throw new AppError(423, 'ACCOUNT_LOCKED', 'Account temporarily locked');
   if (!u || !u.pinHash || u.twoFactor?.enabled || !(await verifyPassword(body.pin, u.pinHash))) {
@@ -81,20 +84,20 @@ router.post('/pin-login', authLimiter, async (req, res) => {
 
 /** Staff card sign-in: scan the card barcode, then the PIN (unless the business allows card only). */
 router.post('/card-login', authLimiter, async (req, res) => {
-  const body = parse(z.object({ code: z.string().trim().min(4).max(40), pin: z.string().regex(/^\d{4,8}$/).optional() }), req.body);
-  const u = await authenticateCard(req, body.code, body.pin);
+  const body = parse(z.object({ code: z.string().trim().min(4).max(40) }).passthrough(), req.body);
+  const u = await authenticateCard(req, body.code);
   if (u.twoFactor?.enabled) throw new AppError(403, 'TWO_FACTOR_REQUIRED', 'This account uses two-step verification; sign in with email and password');
   await User.updateOne({ _id: u._id }, { $set: { failedLogins: 0, lastLoginAt: new Date() } });
   const s = await issueSession({ userType: 'tenant', userId: u._id, tenantId: req.tenant!._id, req, expiresAt: new Date(Date.now() + 16 * 3600_000) });
-  await audit(req, { action: 'auth.login', entity: 'User', entityId: u._id, details: { method: body.pin ? 'card+pin' : 'card' } });
+  await audit(req, { action: 'auth.login', entity: 'User', entityId: u._id, details: { method: 'card' } });
   setRefreshCookie(res, REFRESH_COOKIE, s.refreshToken);
   res.json({ accessToken: s.accessToken, expiresIn: s.expiresIn });
 });
 
 /** Clock in / out at the till with the staff card (the fingerprint equivalent goes through the device bridge). */
 router.post('/clock', authLimiter, async (req, res) => {
-  const body = parse(z.object({ code: z.string().trim().min(4).max(40), pin: z.string().regex(/^\d{4,8}$/).optional(), branchId: z.string().regex(/^[a-f0-9]{24}$/).optional() }), req.body);
-  const u = await authenticateCard(req, body.code, body.pin);
+  const body = parse(z.object({ code: z.string().trim().min(4).max(40), branchId: z.string().regex(/^[a-f0-9]{24}$/).optional() }).passthrough(), req.body);
+  const u = await authenticateCard(req, body.code);
   await User.updateOne({ _id: u._id }, { $set: { failedLogins: 0 } });
   const rec = await clockInOut(u._id, 'card', { branchId: body.branchId });
   res.json({ data: { name: u.name, kind: rec.kind, at: rec.at } });
@@ -121,18 +124,19 @@ router.post('/logout', async (req, res) => {
 // Any signed-in cashier may ask; the supervisor's own permissions decide.
 router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor to approve'), async (req, res) => {
   const body = parse(
-    z.object({ email: z.string().trim().toLowerCase().email().optional(), cardCode: z.string().trim().max(40).optional(), password: z.string().optional(), pin: z.string().optional(), permission: z.string(), tillId: objectId.optional() }),
+    z.object({ email: z.string().trim().toLowerCase().min(3).max(200).optional(), cardCode: z.string().trim().max(40).optional(), password: z.string().optional(), pin: z.string().optional(), permission: z.string(), tillId: objectId.optional() }),
     req.body,
   );
   let sup;
   if (body.cardCode) {
     // Scanning the supervisor's card is the approval: no PIN. The card code is long and random, and each
     // approval is single use, limited to the supervisor's permissions and branches, and audited.
-    sup = await authenticateCard(req, body.cardCode, undefined, { skipPin: true }).catch(() => null);
+    sup = await authenticateCard(req, body.cardCode).catch(() => null);
     if (!sup) throw unauthorized('Supervisor card is not recognised');
   } else {
-    sup = body.email ? await User.findOne({ email: body.email, status: 'active' }) : null;
-    const secretOk = sup && (body.password ? await verifyPassword(body.password, sup.passwordHash) : body.pin && sup.pinHash ? await verifyPassword(body.pin, sup.pinHash) : false);
+    sup = body.email ? await userByLogin(body.email).where({ status: 'active' }) : null;
+    // One box for "PIN or password": either may match.
+    const secretOk = sup && ((body.password ? await verifyPassword(body.password, sup.passwordHash) : false) || (body.pin && sup.pinHash ? await verifyPassword(body.pin, sup.pinHash) : false));
     if (!sup || !secretOk) throw unauthorized('Supervisor credentials are invalid');
   }
   // Same effective permissions as a sign-in: custom roles count and per-user denials apply.
@@ -144,6 +148,37 @@ router.post('/override', authLimiter, authenticate, signedIn('asks a supervisor 
   const token = signShortToken({ sub: String(sup._id), tid: String(req.tenant!._id), perm: body.permission, for: String(req.auth!.userId), jti: crypto.randomUUID() }, 'override', 120);
   await audit(req, { action: 'auth.override_granted', entity: 'User', entityId: sup._id, details: { permission: body.permission, forUser: String(req.auth!.userId) } });
   res.json({ overrideToken: token, supervisor: { id: sup._id, name: sup.name } });
+});
+
+/**
+ * Unlocks a till that locked itself after a while unused: only the signed-in user's own PIN, password or staff
+ * card does. Someone else must sign in instead (Switch user), so sales stay with the right cashier.
+ */
+router.post('/unlock', authLimiter, authenticate, signedIn('unlocks the till'), async (req, res) => {
+  const body = parse(z.object({ secret: z.string().max(200).optional(), cardCode: z.string().trim().max(40).optional(), loginToken: z.string().max(2000).optional() }).refine((b) => b.secret || b.cardCode || b.loginToken, 'Enter your PIN or password, scan your card, or use your fingerprint'), req.body);
+  const me = await User.findById(req.auth!.userId).select('+passwordHash +pinHash').where({ status: 'active' });
+  if (!me) throw unauthorized();
+  let ok = false;
+  let by = 'pin/password';
+  if (body.loginToken) {
+    // A fingerprint verified through /biometrics/verify; it must be the same locked person.
+    by = 'fingerprint';
+    const c = verifyShortToken<{ sub: string; tid: string; jti: string }>(body.loginToken, 'bio-login');
+    ok = Boolean(c && c.sub === String(me._id) && c.tid === String(req.tenant!._id));
+  } else if (body.cardCode) {
+    const holder = await authenticateCard(req, body.cardCode).catch(() => null);
+    ok = Boolean(holder && String(holder._id) === String(me._id));
+  } else if (body.secret) {
+    ok = (me.passwordHash ? await verifyPassword(body.secret, me.passwordHash) : false) || (me.pinHash ? await verifyPassword(body.secret, me.pinHash) : false);
+    // A card scanned into the same box.
+    if (!ok && body.secret.length >= 6) {
+      const holder = await authenticateCard(req, body.secret).catch(() => null);
+      ok = Boolean(holder && String(holder._id) === String(me._id));
+    }
+  }
+  await audit(req, { action: ok ? 'auth.till_unlocked' : 'auth.till_unlock_failed', entity: 'User', entityId: me._id, details: { by: body.cardCode ? 'card' : by } });
+  if (!ok) throw unauthorized(body.cardCode ? 'That card is not yours: sign in as that person instead' : body.loginToken ? 'That fingerprint is not yours' : 'Wrong PIN or password');
+  res.json({ ok: true });
 });
 
 /** Exchanges a one-time fingerprint login token (from /biometrics/verify) for a session. */
@@ -175,7 +210,7 @@ router.get('/me', async (req, res) => {
   const u = await User.findById(a.userId).lean();
   const user = {
     id: a.userId, name: a.name, email: a.email, roles: a.roles, branchIds: a.branchIds, kind: a.kind,
-    twoFactorEnabled: Boolean(u?.twoFactor?.enabled), emailVerified: Boolean(u?.emailVerifiedAt), hasPin: Boolean(u?.pinHash), phone: u?.phone,
+    twoFactorEnabled: Boolean(u?.twoFactor?.enabled), emailVerified: Boolean(u?.emailVerifiedAt), hasPin: Boolean(u?.pinHash), hasFingerprint: await BiometricTemplate.exists({ userId: a.userId }).then(Boolean), phone: u?.phone,
   };
   // Checkout rules: pages a plain cashier may open (Checkout itself always stays).
   const rules = mergeCheckoutRules(t.settings?.checkoutRules, t.settings ?? {});

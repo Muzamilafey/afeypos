@@ -38,7 +38,8 @@ const grnSchema = new Schema(
   {
     number: { type: String, required: true },
     clientRequestId: String,
-    supplierId: { type: ObjectId, ref: 'Supplier', required: true },
+    /** Empty for stock received without a supplier (Inventory → Receive stock): no payable is created. */
+    supplierId: { type: ObjectId, ref: 'Supplier' },
     purchaseOrderId: ObjectId,
     warehouseId: { type: ObjectId, required: true },
     supplierInvoiceNo: String,
@@ -56,6 +57,11 @@ const grnSchema = new Schema(
         batchNo: String,
         expiryDate: Date,
         serials: [String],
+        /** Delivered but damaged or rejected: not added to stock, not charged. */
+        damagedQty: Number,
+        /** Expected on the order but not delivered this time. */
+        shortQty: Number,
+        note: String,
         _id: false,
       },
     ],

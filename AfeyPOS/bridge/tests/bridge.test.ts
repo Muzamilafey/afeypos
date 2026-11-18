@@ -4,7 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import type { AddressInfo } from 'node:net';
 import { createBridgeServer, hmac } from '../src/server.js';
-import { displayFrame, parseScaleFrame } from '../src/adapters/serial.js';
+import { combineScaleFrames, displayFrame, parseScaleFrame } from '../src/adapters/serial.js';
 import { HelperProcessAdapter, SimulatorAdapter, createFingerprintAdapter } from '../src/adapters/fingerprint.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +64,15 @@ describe('device bridge', () => {
     expect((await fetch(`${base}/status`, { headers: { ...H, Origin: 'http://pos.local' } })).status).toBe(200);
   });
 
+  it('pairs Afey POS without copying the token, but only for its own pages', async () => {
+    const ok = await fetch(`${base}/pair`, { headers: { Origin: 'http://pos.local' } });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ ok: true, token: 'x'.repeat(32) });
+    // Another website, or a request without an Origin, gets nothing.
+    expect((await fetch(`${base}/pair`, { headers: { Origin: 'http://evil.example' } })).status).toBe(403);
+    expect((await fetch(`${base}/pair`)).status).toBe(403);
+  });
+
   it('lists printers, saves the receipt printer chosen in Afey POS and prints a test page', async () => {
     const list = await (await fetch(`${base}/printers`, { headers: H })).json();
     expect(Object.keys(list.configured)).toContain('receipt');
@@ -115,9 +124,15 @@ describe('device bridge', () => {
   });
 
   it('parses scale frames and formats pole display text', () => {
-    expect(parseScaleFrame('ST,GS,+  1.250kg')).toEqual({ weightKg: 1.25, stable: true });
+    expect(parseScaleFrame('ST,GS,+  1.250kg')).toEqual({ weightKg: 1.25, stable: true, kind: 'gross' });
     expect(parseScaleFrame('US,GS,+  0.400kg')?.stable).toBe(false);
     expect(parseScaleFrame('  350 g')?.weightKg).toBe(0.35);
+    expect(parseScaleFrame('ST,NT,+  1.000kg')).toEqual({ weightKg: 1, stable: true, kind: 'net' });
+    expect(combineScaleFrames(['ST,GS,+  1.250kg', 'ST,TR,+  0.250kg', 'ST,NT,+  1.000kg'])).toMatchObject({ grossKg: 1.25, tareKg: 0.25, netKg: 1, stable: true });
+    expect(combineScaleFrames(['ST,GS,+  1.250kg', 'ST,NT,+  1.000kg'])).toMatchObject({ tareKg: 0.25, netKg: 1 });
+    expect(combineScaleFrames(['  0.750 kg'])).toMatchObject({ grossKg: 0.75, tareKg: 0, netKg: 0.75 });
+    expect(combineScaleFrames(['US,GS,+  0.400kg'])?.stable).toBe(false);
+    expect(combineScaleFrames(['hello'])).toBeNull();
     expect(displayFrame('Total', 'KES 130.00').length).toBe(41);
   });
 });

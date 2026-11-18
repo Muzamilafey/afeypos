@@ -97,4 +97,22 @@ describe('checkout rules', () => {
     expect(report.text).toContain('Closing cash count');
     expect(report.text).toMatch(/Coin Ksh.*0\.50/);
   });
+
+  it('offers only the payment methods the owner allows, and the server refuses the others', async () => {
+    expect((await setRules({ paymentMethods: [] })).status).toBe(400); // a till always needs a way to be paid
+    const r = await setRules({ paymentMethods: ['cash', 'mpesa'] });
+    expect(r.status).toBe(200);
+    expect(r.body.data.rules.paymentMethods).toEqual(['cash', 'mpesa']);
+    expect((await cashier.get('/auth/me')).body.tenant.checkoutRules.paymentMethods).toEqual(['cash', 'mpesa']);
+    await openShift(cashier, till, 100000).catch(() => undefined); // the earlier test closed the shift
+    const p = await createProduct(t.client, { prices: { retail: 5000 }, openingStock: [{ warehouseId: wh, qty: 10 }] });
+    const sell = (method: string) => cashier.post('/sales', { clientRequestId: rid(), tillId: till, lines: [{ productId: p._id, qty: 1 }], payments: [{ method, amountCents: 5000, reference: method === 'card' ? 'AUTH A1B2C3' : undefined }] });
+    const card = await sell('card');
+    expect(card.status).toBe(422);
+    expect(card.body.error.code).toBe('PAYMENT_METHOD_OFF');
+    expect((await sell('bank')).body.error.code).toBe('PAYMENT_METHOD_OFF');
+    expect((await sell('cash')).status).toBe(201);
+    await setRules({ paymentMethods: ['cash', 'mpesa', 'card', 'gateway', 'bank', 'credit', 'loyalty', 'voucher'] });
+    expect((await sell('card')).status).toBe(201);
+  });
 });

@@ -1,17 +1,19 @@
 import type { Request } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
-import { allocateProportionally, calculateTax, lineAmount, mergeCheckoutRules, pointsEarned, percentOf, PRICE_LISTS, roundQty, type Permission, type PriceListKey } from '@afeypos/shared';
+import { allocateProportionally, calculateTax, lineAmount, mergeCheckoutRules, paymentMethodAllowed, PAYMENT_METHOD_OPTIONS, pointsEarned, percentOf, PRICE_LISTS, roundQty, type Permission, type PriceListKey } from '@afeypos/shared';
 import {
   OnlineOrder, CashMovement, Customer, LedgerEntry, PaymentIntent, Product, Promotion, Sale, SalesDocument, SerialItem, Shift, Till, User, Branch,
 } from '../../models/index.js';
 import { withTransaction } from '../../db/connection.js';
 import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
+import { normalizePhone } from '../../lib/phone.js';
 import { nextNumber } from '../../lib/numbering.js';
 import { audit } from '../../lib/audit.js';
 import { objectId, positiveCents, qty } from '../../http/validate.js';
 import { assertBranchAccess, can } from '../../http/auth.js';
 import { adjustReserved, applyMovement } from '../inventory/stock.js';
+import { env } from '../../config/env.js';
 import { quotePrice } from '../catalog/pricing.js';
 import { resolveUnit } from '../catalog/units.js';
 import { consumeOverride } from '../auth/routes.js';
@@ -25,6 +27,8 @@ export const checkoutSchema = z.object({
   clientRequestId: z.string().min(8).max(100),
   tillId: objectId,
   customerId: objectId.optional(),
+  /** The customer's phone, typed at the till (Checkout rules → Customer & loyalty decide what happens with it). */
+  customerPhone: z.string().trim().max(20).optional(),
   priceList: z.enum(PRICE_LISTS).optional(),
   salesRepId: objectId.optional(),
   couponCode: z.string().trim().max(40).optional(),
@@ -60,6 +64,8 @@ export const checkoutSchema = z.object({
     .max(10)
     .default([]),
   ageVerified: z.boolean().optional(),
+  /** Which KRA ETR device signs this sale (when the till may use more than one). */
+  etimsConfigId: objectId.optional(),
   overrideToken: z.string().optional(),
   salesDocumentId: objectId.optional(),
   /** Completing an online order: the prices the customer was given are honoured. */
@@ -92,6 +98,17 @@ export class Authorizer {
     this.overrideToken = undefined;
     this.overrides.push({ action, supervisorId: new Types.ObjectId(sup), at: new Date() });
   }
+}
+
+/**
+ * The customer behind a phone number: an existing one, or a new "walk-in" record created from it when the
+ * rules allow, so loyalty points have an owner. Never creates one for a number that is already known.
+ */
+async function customerByPhone(phone: string, create: boolean, userId: unknown) {
+  const found = await Customer.findOne({ phone, active: true });
+  if (found || !create) return found;
+  const [made] = await Customer.create([{ code: await nextNumber('customer', 'C', 5), name: `Customer ${phone.slice(-4)}`, phone, kind: 'retail', createdBy: userId }]);
+  return made;
 }
 
 export async function checkout(req: Request, input: CheckoutInput) {
@@ -138,10 +155,23 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     if (String(shift.userId) !== String(userId) && !can(req, 'shifts.manage')) throw forbidden('This till has a shift opened by another cashier');
   }
 
-  const customer = input.customerId ? await Customer.findOne({ _id: input.customerId, active: true }) : null;
+  // The phone number of whoever is buying: typed at the till, or taken from the M-Pesa payment used.
+  const phoneRule = rules.customer.phone;
+  const typedPhone = phoneRule === 'ask' || phoneRule === 'both' ? normalizePhone(input.customerPhone ?? '') : null;
+  if (rules.customer.required && phoneRule !== 'off' && phoneRule !== 'mpesa' && !typedPhone && !input.customerId) {
+    throw unprocessable('Enter the customer’s phone number for this sale', 'CUSTOMER_PHONE_REQUIRED');
+  }
+  if (input.customerPhone && !typedPhone && phoneRule !== 'off') throw badRequest('Enter a valid phone number, e.g. 0712345678');
+  let customer = input.customerId ? await Customer.findOne({ _id: input.customerId, active: true }) : null;
   if (input.customerId && !customer) throw notFound('Customer');
+  if (!customer && typedPhone && phoneRule !== 'off') customer = await customerByPhone(typedPhone, rules.customer.createFromPhone, userId);
   const priceList = (input.priceList ?? (customer?.priceList as PriceListKey | undefined) ?? caps.checkout.defaultPriceList) as PriceListKey;
   if (!caps.priceLists.includes(priceList)) throw badRequest(`Price list ${priceList} is not enabled`);
+  // Wholesale chosen at the till (not the customer's own price list, nor a quotation/order already priced) follows the checkout rules.
+  if (input.priceList === 'wholesale' && customer?.priceList !== 'wholesale' && !input.salesDocumentId) {
+    if (!rules.pricing.wholesaleAtTill) throw unprocessable('Wholesale sales are turned off at the till (Settings → Checkout rules)', 'WHOLESALE_OFF');
+    if (rules.pricing.wholesaleNeedsApproval) await authz.require('sales.price.override', 'sell at wholesale prices');
+  }
 
   // ---- price every line ----
   const priced = [];
@@ -166,12 +196,16 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
       if (!input.ageVerified) throw unprocessable(`${product.name} is age-restricted: confirm the customer is ${product.minAge ?? 18} or older`, 'AGE_VERIFICATION_REQUIRED');
       ageVerifiedBy = userId;
     }
-    const quote = await quotePrice({ product, unitCode: unit.code, qty: lineQty, priceList, customerId: customer?._id, branchId: till.branchId, couponCode: input.couponCode });
+    if (rules.items.maxQtyPerLine > 0 && lineQty > rules.items.maxQtyPerLine) await authz.require('sales.qty.override', `${lineQty} × ${product.name} (limit ${rules.items.maxQtyPerLine} per line)`);
+    const quote = await quotePrice({ product, unitCode: unit.code, qty: lineQty, priceList, customerId: customer?._id, branchId: till.branchId, couponCode: input.couponCode, wholesaleByQty: rules.pricing.wholesaleByQuantity });
     let unitPrice = quote.unitPriceCents;
     if (l.unitPriceCents !== undefined && l.unitPriceCents !== unitPrice && promised.get(String(product._id)) === l.unitPriceCents) {
       unitPrice = l.unitPriceCents;
     } else if (l.unitPriceCents !== undefined && l.unitPriceCents !== unitPrice) {
-      await authz.require('sales.price.override', `price change on ${product.name}`);
+      // Below the product's minimum price needs someone who sets prices (one approval covers it).
+      const min = product.minPriceCents ? Math.round(product.minPriceCents * unit.factor) : 0;
+      if (min && l.unitPriceCents < min) await authz.require('prices.manage', `selling ${product.name} below its minimum price`);
+      else await authz.require('sales.price.override', `price change on ${product.name}`);
       unitPrice = l.unitPriceCents;
     }
     const gross = lineAmount(lineQty, unitPrice);
@@ -204,9 +238,12 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     const tax = calculateTax(amount, rate, settings.pricesIncludeTax ?? true);
     return { ...p, cartShare: cartShares[i], rate, tax };
   });
-  const totalCents = lines.reduce((a, l) => a + l.tax.gross, 0);
+  const lineTotalCents = lines.reduce((a, l) => a + l.tax.gross, 0);
   const taxCents = lines.reduce((a, l) => a + l.tax.tax, 0);
   const netCents = lines.reduce((a, l) => a + l.tax.net, 0);
+  // Round the payable to the nearest whole shilling when the rules say so; the difference is kept as rounding.
+  const roundingCents = rules.pricing.roundToWholeShilling && lineTotalCents > 0 ? Math.round(lineTotalCents / 100) * 100 - lineTotalCents : 0;
+  const totalCents = lineTotalCents + roundingCents;
 
   // ---- payments ----
   const paymentsSum = input.payments.reduce((a, p) => a + p.amountCents, 0);
@@ -220,8 +257,14 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
   let changeCents = 0;
   let cashCents = 0;
   let loyaltyRedeemed = 0;
+  // Used when the rules say the buyer is known by the number that paid with M-Pesa.
+  let mpesaPayerPhone: string | null = null;
   for (const p of input.payments) {
     if (p.amountCents === 0) continue;
+    if (!input.onlineOrderId && !paymentMethodAllowed(rules, p.method)) {
+      const label = PAYMENT_METHOD_OPTIONS.find((o) => o.key === p.method)?.label ?? p.method;
+      throw unprocessable(`${label} is not accepted at checkout (Settings → Checkout rules)`, 'PAYMENT_METHOD_OFF');
+    }
     const row: Record<string, unknown> = { method: p.method, amountCents: p.amountCents, reference: p.reference };
     switch (p.method) {
       case 'cash': {
@@ -240,12 +283,14 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
         if (!caps.modules.includes(isMpesa ? 'mpesa' : 'payments')) throw badRequest(isMpesa ? 'M-Pesa is not enabled' : 'Payment gateways are not enabled');
         if (!p.paymentIntentId) throw badRequest('Electronic payments must reference a confirmed payment');
         const intent = await PaymentIntent.findOneAndUpdate(
-          { _id: p.paymentIntentId, provider: isMpesa ? 'mpesa' : { $ne: 'mpesa' }, status: 'succeeded', $expr: { $gte: [{ $subtract: ['$paidAmountCents', '$allocatedCents'] }, p.amountCents] } },
+          // A branch server uses only payments that are its own (HQ hands out unassigned Paybill/Till payments by code).
+          { _id: p.paymentIntentId, provider: isMpesa ? 'mpesa' : { $ne: 'mpesa' }, status: 'succeeded', ...(env().DEPLOYMENT_MODE === 'branch' ? { branchId: { $ne: null } } : {}), $expr: { $gte: [{ $subtract: ['$paidAmountCents', '$allocatedCents'] }, p.amountCents] } },
           { $inc: { allocatedCents: p.amountCents }, $set: { allocatedTo: { kind: 'sale', id: saleId, number }, allocatedAt: new Date() } },
           { new: true },
         );
         if (!intent) throw unprocessable('The payment is not confirmed, has already been used, or is less than the amount', isMpesa ? 'MPESA_NOT_AVAILABLE' : 'PAYMENT_NOT_AVAILABLE');
         row.reference = intent.receiptNumber ?? intent.reference;
+        if (isMpesa && !mpesaPayerPhone) mpesaPayerPhone = normalizePhone(intent.phone ?? '') || null;
         row.paymentIntentId = intent._id;
         if (!isMpesa) row.provider = intent.provider;
         break;
@@ -348,8 +393,12 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     dueDate = new Date(Date.now() + (customer.paymentTermsDays ?? 30) * 86400_000);
     await LedgerEntry.create([{ partyType: 'customer', partyId: customer._id, kind: 'credit_sale', amountCents: creditCents, openCents: creditCents, balanceAfterCents: updated!.balanceCents, dueDate, ref: { type: 'Sale', id: saleId, number }, userId }]);
   }
+  // Nobody typed a number, but M-Pesa knows who paid: that is the customer, so the points are theirs.
+  if (!customer && mpesaPayerPhone && (phoneRule === 'mpesa' || phoneRule === 'both')) {
+    customer = await customerByPhone(mpesaPayerPhone, rules.customer.createFromPhone, userId);
+  }
   let loyaltyEarned = 0;
-  if (customer && customer.kind !== 'walk_in' && caps.modules.includes('loyalty')) {
+  if (customer && customer.kind !== 'walk_in' && caps.modules.includes('loyalty') && rules.customer.awardLoyalty) {
     // Higher CRM tiers earn faster (Loyalty program > tier multipliers); points paid with never earn points.
     const tier = Object.keys(program.tierMultipliersBp).length ? await customerTier(customer._id, settings.crm?.tiers) : null;
     loyaltyEarned = pointsEarned(program, totalCents - loyaltyRedeemed * program.pointValueCents, tier);
@@ -361,6 +410,8 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     const rep = await User.findById(repId).lean();
     if (rep?.commissionRateBp) commissionCents = percentOf(netCents, rep.commissionRateBp);
   }
+
+  if (customer) await Sale.updateOne({ _id: saleId }, { $set: { customerId: customer._id, ...(customer.name ? { customerName: customer.name } : {}) } });
 
   if (shift && cashCents > 0) {
     await CashMovement.create([{ shiftId: shift._id, tillId: till._id, type: 'sale', amountCents: cashCents, userId, ref: { type: 'Sale', id: saleId, number } }]);
@@ -397,6 +448,7 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
       discountCents: totalDiscount,
       taxCents,
       totalCents,
+      roundingCents,
       netCents,
       costCents: saleLines.reduce((a, l) => a + l.costCents, 0),
       payments,
@@ -415,7 +467,7 @@ async function checkoutTx(req: Request, input: CheckoutInput) {
     },
   ]);
 
-  await queueSaleForEtims(saleId, till.branchId, caps);
+  await queueSaleForEtims(saleId, till.branchId, caps, { tillId: till._id, configId: input.etimsConfigId as any });
   await audit(req, {
     action: 'sale.completed',
     entity: 'Sale',

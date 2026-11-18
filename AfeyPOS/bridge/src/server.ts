@@ -172,7 +172,8 @@ export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
       biometricDevicePaired: Boolean(cfg.biometricDevice?.deviceId),
     }),
     'POST /print/raw': async (b) => {
-      const printer = cfg.printers[b.printer ?? 'receipt'];
+      // A configured printer by name, or (labels) any printer installed on this PC by its system name.
+      const printer = b.systemPrinter ? parsePrinter({ type: 'system', name: String(b.systemPrinter) }) : cfg.printers[b.printer ?? 'receipt'];
       if (!printer) throw Object.assign(new Error('Printer not configured'), { status: 404 });
       await printRaw(printer, Buffer.from(String(b.base64), 'base64'));
       return { ok: true };
@@ -210,6 +211,14 @@ export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
       if (!cfg.scale) throw Object.assign(new Error('Scale not configured'), { status: 404 });
       return readScale(cfg.scale);
     },
+    /** Tare/zero only with the command from the scale's manual; otherwise the cashier presses the key on the scale. */
+    'POST /scale/tare': async (b) => {
+      if (!cfg.scale) throw Object.assign(new Error('Scale not configured'), { status: 404 });
+      const cmd = b.zero ? cfg.scale.zeroCommand : cfg.scale.tareCommand;
+      if (!cmd) throw Object.assign(new Error(`Press ${b.zero ? 'ZERO' : 'TARE'} on the scale (no command set for this model)`), { status: 409 });
+      await writeSerial(cfg.scale, Buffer.from(cmd.replace(/\\r/g, '\r').replace(/\\n/g, '\n'), 'ascii'));
+      return { ok: true };
+    },
     /** Capture for enrolment: returns a signed template the manager submits to the server. */
     'POST /fingerprint/enroll-capture': async (b) => {
       const dev = cfg.biometricDevice;
@@ -246,6 +255,12 @@ export function createBridgeServer(cfg: BridgeConfig, deps: BridgeDeps = {}) {
       res.end(JSON.stringify(body));
     };
     if (!allowed) return send(403, { error: 'Origin not allowed' });
+    // Pairing without copying the token: only an Afey POS page (an allowed origin, checked above) may ask for it.
+    // Other websites are refused by the origin check, and a request without an Origin header gets nothing here.
+    if (req.method === 'GET' && (req.url ?? '').split('?')[0] === '/pair') {
+      if (!origin) return send(403, { error: 'Pair from Afey POS in the browser' });
+      return send(200, { ok: true, token: cfg.pairingToken, port: cfg.port });
+    }
     const token = String(req.headers['x-afey-bridge-token'] ?? '');
     if (!safeEqual(token, cfg.pairingToken)) return send(401, { error: 'Invalid pairing token' });
     const handler = routes[`${req.method} ${(req.url ?? '').split('?')[0]}`];

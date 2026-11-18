@@ -24,13 +24,14 @@ interface ReceiptSale {
   grossCents?: number | null;
   discountCents?: number | null;
   taxCents?: number | null;
+  roundingCents?: number | null;
   totalCents: number;
   payments: { method: string; provider?: string | null; amountCents: number; reference?: string | null; tenderedCents?: number | null; changeCents?: number | null }[];
   changeCents?: number | null;
   creditCents?: number | null;
   status?: string;
   loyalty?: { earned?: number | null; redeemed?: number | null } | null;
-  etims?: { status?: string | null; invcNo?: number | null; rcptNo?: number | null; totRcptNo?: number | null; intrlData?: string | null; rcptSign?: string | null; sdcId?: string | null; mrcNo?: string | null; sdcDateTime?: string | null; qrUrl?: string | null } | null;
+  etims?: { status?: string | null; invcNo?: number | null; rcptNo?: number | null; totRcptNo?: number | null; intrlData?: string | null; rcptSign?: string | null; sdcId?: string | null; mrcNo?: string | null; sdcDateTime?: string | null; qrUrl?: string | null; device?: string | null; cuInvoiceNo?: string | null; cuSerial?: string | null } | null;
 }
 
 export interface ReceiptOptions {
@@ -86,7 +87,26 @@ export function etimsLines(sale: ReceiptSale, width: number): string[] {
     out.push(rest);
     return out;
   };
-  if (e.status !== 'signed') return ['KRA eTIMS: awaiting signature', 'Reprint this receipt for the signed copy'];
+  if (e.status !== 'signed') {
+    // Never presented as fiscalized until the device or KRA has answered.
+    const who = e.device === 'etr' ? 'KRA ETR' : 'KRA eTIMS';
+    const waiting = ['pending', 'processing', 'awaiting_confirmation', 'device_disconnected'].includes(String(e.status ?? 'pending'));
+    return waiting
+      ? [`${who}: awaiting signature`, 'NOT YET A FISCAL RECEIPT', 'Reprint this receipt for the signed copy']
+      : [`${who}: not fiscalized`, 'NOT A FISCAL RECEIPT'];
+  }
+  if (e.device === 'etr') {
+    // Signed by the ETR device (TIMS control unit) on the Afey POS computer.
+    const when = e.sdcDateTime && !/^\d{14}$/.test(e.sdcDateTime) && !Number.isNaN(Date.parse(e.sdcDateTime))
+      ? new Date(e.sdcDateTime).toLocaleString('en-GB', { timeZone: 'Africa/Nairobi', hour12: false })
+      : etimsTime(e.sdcDateTime);
+    return [
+      'KRA TIMS · ETR',
+      ...wrap('CU Serial No.: ', e.cuSerial ?? e.sdcId ?? ''),
+      ...wrap('CU Invoice No.: ', e.cuInvoiceNo ?? ''),
+      ...(when ? [pad('Date', when, width)] : []),
+    ];
+  }
   return [
     'KRA eTIMS',
     pad('CU Invoice No.', `${e.sdcId ?? ''}/${e.rcptNo ?? ''}`, width),
@@ -160,6 +180,7 @@ function buildModel(tenant: ReceiptTenant, sale: ReceiptSale, opts: ReceiptOptio
   const totals: ReceiptModel['totals'] = [];
   const subtotal = sale.grossCents ?? sale.totalCents + (sale.discountCents ?? 0);
   if (sale.discountCents) totals.push({ label: 'Subtotal', value: m(subtotal) }, { label: 'Discounts', value: `-${m(sale.discountCents)}` });
+  if (sale.roundingCents) totals.push({ label: 'Rounding', value: `${sale.roundingCents > 0 ? '+' : '-'}${m(Math.abs(sale.roundingCents))}` });
   totals.push({ label: 'TOTAL', value: m(sale.totalCents), grand: true });
   if (sale.taxCents && !s.show.taxSummary) totals.push({ label: 'Incl. VAT', value: m(sale.taxCents) });
 
@@ -294,6 +315,24 @@ export function renderReceiptText(tenant: ReceiptTenant, sale: ReceiptSale, opts
   const lines = textLines(model, sale, width).map((l) => (l.center ? center(l.text, width) : l.text));
   const end = [model.footer ? wrapText(model.footer, width).map((l) => center(l, width)).join('\n') : '', model.s.show.poweredBy ? center('Powered by Afey POS', width) : ''].filter(Boolean);
   return [...lines, '', ...end].join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+/** A short slip proving the chosen printer works (and the drawer opens), printed from Hardware → This computer. */
+export function testSlipEscPos(business: string, printer: string, width: number, openDrawer: boolean): Buffer {
+  const b = new EscPosBuilder(width);
+  b.align('center').size(true).bold(true).line('TEST PRINT');
+  b.size(false).line(business).line();
+  b.align('left').line(`Printer: ${printer.slice(0, width)}`);
+  b.line(`Printed: ${new Date().toLocaleString('en-KE', { dateStyle: 'medium', timeStyle: 'short' })}`);
+  b.line('-'.repeat(width));
+  b.line('If you can read this, receipts will print');
+  b.line('here by themselves after every sale.');
+  if (openDrawer) {
+    b.line('The cash drawer should have opened.');
+    b.openDrawer();
+  }
+  b.feed(3).cut();
+  return b.build();
 }
 
 export function renderReceiptEscPos(tenant: ReceiptTenant, sale: ReceiptSale, opts: ReceiptOptions = {}): Buffer {

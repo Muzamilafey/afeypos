@@ -13,7 +13,7 @@ import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
 import { IntegrationConfig, MpesaEvent, PaymentIntent, Tenant, Till, type PaymentIntentDoc } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
-import { requirePermission } from '../../http/auth.js';
+import { assertBranchAccess, requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import { safeEqual } from '../../lib/crypto.js';
@@ -23,21 +23,57 @@ import { logger } from '../../lib/logger.js';
 import { emitToTenant } from '../../realtime/socket.js';
 import { enqueue, registerJob } from '../../jobs/queue.js';
 import { DarajaClient, MockMpesaGateway, parseAsyncResult, parseDarajaDate, parseStkCallback, splitParty, stkResultToStatus, type MpesaGateway } from '../../integrations/mpesa/daraja.js';
-import { findActiveConfig, openSecrets } from '../integrations/configs.js';
+import { configsForTill, findActiveConfig, openSecrets } from '../integrations/configs.js';
 import { handleB2CResult } from './payouts.js';
-import { finalizeIntent, presentIntent } from './intents.js';
+import { finalizeIntent, presentIntent, reviveConfirmedPayment } from './intents.js';
 import { verifyGatewayIntent } from './gateways.js';
 
-export function gatewayFor(cfg: InstanceType<typeof IntegrationConfig>): MpesaGateway {
+/**
+ * One M-Pesa account has two separate parts, each with its own Daraja app if Safaricom gave two:
+ *  - "stk": prompts on the customer's phone (Lipa Na M-Pesa Online), signed with the store/Paybill number and passkey;
+ *  - "c2b": the customer pays the Paybill/Till themselves; confirmations come to the URLs registered on the C2B number.
+ * Either part can be turned off; a till then uses the other part, or another account for the same Paybill/Till.
+ */
+export type MpesaPart = 'stk' | 'c2b';
+type CfgLike = { provider?: string | null; settings?: any; secretsEnc?: unknown };
+
+export function mpesaParts(cfg: CfgLike): { stk: boolean; c2b: boolean } {
+  const s = cfg.settings ?? {};
+  return { stk: s.stkEnabled !== false && s.stkEnabled !== 'false', c2b: s.c2bEnabled !== false && s.c2bEnabled !== 'false' };
+}
+
+/** Whether this account can do that part now (prompts also need the passkey, except on the simulator). */
+export function canDo(cfg: CfgLike, part: MpesaPart): boolean {
+  if (!mpesaParts(cfg)[part]) return false;
+  if (part === 'stk' && cfg.provider !== 'mock') return Boolean(openSecrets(cfg as any).passkey);
+  return true;
+}
+
+/** The number customers pay (and that confirmations name): the till for Buy Goods, else the Paybill. */
+export function payNumber(cfg: { settings?: any }): string {
+  const s = cfg.settings ?? {};
+  return String(s.type === 'till' ? (s.tillNumber || s.c2bShortCode || s.shortCode) : (s.c2bShortCode || s.shortCode) ?? '');
+}
+
+/** The number C2B URLs are registered on (Buy Goods: usually the store number; some tills register their own). */
+export function c2bShortCodeOf(cfg: { settings?: any }): string {
+  const s = cfg.settings ?? {};
+  return String(s.c2bShortCode || s.shortCode || s.tillNumber || '').trim();
+}
+
+export function gatewayFor(cfg: InstanceType<typeof IntegrationConfig>, part: MpesaPart = 'stk'): MpesaGateway {
   if (cfg.provider === 'mock') {
     if (env().NODE_ENV === 'production' && cfg.environment === 'production') throw badRequest('The M-Pesa simulator cannot be used in production');
     return new MockMpesaGateway();
   }
   const s = cfg.settings ?? {};
   const secrets = openSecrets(cfg);
+  // The C2B part may have its own Daraja app (keys); without them it uses the prompt's.
+  const c2b = part === 'c2b';
   return new DarajaClient({
-    environment: cfg.environment as 'sandbox' | 'production', consumerKey: secrets.consumerKey, consumerSecret: secrets.consumerSecret, passkey: secrets.passkey,
-    shortCode: s.shortCode, type: s.type === 'till' ? 'till' : 'paybill', tillNumber: s.tillNumber,
+    environment: cfg.environment as 'sandbox' | 'production',
+    consumerKey: (c2b && secrets.c2bConsumerKey) || secrets.consumerKey, consumerSecret: (c2b && secrets.c2bConsumerSecret) || secrets.consumerSecret, passkey: secrets.passkey,
+    shortCode: c2b ? c2bShortCodeOf(cfg) : s.shortCode, type: s.type === 'till' ? 'till' : 'paybill', tillNumber: s.tillNumber,
     initiatorName: s.initiatorName, securityCredential: secrets.securityCredential, b2cShortCode: s.b2cShortCode,
   });
 }
@@ -101,6 +137,20 @@ const stkSchema = z.object({
 });
 
 /** Sends an STK Push and creates the pending intent (till checkout, account payments and online orders). */
+/** What to do about the usual Daraja refusals of an STK push. */
+function stkHint(said: string, status?: number): string {
+  const m = said.toLowerCase();
+  if (/access token|invalid credentials|401/.test(m) || status === 401) return ' Check the consumer key and secret (and that sandbox/production matches the Daraja app).';
+  if (/businessshortcode|merchant does not exist|shortcode|invalid.*initiator/.test(m)) {
+    return ' Check the shortcode in Settings → Integrations: for Buy Goods, "shortcode" is the store (head office) number from Safaricom and the till number goes in "Till number"; for a Paybill it is the Paybill number. The same number must be the one Lipa Na M-Pesa Online (STK) was approved for, and the passkey must belong to it.';
+  }
+  if (/password|passkey/.test(m)) return ' Check the Lipa Na M-Pesa Online passkey: it belongs to the shortcode and comes from Safaricom when STK is approved.';
+  if (/callback/.test(m)) return ' The callback address must be the public https:// address of the online server.';
+  if (/phone|partya/.test(m)) return ' Check the customer number (Safaricom line, e.g. 0712345678).';
+  if (/not.*(enabled|allowed|permitted)|product/.test(m)) return ' Ask Safaricom to enable Lipa Na M-Pesa Online (STK push) for this shortcode on the Daraja app.';
+  return '';
+}
+
 export async function startStk(opts: { tenant: any; clientRequestId: string; amountCents: number; phone: string; accountReference?: string; tillId?: unknown; branchId?: unknown; initiatedBy?: unknown; description?: string; configId?: unknown }) {
   const existing = await PaymentIntent.findOne({ clientRequestId: opts.clientRequestId });
   if (existing) return { intent: existing, replay: true };
@@ -109,25 +159,43 @@ export async function startStk(opts: { tenant: any; clientRequestId: string; amo
   const till = opts.tillId ? await Till.findById(opts.tillId).lean() : null;
   const branchId = till?.branchId ?? (opts.branchId as any);
   // The online shop may use its own Paybill / Till instead of the branch's.
-  const cfg = opts.configId ? await IntegrationConfig.findOne({ _id: opts.configId, kind: 'mpesa', enabled: true }) : await findActiveConfig('mpesa', branchId);
-  if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+  const chosen = opts.configId ? await IntegrationConfig.findOne({ _id: opts.configId, kind: 'mpesa', enabled: true }) : null;
+  const cfg = chosen
+    ? (canDo(chosen, 'stk') ? chosen : await partner(chosen, 'stk', await configsForTill('mpesa', branchId, till?._id)))
+    : (await configsForTill('mpesa', branchId, till?._id)).find((c) => canDo(c, 'stk')) ?? null;
+  if (!cfg) {
+    const any = chosen ?? (await findActiveConfig('mpesa', branchId, till?._id));
+    if (!any) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+    throw new AppError(409, 'MPESA_STK_OFF', `Prompts are not set up for ${any.name}: turn on "Prompt on the customer's phone (STK)" and enter its passkey in Settings → Integrations, or let the customer pay the ${any.settings?.type === 'till' ? 'Till' : 'Paybill'} (the till finds the payment by itself).`);
+  }
   const tenant = opts.tenant;
+  const callbackUrl = callbackUrls(tenant._id, tenant.callbackToken).stk;
+  // Safaricom only calls public HTTPS addresses: a prompt with any other callback is always refused.
+  if (cfg.provider !== 'mock' && !/^https:\/\/(?!localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)[^/]+/i.test(callbackUrl)) {
+    throw new AppError(409, 'MPESA_CALLBACK_NOT_PUBLIC', `M-Pesa prompts need this system's public HTTPS address (now ${new URL(callbackUrl).origin}). Set API_PUBLIC_URL${env().DEPLOYMENT_MODE === 'branch' ? ' / SYNC_HQ_URL' : ''} in server/.env to the https:// address of the online server, then restart.`);
+  }
   const accountReference = (opts.accountReference || tenant.slug).replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'AFEYPOS';
   const [intent] = await PaymentIntent.create([{ source: 'stk', status: 'pending', clientRequestId: opts.clientRequestId, amountCents: opts.amountCents, phone, accountReference, shortCode: cfg.settings?.shortCode, branchId, tillId: till?._id, configId: cfg._id, initiatedBy: opts.initiatedBy }]);
   try {
-    const resp = await gatewayFor(cfg).stkPush({ amount: opts.amountCents / 100, phone, accountReference, description: opts.description ?? 'Payment', callbackUrl: callbackUrls(tenant._id, tenant.callbackToken).stk });
+    const resp = await gatewayFor(cfg).stkPush({ amount: opts.amountCents / 100, phone, accountReference, description: opts.description ?? 'Payment', callbackUrl });
     if (resp.ResponseCode !== '0') {
-      await PaymentIntent.updateOne({ _id: intent._id }, { $set: { status: 'failed', resultDesc: resp.ResponseDescription, completedAt: new Date() } });
-      throw unprocessable(`M-Pesa rejected the request: ${resp.ResponseDescription}`, 'MPESA_REJECTED');
+      // Safaricom's own words plus what to check, so the cashier is not left with "Merchant does not exist".
+      const said = `${resp.ResponseDescription ?? 'rejected'}${stkHint(String(resp.ResponseDescription ?? ''))}`;
+      await PaymentIntent.updateOne({ _id: intent._id }, { $set: { status: 'failed', resultDesc: said, completedAt: new Date() } });
+      throw unprocessable(`M-Pesa rejected the request: ${said}`, 'MPESA_REJECTED');
     }
     intent.checkoutRequestId = resp.CheckoutRequestID;
     intent.merchantRequestId = resp.MerchantRequestID;
     await intent.save();
   } catch (err: any) {
     if (err instanceof AppError) throw err;
-    await PaymentIntent.updateOne({ _id: intent._id, status: 'pending' }, { $set: { status: 'failed', resultDesc: `Could not reach M-Pesa: ${err?.message}`, completedAt: new Date() } });
-    logger.warn({ err: err?.message }, 'stk push failed');
-    throw new AppError(502, 'MPESA_UNAVAILABLE', 'Could not reach M-Pesa. Try again or use another payment method.');
+    // Safaricom answered with an error (HTTP 4xx/5xx): show its reason instead of "could not reach".
+    const said = err?.body && typeof err.body === 'object' ? String((err.body as any).errorMessage ?? (err.body as any).ResponseDescription ?? (err.body as any).error_description ?? '') : '';
+    await PaymentIntent.updateOne({ _id: intent._id, status: 'pending' }, { $set: { status: 'failed', resultDesc: said || `Could not reach M-Pesa: ${err?.message}`, completedAt: new Date() } });
+    await MpesaEvent.create({ kind: 'stk_request', payload: { status: err?.status, body: err?.body, message: err?.message }, ip: 'outgoing', outcome: 'rejected', paymentIntentId: intent._id }).catch(() => undefined);
+    logger.warn({ err: err?.message, body: err?.body }, 'stk push failed');
+    if (said || (err?.status && err.status < 500)) throw unprocessable(`M-Pesa refused the prompt: ${said || err.message}.${stkHint(said, err?.status)}`, 'MPESA_REJECTED');
+    throw new AppError(502, 'MPESA_UNAVAILABLE', 'Could not reach M-Pesa. Check the internet connection and try again, or use another payment method.');
   }
   // Safety net: if no callback arrives, query the status and expire.
   const timeout = tenant.settings?.stkPendingTimeoutSeconds ?? 180;
@@ -137,8 +205,11 @@ export async function startStk(opts: { tenant: any; clientRequestId: string; amo
 }
 
 router.post('/payments/mpesa/stk', requirePermission('sales.create'), async (req, res) => {
-  const body = parse(stkSchema, req.body);
-  const { intent, replay } = await startStk({ tenant: req.tenant!, clientRequestId: body.clientRequestId, amountCents: body.amountCents, phone: body.phone, accountReference: body.accountReference, tillId: body.tillId, initiatedBy: req.auth!.userId });
+  const body = parse(stkSchema.extend({ configId: objectId.optional() }), req.body);
+  // With more than one M-Pesa account the cashier picks which one the prompt is for.
+  const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
+  const cfg = body.configId ? await tillConfig(till ?? { _id: null }, body.configId, 'stk') : null;
+  const { intent, replay } = await startStk({ tenant: req.tenant!, clientRequestId: body.clientRequestId, amountCents: body.amountCents, phone: body.phone, accountReference: body.accountReference, tillId: body.tillId, configId: cfg?._id, initiatedBy: req.auth!.userId });
   if (replay) {
     res.json({ data: presentIntent(intent), replay: true });
     return;
@@ -181,6 +252,43 @@ router.post('/payments/intents/:id/query', requirePermission('sales.create'), as
     else await verifyGatewayIntent(i, false);
   }
   res.json({ data: presentIntent((await PaymentIntent.findById(i._id).lean())!) });
+});
+
+/**
+ * "Check again with Safaricom" for a prompt marked failed or expired whose money the business did receive.
+ * Asks M-Pesa about the prompt; if it was paid, the payment becomes usable on a sale.
+ */
+router.post('/payments/intents/:id/recheck', requirePermission('sales.create'), async (req, res) => {
+  const i = await PaymentIntent.findById(idParam(req.params.id));
+  if (!i) throw notFound('Payment');
+  if (!['failed', 'expired', 'cancelled'].includes(i.status) || !i.checkoutRequestId) throw unprocessable('Only a failed, expired or cancelled M-Pesa prompt can be checked again');
+  // A confirmation that already arrived late (older records kept it without making it usable).
+  const lateCallback = await MpesaEvent.findOne({ paymentIntentId: i._id, kind: 'stk_callback', outcome: 'late_confirmation' }).sort({ createdAt: -1 }).lean();
+  const parsedLate = lateCallback ? parseStkCallback(lateCallback.payload) : null;
+  let revived = null;
+  if (parsedLate?.resultCode === 0 && parsedLate.receiptNumber) {
+    revived = await reviveConfirmedPayment(i._id, { receiptNumber: parsedLate.receiptNumber, paidAmountCents: Math.round((parsedLate.amount ?? 0) * 100), how: 'confirmation that arrived late' });
+  } else if (i.receiptNumber && (i.paidAmountCents ?? 0) > 0) {
+    revived = await reviveConfirmedPayment(i._id, { receiptNumber: i.receiptNumber, paidAmountCents: i.paidAmountCents!, how: 'confirmation that arrived late' });
+  } else {
+    const cfg = await IntegrationConfig.findById(i.configId);
+    if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'The M-Pesa account of this payment is no longer set up');
+    let q: any;
+    try {
+      q = await gatewayFor(cfg).stkQuery(i.checkoutRequestId);
+    } catch (err: any) {
+      throw new AppError(502, 'MPESA_UNAVAILABLE', `Could not ask M-Pesa: ${err?.message}`);
+    }
+    await MpesaEvent.create({ kind: 'stk_query', payload: q, paymentIntentId: i._id });
+    if (String(q.ResultCode) === '0') revived = await reviveConfirmedPayment(i._id, { paidAmountCents: i.amountCents, how: 'confirmed by an M-Pesa status query' });
+    else {
+      await audit(req, { action: 'mpesa.recheck', entity: 'PaymentIntent', entityId: i._id, details: { paid: false, said: q.ResultDesc ?? q.errorMessage } });
+      throw unprocessable(`M-Pesa says this prompt was not paid: ${q.ResultDesc ?? q.errorMessage ?? 'no payment'}. If the customer has an M-Pesa message, type its code at the till instead.`, 'MPESA_NOT_PAID');
+    }
+  }
+  if (!revived) throw unprocessable('This payment is already recorded on another M-Pesa entry (look it up by its code at the till)', 'MPESA_ALREADY_RECORDED');
+  await audit(req, { action: 'mpesa.recheck', entity: 'PaymentIntent', entityId: i._id, details: { paid: true, receipt: revived.receiptNumber ?? null, amountCents: revived.paidAmountCents } });
+  res.json({ data: presentIntent(revived) });
 });
 
 router.post('/payments/intents/:id/cancel', requirePermission('sales.create'), async (req, res) => {
@@ -239,17 +347,69 @@ export function buildStkCallback(checkoutRequestId: string, merchantRequestId: s
 }
 
 /** How customers pay this till without a prompt: Paybill number + account, or Buy Goods till number. */
-function payTo(cfg: InstanceType<typeof IntegrationConfig>) {
-  const till = cfg.settings?.type === 'till';
-  return { type: till ? 'till' : 'paybill', number: String(till ? (cfg.settings?.tillNumber ?? cfg.settings?.shortCode) : cfg.settings?.shortCode) };
+/**
+ * Configs that collect into the same Paybill/Till number. Several may exist (one per branch on one Safaricom
+ * shortcode, or a Paybill and a Till side by side), and a payment to that number belongs to all of them: matching
+ * a till's waiting payment must not depend on which config was picked.
+ */
+export async function siblingConfigIds(cfg: { _id: unknown; settings?: any }): Promise<Types.ObjectId[]> {
+  const number = payNumber(cfg);
+  const all = await IntegrationConfig.find({ kind: 'mpesa' }, { settings: 1 }).lean();
+  const ids = all.filter((c) => payNumber(c) === number).map((c) => c._id);
+  return ids.length ? ids : [cfg._id as Types.ObjectId];
 }
+
+function payTo(cfg: { settings?: any }) {
+  return { type: cfg.settings?.type === 'till' ? 'till' : 'paybill', number: payNumber(cfg) };
+}
+
+/** Another of the till's accounts for the same Paybill/Till that does the part this one has turned off. */
+async function partner<T extends InstanceType<typeof IntegrationConfig>>(cfg: T, part: MpesaPart, allowed: T[]): Promise<T | null> {
+  const number = payNumber(cfg);
+  return allowed.find((c) => String(c._id) !== String(cfg._id) && payNumber(c) === number && canDo(c, part)) ?? null;
+}
+
+/**
+ * The M-Pesa account this till uses for a prompt ("stk") or a payment to the Paybill/Till ("c2b"): the one the
+ * cashier chose (it must be one of the till's), else its default. When the chosen one has that part turned off,
+ * its partner for the same Paybill/Till is used, so the cashier sees one M-Pesa however it is configured.
+ */
+async function tillConfig(till: { _id: unknown; branchId?: unknown }, configId: unknown, part: MpesaPart) {
+  const allowed = await configsForTill('mpesa', till.branchId as Types.ObjectId, till._id as Types.ObjectId);
+  if (!allowed.length) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+  const chosen = configId ? allowed.find((c) => String(c._id) === String(configId)) : allowed.find((c) => canDo(c, part)) ?? allowed[0];
+  if (!chosen) throw badRequest('That M-Pesa account cannot be used at this till');
+  if (canDo(chosen, part)) return chosen;
+  const other = await partner(chosen, part, allowed);
+  if (other) return other;
+  throw new AppError(409, part === 'stk' ? 'MPESA_STK_OFF' : 'MPESA_C2B_OFF', part === 'stk'
+    ? `Prompts are not set up for ${chosen.name}: turn on "Prompt on the customer's phone (STK)" and enter its passkey in Settings → Integrations.`
+    : `Payments to the ${chosen.settings?.type === 'till' ? 'Till' : 'Paybill'} are turned off for ${chosen.name}: turn on "Customer pays the Paybill/Till (C2B)" in Settings → Integrations.`);
+}
+
+/** The M-Pesa accounts a till may take money with (so the cashier can choose when there is more than one). */
+router.get('/payments/mpesa/accounts', requirePermission('sales.create'), async (req, res) => {
+  const q = parse(z.object({ tillId: objectId.optional() }), req.query);
+  const till = q.tillId ? await Till.findById(q.tillId).lean() : null;
+  const configs = await configsForTill('mpesa', till?.branchId, till?._id);
+  // Accounts for the same Paybill/Till are one M-Pesa to the cashier (e.g. a prompt-only and a C2B-only setup):
+  // the till picks the right one for a prompt or for a payment to the Till, and every payment lands on the sale.
+  const groups = new Map<string, typeof configs>();
+  for (const c of configs) groups.set(payNumber(c), [...(groups.get(payNumber(c)) ?? []), c]);
+  res.json({
+    data: [...groups.values()].map((g, i) => {
+      const main = g.find((c) => canDo(c, 'c2b')) ?? g[0]!;
+      return { id: main._id, name: main.name, environment: main.environment, isDefault: i === 0, payTo: payTo(main), stk: g.some((c) => canDo(c, 'stk')), c2b: g.some((c) => canDo(c, 'c2b')) };
+    }),
+  });
+});
 
 /**
  * The till waits for the customer to pay the Paybill/Till themselves. Paybill: we give an account number
  * to type, so the payment matches this sale exactly. Buy Goods: matched by amount (see handleC2B).
  */
 router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (req, res) => {
-  const body = parse(z.object({ clientRequestId: z.string().min(8).max(100), amountCents: positiveCents.refine((v) => v >= 100 && v % 100 === 0, 'M-Pesa amounts must be whole shillings'), tillId: objectId }), req.body);
+  const body = parse(z.object({ clientRequestId: z.string().min(8).max(100), amountCents: positiveCents.refine((v) => v >= 100 && v % 100 === 0, 'M-Pesa amounts must be whole shillings'), tillId: objectId, configId: objectId.optional(), skipReceipts: z.array(z.string().trim().toUpperCase().max(20)).max(20).optional() }), req.body);
   const existing = await PaymentIntent.findOne({ clientRequestId: body.clientRequestId }).lean();
   if (existing) {
     res.json({ data: presentIntent(existing), replay: true });
@@ -257,8 +417,7 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   }
   const till = await Till.findById(body.tillId).lean();
   if (!till) throw notFound('Till');
-  const cfg = await findActiveConfig('mpesa', till.branchId);
-  if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
+  const cfg = await tillConfig(till, body.configId, 'c2b');
   const to = payTo(cfg);
   // Short and easy to type on a phone: till code + 4 digits, unique among waiting payments.
   let account = '';
@@ -269,11 +428,41 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   const [intent] = await PaymentIntent.create([{
     source: 'c2b', awaiting: 'expected', status: 'pending', clientRequestId: body.clientRequestId, amountCents: body.amountCents,
     accountReference: to.type === 'paybill' ? account : undefined, shortCode: to.number, branchId: till.branchId, tillId: till._id, configId: cfg._id, initiatedBy: req.auth!.userId,
+    ...(body.skipReceipts?.length ? { skipReceipts: body.skipReceipts } : {}),
   }]);
   // Waiting payments that never arrive expire like prompts do.
   const timeout = Math.max(600, req.tenant!.settings?.stkPendingTimeoutSeconds ?? 0);
   await enqueue('mpesa.expireExpected', { intentId: String(intent._id) }, { runAt: new Date(Date.now() + timeout * 1000), dedupeKey: `mpesa-expect:${intent._id}` });
-  res.status(201).json({ data: { ...presentIntent(intent), payTo: to } });
+  // The customer may have paid the Till already, before the cashier chose M-Pesa: an unused payment of exactly this
+  // amount in the last few minutes (and only one) completes this wait at once.
+  const paidEarlier = await matchExpectedToReceived(intent).catch((err) => { logger.warn({ err }, 'matching an earlier M-Pesa payment failed'); return false; });
+  const fresh = paidEarlier ? (await PaymentIntent.findById(intent._id).lean())! : intent;
+  res.status(201).json({ data: { ...presentIntent(fresh), payTo: to } });
+});
+
+/**
+ * "Not this payment": the cashier says a payment the till matched by amount is not this customer's. It goes back to
+ * being an unused payment (for the right sale, or to be found by its code) and this wait ends; the till then waits
+ * again, skipping it.
+ */
+router.post('/payments/intents/:id/not-mine', requirePermission('sales.create'), async (req, res) => {
+  const i = await PaymentIntent.findById(idParam(req.params.id));
+  if (!i || i.source !== 'c2b' || i.awaiting !== 'expected' || i.status !== 'succeeded' || !i.receiptNumber) throw notFound('Matched M-Pesa payment');
+  if (i.tillId) {
+    const till = await Till.findById(i.tillId, { branchId: 1 }).lean();
+    if (till) assertBranchAccess(req, till.branchId);
+  }
+  const receipt = i.receiptNumber;
+  const freed = await PaymentIntent.updateOne({ _id: i._id, status: 'succeeded', allocatedCents: 0 }, { $set: { status: 'cancelled', resultDesc: `Not this customer's payment (${receipt}): put back by the cashier` }, $unset: { receiptNumber: 1 } });
+  if (!freed.modifiedCount) throw unprocessable('This payment is already on a sale', 'MPESA_ALREADY_USED');
+  const cfg = i.configId ? await IntegrationConfig.findById(i.configId, { branchIds: 1 }).lean() : null;
+  const [back] = await PaymentIntent.create([{
+    source: 'c2b', status: 'succeeded', amountCents: i.paidAmountCents ?? i.amountCents, paidAmountCents: i.paidAmountCents ?? i.amountCents, receiptNumber: receipt,
+    phone: i.phone, payerName: i.payerName, transactionDate: i.transactionDate, shortCode: i.shortCode, configId: i.configId, branchId: cfg?.branchIds?.[0], completedAt: i.completedAt ?? new Date(),
+  }]);
+  await MpesaEvent.updateMany({ paymentIntentId: i._id }, { $set: { paymentIntentId: back._id, outcome: 'recorded' } });
+  await audit(req, { action: 'mpesa.match_rejected', entity: 'PaymentIntent', entityId: back._id, details: { receipt, amountCents: back.paidAmountCents } });
+  res.json({ data: { released: true, receipt } });
 });
 
 registerJob('mpesa.expireExpected', async ({ intentId }: { intentId: string }) => {
@@ -287,7 +476,26 @@ registerJob('mpesa.expireExpected', async ({ intentId }: { intentId: string }) =
  */
 router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (req, res) => {
   const body = parse(z.object({ receipt: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{8,12}$/, 'M-Pesa codes are 8-12 letters and digits, e.g. SJK3AB12CD'), tillId: objectId.optional(), clientRequestId: z.string().min(8).max(100) }), req.body);
-  const found = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: body.receipt }).lean();
+  let found = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: body.receipt }).lean();
+  // At a branch server, a payment head office received without a branch (or one not downloaded yet) is claimed from HQ first.
+  if (env().DEPLOYMENT_MODE === 'branch' && !found?.branchId) {
+    const { claimMpesaFromHq } = await import('../sync/branch.js');
+    let r: { claimed: boolean; reason?: string } | null = null;
+    try {
+      r = await claimMpesaFromHq(body.receipt);
+    } catch {
+      // Payments reach head office (Safaricom calls the live server), so without it this server cannot know.
+      throw new AppError(503, 'HQ_UNREACHABLE', found
+        ? `M-Pesa ${body.receipt} was received at head office, which cannot be reached right now. Try again when the internet is back, or take another payment.`
+        : `M-Pesa ${body.receipt} is not on this server yet, and head office (where M-Pesa payments arrive) cannot be reached to check it. Try again when the internet is back.`);
+    }
+    if (r?.claimed) found = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: body.receipt }).lean();
+    else if (r?.reason && r.reason !== 'not_found') throw unprocessable(r.reason, 'MPESA_NOT_AVAILABLE');
+  }
+  if (found && found.status !== 'succeeded' && found.checkoutRequestId && (found.paidAmountCents ?? 0) > 0) {
+    // A prompt marked failed whose money did arrive (older records): make it usable now.
+    found = (await reviveConfirmedPayment(found._id, { receiptNumber: found.receiptNumber, paidAmountCents: found.paidAmountCents!, how: 'code typed at the till' }))?.toObject() ?? found;
+  }
   if (found) {
     const free = (found.paidAmountCents ?? 0) - (found.allocatedCents ?? 0);
     if (found.status !== 'succeeded') throw unprocessable(`M-Pesa ${body.receipt} is ${found.status}`, 'MPESA_NOT_AVAILABLE');
@@ -301,7 +509,8 @@ router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (
     return;
   }
   const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
-  const cfg = await findActiveConfig('mpesa', till?.branchId);
+  const mine = await configsForTill('mpesa', till?.branchId, till?._id);
+  const cfg = mine.find((c) => canDo(c, 'c2b')) ?? mine[0];
   if (!cfg) throw new AppError(409, 'MPESA_NOT_CONFIGURED', 'M-Pesa is not configured for this branch');
   if (cfg.provider !== 'mock' && (!cfg.settings?.initiatorName || !openSecrets(cfg).securityCredential)) {
     throw new AppError(404, 'MPESA_RECEIPT_NOT_FOUND', `${body.receipt} has not reached the system yet. Check the code, wait a minute, or set up the M-Pesa initiator to verify codes with Safaricom.`);
@@ -314,7 +523,7 @@ router.post('/payments/mpesa/lookup', requirePermission('sales.create'), async (
     originatorConversationId, branchId: till?.branchId, tillId: till?._id, configId: cfg._id, initiatedBy: req.auth!.userId,
   }]);
   try {
-    const r = await gatewayFor(cfg).transactionStatus({ transactionId: body.receipt, originatorConversationId, resultUrl: urls.statusResult, timeoutUrl: urls.timeout });
+    const r = await gatewayFor(cfg, 'c2b').transactionStatus({ transactionId: body.receipt, originatorConversationId, resultUrl: urls.statusResult, timeoutUrl: urls.timeout });
     if (r.ResponseCode !== '0') throw new Error(r.ResponseDescription ?? r.errorMessage ?? 'rejected');
     await PaymentIntent.updateOne({ _id: intent._id }, { $set: { conversationId: r.ConversationID } });
   } catch (err: any) {
@@ -331,7 +540,8 @@ router.post('/payments/mpesa/simulate-c2b', requirePermission('sales.create'), a
   if (env().NODE_ENV === 'production') throw forbidden('Simulation is disabled in production');
   const body = parse(z.object({ amountCents: positiveCents, account: z.string().max(20).optional(), phone: z.string().default('254712345678'), receipt: z.string().optional(), tillId: objectId.optional() }), req.body);
   const till = body.tillId ? await Till.findById(body.tillId).lean() : null;
-  const cfg = await findActiveConfig('mpesa', till?.branchId);
+  const mine = await configsForTill('mpesa', till?.branchId, till?._id);
+  const cfg = mine.find((c) => canDo(c, 'c2b')) ?? mine[0];
   if (cfg?.provider !== 'mock') throw forbidden('Only the M-Pesa simulator can simulate payments');
   const to = payTo(cfg);
   const receipt = body.receipt ?? `SIM${Date.now().toString(36).toUpperCase()}`.slice(0, 10);
@@ -380,10 +590,13 @@ export async function handleStkCallback(tenantId: Types.ObjectId, payload: any, 
       // and flag confirmations that arrive after the intent was abandoned, for reconciliation.
       if (parsed.resultCode === 0 && parsed.receiptNumber && !intent.receiptNumber) {
         const late = intent.status !== 'succeeded';
-        await PaymentIntent.updateOne(
-          { _id: intent._id },
-          { $set: { receiptNumber: parsed.receiptNumber, ...(late ? { resultDesc: `Late confirmation after ${intent.status}`, paidAmountCents: Math.round((parsed.amount ?? 0) * 100) } : {}) } },
-        ).catch(() => undefined);
+        if (late) {
+          // The money arrived: make it a usable payment instead of leaving it marked failed.
+          const revived = await reviveConfirmedPayment(intent._id, { receiptNumber: parsed.receiptNumber, paidAmountCents: Math.round((parsed.amount ?? 0) * 100), how: 'late confirmation from Safaricom' });
+          if (!revived) await PaymentIntent.updateOne({ _id: intent._id }, { $set: { resultDesc: `Late confirmation ${parsed.receiptNumber} after ${intent.status}` } }).catch(() => undefined);
+        } else {
+          await PaymentIntent.updateOne({ _id: intent._id }, { $set: { receiptNumber: parsed.receiptNumber } }).catch(() => undefined);
+        }
         event.outcome = late ? 'late_confirmation' : 'receipt_added';
       } else event.outcome = 'duplicate';
       await event.save();
@@ -463,7 +676,10 @@ export async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: stri
       return;
     }
     const cfgs = await IntegrationConfig.find({ kind: 'mpesa', enabled: true }).lean();
-    const cfg = cfgs.find((c) => String(c.settings?.shortCode) === String(payload.BusinessShortCode) || String(c.settings?.tillNumber) === String(payload.BusinessShortCode));
+    // The account for the number paid: one with C2B turned on first (a prompt-only one for the same number is its partner).
+    const paidTo = String(payload.BusinessShortCode ?? '');
+    const forNumber = cfgs.filter((c) => [c.settings?.shortCode, c.settings?.tillNumber, c.settings?.c2bShortCode].some((n) => n && String(n) === paidTo));
+    const cfg = forNumber.find((c) => mpesaParts(c).c2b) ?? forNumber[0];
     if (!cfg) {
       event.outcome = 'unknown_shortcode';
       await event.save();
@@ -471,7 +687,12 @@ export async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: stri
     }
     // Proof that the registered URLs work: shown next to the registration in Settings > Integrations.
     await IntegrationConfig.updateOne({ _id: cfg._id }, { $set: { 'c2bRegistration.lastConfirmationAt': new Date() } });
-    if (await PaymentIntent.exists({ receiptNumber: transId })) {
+    const already = await PaymentIntent.findOne({ receiptNumber: transId }, { _id: 1, payerName: 1 }).lean();
+    if (already) {
+      // Usually the prompt (STK) already recorded this payment: add the payer's name the confirmation carries.
+      const name = [payload.FirstName, payload.MiddleName, payload.LastName].filter(Boolean).join(' ');
+      if (name && !already.payerName) await PaymentIntent.updateOne({ _id: already._id }, { $set: { payerName: name } });
+      event.paymentIntentId = already._id;
       event.outcome = 'duplicate';
       await event.save();
       return;
@@ -483,10 +704,10 @@ export async function handleC2B(tenantId: Types.ObjectId, payload: any, ip: stri
       payerName: [payload.FirstName, payload.MiddleName, payload.LastName].filter(Boolean).join(' '),
       transactionDate: parseDarajaDate(String(payload.TransTime ?? '')),
     };
-    const waiting = { configId: cfg._id, source: 'c2b', awaiting: 'expected', status: 'pending' };
+    const waiting = { configId: { $in: await siblingConfigIds(cfg) }, source: 'c2b', awaiting: 'expected', status: 'pending' };
     let expected = billRef ? await PaymentIntent.findOne({ ...waiting, accountReference: billRef }) : null;
     if (!expected && cfg.settings?.type === 'till') {
-      const candidates = await PaymentIntent.find({ ...waiting, amountCents: cents, createdAt: { $gt: new Date(Date.now() - 30 * 60_000) } }).limit(2);
+      const candidates = await PaymentIntent.find({ ...waiting, amountCents: cents, skipReceipts: { $ne: transId }, createdAt: { $gt: new Date(Date.now() - 30 * 60_000) } }).limit(2);
       if (candidates.length === 1) expected = candidates[0];
     }
     try {
@@ -617,4 +838,55 @@ mpesaCallbackRoutes.post('/:tenantId/:token/c2b/confirmation', async (req, res) 
   const tenant = await callbackTenant(req);
   if (tenant) await handleC2B(tenant._id, req.body, req.ip ?? '');
   res.json({ ResultCode: 0, ResultDesc: 'Success' });
+});
+
+/**
+ * Head office with branch servers: a till's "waiting for a payment to the Paybill/Till" record reaches head
+ * office at the next sync, but Safaricom's confirmation often arrives first and is recorded as unmatched.
+ * When the waiting record arrives (or on the periodic check), this pairs them: same M-Pesa configuration,
+ * same account number (Paybill) or the same amount (Buy Goods, one candidate only), paid after the till
+ * started waiting. The unmatched record gives its receipt to the waiting one, so the payment counts once.
+ */
+/** How long before the till starts waiting a payment to the Till may have been made and still be picked up. */
+export const EARLIER_PAYMENT_WINDOW_MS = 3 * 60_000;
+
+export async function matchExpectedToReceived(expected: PaymentIntentDoc): Promise<boolean> {
+  if (expected.status !== 'pending' || expected.awaiting !== 'expected' || expected.source !== 'c2b') return false;
+  const cfg = expected.configId ? await IntegrationConfig.findById(expected.configId).lean() : null;
+  if (!cfg) return false;
+  // A payment up to EARLIER_PAYMENT_WINDOW before the till started waiting still counts (paid before checkout).
+  const since = new Date(new Date(expected.createdAt as unknown as Date).getTime() - EARLIER_PAYMENT_WINDOW_MS);
+  const filter: Record<string, unknown> = {
+    configId: { $in: await siblingConfigIds(cfg) }, source: 'c2b', awaiting: { $exists: false }, status: 'succeeded', allocatedCents: 0,
+    allocatedTo: { $exists: false }, onlineOrderId: { $exists: false }, receiptNumber: { $type: 'string', ...(expected.skipReceipts?.length ? { $nin: expected.skipReceipts } : {}) }, completedAt: { $gte: since },
+  };
+  if (cfg.settings?.type === 'till') filter.paidAmountCents = expected.amountCents;
+  else if (expected.accountReference) filter.accountReference = expected.accountReference;
+  else return false;
+  const candidates = await PaymentIntent.find(filter).sort({ completedAt: 1 }).limit(2);
+  if (candidates.length !== 1) return false;
+  const received = candidates[0]!;
+  const receipt = received.receiptNumber!;
+  // Hand the receipt over first (receipts are unique), then confirm the till's waiting payment with it.
+  const freed = await PaymentIntent.updateOne(
+    { _id: received._id, status: 'succeeded', allocatedCents: 0 },
+    { $set: { status: 'cancelled', resultDesc: `Receipt ${receipt} matched to the till's waiting payment ${expected._id}` }, $unset: { receiptNumber: 1 } },
+  );
+  if (!freed.modifiedCount) return false;
+  const done = await finalizeIntent(expected, {
+    status: 'succeeded', resultCode: 0, resultDesc: 'Paid to M-Pesa Paybill/Till', receiptNumber: receipt, paidAmountCents: received.paidAmountCents ?? expected.amountCents,
+    phone: received.phone ?? undefined, payerName: received.payerName ?? undefined, transactionDate: received.transactionDate ?? undefined,
+  });
+  if (!done) {
+    await PaymentIntent.updateOne({ _id: received._id }, { $set: { status: 'succeeded', receiptNumber: receipt, resultDesc: received.resultDesc } });
+    return false;
+  }
+  await MpesaEvent.updateMany({ paymentIntentId: received._id }, { $set: { paymentIntentId: expected._id, outcome: 'matched_expected_later' } });
+  return true;
+}
+
+/** Periodic safety net at head office: waiting till payments that a confirmation already paid. */
+registerJob('mpesa.matchExpected', async () => {
+  const waiting = await PaymentIntent.find({ source: 'c2b', awaiting: 'expected', status: 'pending', createdAt: { $gt: new Date(Date.now() - 2 * 3600_000) } }).limit(200);
+  for (const w of waiting) await matchExpectedToReceived(w).catch((err) => logger.warn({ err }, 'matching a waiting M-Pesa payment failed'));
 });

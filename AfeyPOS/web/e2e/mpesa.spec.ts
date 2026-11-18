@@ -13,9 +13,15 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await expect(page.getByLabel('Provider')).toHaveValue('mock');
   await page.getByLabel('Name', { exact: true }).fill('Till simulator');
   // Typed key by key: the field must keep focus while the dialog re-renders.
-  await page.getByLabel('Short code').pressSequentially('174379');
-  await expect(page.getByLabel('Short code')).toHaveValue('174379');
-  await expect(page.getByLabel('Short code')).toBeFocused();
+  await page.getByLabel('Paybill number').pressSequentially('174379');
+  await expect(page.getByLabel('Paybill number')).toHaveValue('174379');
+  await expect(page.getByLabel('Paybill number')).toBeFocused();
+  // Prompts (STK) and payments to the Paybill/Till (C2B) are separate parts, both on by default.
+  await expect(page.getByTestId('mpesa-part-stk')).toContainText("Prompt on the customer's phone (STK)");
+  await expect(page.getByTestId('mpesa-part-c2b')).toContainText('Customer pays the Paybill (C2B)');
+  await expect(page.getByTestId('mpesa-part-stk').getByLabel('On')).toBeChecked();
+  await expect(page.getByTestId('mpesa-part-c2b').getByLabel('On')).toBeChecked();
+  await page.screenshot({ path: 'test-results/mpesa-parts.png', fullPage: true });
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByRole('article', { name: 'Till simulator' })).toBeVisible();
 
@@ -42,7 +48,7 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
   await page.getByRole('button', { name: /^Pay / }).click();
   await page.getByRole('button', { name: 'M-Pesa', exact: true }).click();
   await page.getByPlaceholder(/Customer phone/).fill('0712345678');
-  await page.getByRole('button', { name: 'Send STK' }).click();
+  await page.getByRole('button', { name: 'Send prompt' }).click();
   await expect(page.getByText(/Waiting for the customer/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Complete sale' })).toBeDisabled();
 
@@ -54,31 +60,59 @@ test('pays with M-Pesa (simulator): pending until Safaricom confirms, then compl
     await fetch(`/api/v1/payments/mpesa/simulate/${list.data[0].id}`, { method: 'POST', headers: h, body: JSON.stringify({ resultCode: 0 }) });
   });
   await expect(page.getByText('M-Pesa payment confirmed')).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Complete sale' }).click();
-  await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
+  // Nothing to press: the confirmed payment covers the sale, so the till completes and prints it.
+  await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'New sale' }).click();
 
-  // Customer pays the Paybill themselves with the account number shown at the till.
+  // Customer pays the Paybill themselves: the till is already watching for it, with nothing to press.
   await scan.fill('MILK500');
   await scan.press('Enter');
   await page.getByRole('button', { name: /^Pay / }).click();
   await page.getByRole('button', { name: 'M-Pesa', exact: true }).click();
-  await page.getByRole('radio', { name: 'Customer pays Paybill/Till' }).click();
-  await page.getByRole('button', { name: 'Show payment details' }).click();
-  const payTo = page.getByTestId('mpesa-pay-to');
-  await expect(payTo).toContainText('174379');
+  const watching = page.getByTestId('mpesa-watching');
+  await expect(watching).toContainText('174379');
+  // The cashier can still send a prompt or type a code while the till watches.
+  await expect(page.getByRole('radio', { name: 'Customer pays Paybill/Till' })).toBeVisible();
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/pos-mpesa-paybill.png` });
-  const account = await payTo.locator('text=/^T1\\d{4}$/').innerText();
+  const account = await watching.locator('text=/^T1\\d{4}$/').innerText();
   await page.evaluate(async (acct) => {
     const { accessToken } = await (await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })).json();
     const h = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
     await fetch('/api/v1/payments/mpesa/simulate-c2b', { method: 'POST', headers: h, body: JSON.stringify({ amountCents: 6500, account: acct }) });
   }, account);
   await expect(page.getByText('M-Pesa payment confirmed')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'New sale' }).click();
+
+  // Money paid to the till without a sale is not listed: the cashier finds it only by its M-Pesa code.
+  await page.evaluate(async () => {
+    const { accessToken } = await (await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })).json();
+    const h = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+    await fetch('/api/v1/payments/mpesa/simulate-c2b', { method: 'POST', headers: h, body: JSON.stringify({ amountCents: 10000, account: 'WALKIN', receipt: 'UJR9NBEDFC' }) });
+  });
+  await scan.fill('MILK500');
+  await scan.press('Enter');
+  await page.getByRole('button', { name: /^Pay / }).click();
+  await page.getByRole('button', { name: 'M-Pesa', exact: true }).click();
+  await expect(page.getByText('UJR9NBEDFC')).toHaveCount(0);
+  await page.getByRole('radio', { name: 'Enter M-Pesa code' }).click();
+  await page.getByLabel('M-Pesa code').fill('ujr9nbedfc');
+  await page.getByRole('button', { name: 'Find payment' }).click();
+  const found = page.getByTestId('mpesa-found');
+  await expect(found).toContainText('UJR9NBEDFC');
+  await expect(found).toContainText('SIMULATED CUSTOMER');
+  await expect(found).toContainText('100.00');
+  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/pos-mpesa-code.png` });
+  await found.getByRole('button', { name: 'Use this payment' }).click();
+  // Back pressed by mistake before completing: the sale remembers the payment and offers it again.
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByTestId('cart-kept-payment')).toContainText('Paid');
+  await page.getByRole('button', { name: /^Pay / }).click();
+  await expect(page.getByText(/Payment kept from before: M-Pesa UJR9NBEDFC/)).toBeVisible();
   await page.getByRole('button', { name: 'Complete sale' }).click();
   await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
   await page.getByRole('button', { name: 'New sale' }).click();
 
   await page.goto('/payments/mpesa');
-  await expect(page.getByRole('cell', { name: /^RCP-/ })).toHaveCount(2);
+  await expect(page.getByRole('cell', { name: /^RCP-/ })).toHaveCount(3);
 });

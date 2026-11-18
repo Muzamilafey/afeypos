@@ -4,7 +4,12 @@ import { ObjectId, tenantModel } from './common.js';
 /** KRA eTIMS submission of a sale or credit note (see modules/etims). */
 const etimsSubmissionSchema = new Schema(
   {
-    status: { type: String, enum: ['pending', 'signed', 'failed'], default: 'pending' },
+    /**
+     * pending → processing → signed (Fiscalized). On the way it may be awaiting_confirmation (sent, no answer),
+     * device_disconnected (not reached), rejected (refused by KRA or the device), failed (could not be sent, e.g.
+     * device removed) or requires_reconciliation (nobody can tell whether it was recorded: a person checks).
+     */
+    status: { type: String, enum: ['pending', 'processing', 'signed', 'rejected', 'failed', 'awaiting_confirmation', 'device_disconnected', 'requires_reconciliation'], default: 'pending' },
     configId: ObjectId,
     invcNo: Number,
     orgInvcNo: Number,
@@ -16,9 +21,24 @@ const etimsSubmissionSchema = new Schema(
     mrcNo: String,
     sdcDateTime: String,
     qrUrl: String,
+    /** "etr": signed by a KRA ETR device (TIMS control unit) on the Afey POS computer. */
+    device: String,
+    cuInvoiceNo: String,
+    cuSerial: String,
     attempts: { type: Number, default: 0 },
     error: String,
     signedAt: Date,
+    /** While one worker is sending it, no other may (several tills sharing one device). */
+    claimUntil: Date,
+    lastAttemptAt: Date,
+    statusChangedAt: Date,
+    /** How the signature was obtained: the device answered, a status query found it, or a person recorded it. */
+    via: { type: String, enum: ['device', 'status_query', 'manual'] },
+    /** A person checked the device or KRA and confirmed this invoice was not recorded, so it may be sent again. */
+    resendConfirmedBy: ObjectId,
+    reconciledBy: ObjectId,
+    reconciledAt: Date,
+    reconcileNote: String,
   },
   { _id: false },
 );
@@ -87,6 +107,8 @@ const saleSchema = new Schema(
     discountCents: { type: Number, default: 0 },
     taxCents: { type: Number, default: 0 },
     totalCents: { type: Number, required: true },
+    /** Added to make the total a whole shilling when rounding is on (positive = rounded up). */
+    roundingCents: { type: Number, default: 0 },
     netCents: Number,
     costCents: { type: Number, default: 0 },
     payments: [salePaymentSchema],
@@ -117,6 +139,8 @@ saleSchema.index({ tenantId: 1, completedAt: -1 });
 saleSchema.index({ tenantId: 1, customerId: 1, completedAt: -1 });
 saleSchema.index({ tenantId: 1, shiftId: 1 });
 saleSchema.index({ tenantId: 1, 'lines.serials': 1 });
+saleSchema.index({ tenantId: 1, 'etims.status': 1, completedAt: 1 }, { partialFilterExpression: { 'etims.status': { $type: 'string' } } });
+saleSchema.index({ tenantId: 1, 'etims.configId': 1, 'etims.invcNo': 1 }, { partialFilterExpression: { 'etims.invcNo': { $type: 'number' } } });
 export const Sale = tenantModel('Sale', saleSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 export type SaleDoc = InstanceType<typeof Sale>;
 
@@ -150,6 +174,7 @@ saleReturnSchema.index({ tenantId: 1, number: 1 }, { unique: true });
 saleReturnSchema.index({ tenantId: 1, clientRequestId: 1 }, { unique: true });
 saleReturnSchema.index({ tenantId: 1, createdAt: -1 });
 saleReturnSchema.index({ tenantId: 1, saleId: 1 });
+saleReturnSchema.index({ tenantId: 1, 'etims.status': 1, createdAt: 1 }, { partialFilterExpression: { 'etims.status': { $type: 'string' } } });
 export const SaleReturn = tenantModel('SaleReturn', saleReturnSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 
 const salesDocumentSchema = new Schema(
@@ -215,10 +240,14 @@ const cashMovementSchema = new Schema(
   {
     shiftId: { type: ObjectId, required: true },
     tillId: ObjectId,
-    type: { type: String, enum: ['float', 'sale', 'refund', 'cash_in', 'cash_out', 'customer_payment', 'expense'], required: true },
+    type: { type: String, enum: ['float', 'sale', 'refund', 'cash_in', 'cash_out', 'drop', 'customer_payment', 'expense'], required: true },
     amountCents: { type: Number, required: true },
     reason: String,
     userId: ObjectId,
+    /** Cash drops: the supervisor who approved and took the cash. */
+    supervisorId: ObjectId,
+    number: String,
+    denominations: Schema.Types.Mixed,
     ref: { type: { type: String }, id: ObjectId, number: String },
     at: { type: Date, default: () => new Date() },
   },
@@ -241,10 +270,44 @@ const expenseSchema = new Schema(
     notes: String,
     date: { type: Date, default: () => new Date() },
     userId: ObjectId,
+    /** Which real account the money left (Accounts → Money accounts). */
+    bankAccountId: ObjectId,
+    supplierId: ObjectId,
+    /** Photo or PDF of the bill (modules/files). */
+    attachmentFileId: String,
+    /** Expenses above the approval amount wait for a manager. */
+    status: { type: String, enum: ['approved', 'pending', 'rejected'], default: 'approved' },
+    approvedBy: ObjectId,
+    approvedAt: Date,
+    rejectedReason: String,
+    /** Set when a recurring expense created this one. */
+    recurringId: ObjectId,
   },
   { timestamps: true },
 );
 expenseSchema.index({ tenantId: 1, number: 1 }, { unique: true });
+expenseSchema.index({ tenantId: 1, status: 1, date: -1 });
+
+/** A bill that comes every month (rent, electricity): the server records it on the chosen day. */
+const recurringExpenseSchema = new Schema(
+  {
+    category: { type: String, required: true },
+    amountCents: { type: Number, required: true, min: 1 },
+    method: { type: String, enum: ['cash', 'mpesa', 'bank', 'card', 'other'], default: 'bank' },
+    bankAccountId: ObjectId,
+    branchId: ObjectId,
+    payee: String,
+    notes: String,
+    /** 1-28: the day of the month it is recorded. */
+    dayOfMonth: { type: Number, required: true, min: 1, max: 28 },
+    active: { type: Boolean, default: true },
+    lastRunPeriod: String,
+    createdBy: ObjectId,
+  },
+  { timestamps: true },
+);
+recurringExpenseSchema.index({ tenantId: 1, category: 1, payee: 1 });
+export const RecurringExpense = tenantModel('RecurringExpense', recurringExpenseSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 expenseSchema.index({ tenantId: 1, date: -1 });
 export const Expense = tenantModel('Expense', expenseSchema, { branchScope: [{ path: 'branchId', kind: 'branch' }] });
 

@@ -1,14 +1,16 @@
 import { Router } from 'express';
 import net from 'node:net';
 import { z } from 'zod';
-import { HardwareDevice, Sale, Till, Tenant } from '../../models/index.js';
+import { BiometricDevice, HardwareDevice, PaymentTerminal, Sale, Till, Tenant, WeighingScale } from '../../models/index.js';
+import { COMPAT_STATUS, CONNECTION_LABELS, HARDWARE_CATALOG, HARDWARE_CATEGORIES, detectBarcode } from '@afeypos/shared';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
+import { listLocalPrinters, printToLocalPrinter, serverHasPrinters } from './localPrinter.js';
 import { audit } from '../../lib/audit.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { env } from '../../config/env.js';
-import { receiptContext, renderReceiptEscPos, renderReceiptHtml, renderReceiptText } from './receipt.js';
+import { receiptContext, renderReceiptEscPos, renderReceiptHtml, renderReceiptText, testSlipEscPos } from './receipt.js';
 import { EscPosBuilder } from './escpos.js';
 
 const router = Router();
@@ -33,7 +35,19 @@ const deviceSchema = z.object({
     labelLanguage: z.enum(['zpl', 'tspl', 'browser']).optional(),
   }).passthrough().default({}),
   active: z.boolean().default(true),
+  catalogId: z.string().max(60).refine((id) => HARDWARE_CATALOG.some((e) => e.id === id), 'Unknown device type').optional(),
+  manufacturer: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(80).optional(),
 });
+
+/** Records a test outcome: last success, or last error (never claims success that was not seen). */
+async function recordTest(d: InstanceType<typeof HardwareDevice>, ok: boolean, message: string) {
+  const now = new Date();
+  d.status = { lastCheckAt: now, ok, message } as any;
+  if (ok) d.lastSuccessAt = now;
+  else d.lastError = { at: now, message } as any;
+  await d.save();
+}
 
 /** Sends raw bytes to a network (port 9100 / JetDirect) printer from the server. LAN/local installations only. */
 export function sendRaw(host: string, port: number, data: Buffer, timeoutMs = 5000): Promise<void> {
@@ -101,17 +115,54 @@ router.post('/hardware/devices/:id/test', requirePermission('hardware.manage'), 
       message = e.message;
     }
   } else {
-    message = `${d.connection} devices are tested from the till (browser or Afey device bridge)`;
-    ok = true;
+    // Not tested from here: the till runs the test (bridge print, scan, browser print) and reports the result.
+    return void res.json({ data: { ok: false, needsClientTest: true, message: `${d.connection} devices are tested from the till they are attached to` } });
   }
-  d.status = { lastCheckAt: new Date(), ok, message } as any;
-  await d.save();
+  await recordTest(d, ok, message);
   res.json({ data: { ok, message } });
+});
+
+/** The result of a test run at the till (a scan received, a bridge print done, a print window answered). */
+router.post('/hardware/devices/:id/test-result', requirePermission('hardware.manage'), async (req, res) => {
+  const body = parse(z.object({ ok: z.boolean(), message: z.string().trim().min(1).max(300), method: z.enum(['scan', 'bridge', 'browser', 'manual']) }), req.body);
+  const d = await HardwareDevice.findById(idParam(req.params.id));
+  if (!d) throw notFound('Device');
+  await recordTest(d, body.ok, `${body.message} (${body.method} test)`);
+  await audit(req, { action: 'hardware.device_tested', entity: 'HardwareDevice', entityId: d._id, details: { ok: body.ok, method: body.method, message: body.message } });
+  res.json({ data: d });
+});
+
+router.get('/hardware/catalog', requirePermission('hardware.manage'), (_req, res) => {
+  res.json({ data: { categories: HARDWARE_CATEGORIES, statuses: COMPAT_STATUS, connections: CONNECTION_LABELS, entries: HARDWARE_CATALOG } });
+});
+
+/**
+ * One list of every device the business set up (printers, scanners, drawers, displays, scales, card terminals,
+ * fingerprint readers) with its branch, till, last good contact and last error.
+ */
+router.get('/hardware/health', requirePermission('hardware.manage'), async (_req, res) => {
+  const [devices, scales, terminals, readers] = await Promise.all([
+    HardwareDevice.find({ active: { $ne: false } }).lean(),
+    WeighingScale.find({ active: true }).lean(),
+    PaymentTerminal.find({ removedAt: { $exists: false } }, { name: 1, provider: 1, branchId: 1, tillIds: 1, status: 1, health: 1, device: 1, mode: 1 }).lean(),
+    BiometricDevice.find({}, { name: 1, vendor: 1, model: 1, branchId: 1, lastSeenAt: 1, active: 1 }).lean(),
+  ]);
+  const rows = [
+    ...devices.map((d) => ({ id: d._id, source: 'device', kind: d.kind, name: d.name, model: [d.manufacturer, d.model].filter(Boolean).join(' ') || null, connection: d.connection, branchId: d.branchId ?? null, tillIds: d.tillId ? [d.tillId] : [],
+      state: d.status?.lastCheckAt ? (d.status.ok ? 'ok' : 'error') : 'untested', lastSuccessAt: d.lastSuccessAt ?? (d.status?.ok ? d.status.lastCheckAt : null), lastError: d.lastError?.message ? d.lastError : (d.status && d.status.ok === false ? { at: d.status.lastCheckAt, message: d.status.message } : null), catalogId: d.catalogId ?? null })),
+    ...scales.map((s) => ({ id: s._id, source: 'scale', kind: 'scale', name: s.name, model: [s.brand, s.model].filter(Boolean).join(' '), connection: s.adapter, branchId: s.branchId, tillIds: s.tillIds,
+      state: s.status === 'verified' ? 'ok' : s.status === 'failed' ? 'error' : 'untested', lastSuccessAt: s.lastCheck?.ok ? s.lastCheck.at : s.plu?.confirmedAt ?? null, lastError: s.lastCheck && !s.lastCheck.ok ? { at: s.lastCheck.at, message: s.lastCheck.message } : null, simulated: s.simulated })),
+    ...terminals.map((t) => ({ id: t._id, source: 'terminal', kind: 'card_terminal', name: t.name, model: t.device?.model ?? t.provider, connection: t.provider, branchId: t.branchId, tillIds: t.tillIds,
+      state: t.health?.online === false ? 'error' : t.status === 'enabled' && t.health?.ready ? 'ok' : t.health?.lastCheckAt ? 'error' : 'untested', lastSuccessAt: t.health?.lastSuccessAt ?? null, lastError: t.health?.lastError?.message ? t.health.lastError : null, simulated: t.mode === 'sandbox' })),
+    ...readers.map((b) => ({ id: b._id, source: 'fingerprint', kind: 'fingerprint_reader', name: b.name, model: [b.vendor, b.model].filter(Boolean).join(' '), connection: 'bridge', branchId: b.branchId ?? null, tillIds: [],
+      state: b.lastSeenAt && Date.now() - new Date(b.lastSeenAt).getTime() < 7 * 86400_000 ? 'ok' : 'untested', lastSuccessAt: b.lastSeenAt ?? null, lastError: null, simulated: b.vendor === 'simulator' })),
+  ];
+  res.json({ data: rows, summary: { total: rows.length, ok: rows.filter((r) => r.state === 'ok').length, error: rows.filter((r) => r.state === 'error').length, untested: rows.filter((r) => r.state === 'untested').length } });
 });
 
 /** Receipt in text, HTML (browser printing) or ESC/POS (base64, for the bridge) formats. */
 router.get('/sales/:id/receipt', requirePermission('sales.read'), async (req, res) => {
-  const { format, width } = parse(z.object({ format: z.enum(['html', 'text', 'escpos']).default('html'), width: z.coerce.number().int().min(24).max(64).optional() }), req.query);
+  const { format, width, drawer } = parse(z.object({ format: z.enum(['html', 'text', 'escpos']).default('html'), width: z.coerce.number().int().min(24).max(64).optional(), drawer: z.enum(['0', '1']).optional() }), req.query);
   const sale = await Sale.findById(idParam(req.params.id)).lean();
   if (!sale) throw notFound('Sale');
   const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
@@ -121,38 +172,149 @@ router.get('/sales/:id/receipt', requirePermission('sales.read'), async (req, re
   } else if (format === 'text') {
     res.type('text').send(renderReceiptText(tenant as any, sale as any, { ...ctx, width }));
   } else {
-    const openDrawer = sale.payments.some((p) => p.method === 'cash');
+    // drawer=0: the till already opened the drawer when the sale completed.
+    const openDrawer = drawer !== '0' && sale.payments.some((p) => p.method === 'cash');
     res.json({ data: { base64: renderReceiptEscPos(tenant as any, sale as any, { ...ctx, width, openDrawer }).toString('base64') } });
   }
 });
 
 /** Server-side printing to the till's network receipt printer (local installations). */
+/** Prints a receipt from the server: to a printer installed on this computer, or to the till's network printer. */
 router.post('/sales/:id/print', requirePermission('sales.read'), async (req, res) => {
-  const body = parse(z.object({ tillId: objectId, reprint: z.boolean().default(false) }), req.body);
+  const body = parse(z.object({ tillId: objectId.optional(), reprint: z.boolean().default(false), localPrinter: z.string().trim().max(120).optional(), width: z.number().int().min(24).max(96).optional(), openDrawer: z.boolean().optional() }), req.body);
   const sale = await Sale.findById(idParam(req.params.id)).lean();
   if (!sale) throw notFound('Sale');
-  const till = await Till.findById(body.tillId).lean();
-  const printer = till?.receiptPrinterId ? await HardwareDevice.findById(till.receiptPrinterId).lean() : await HardwareDevice.findOne({ kind: 'receipt_printer', tillId: body.tillId, active: true }).lean();
-  if (!printer || printer.connection !== 'network' || !printer.settings?.host) throw new AppError(409, 'NO_NETWORK_PRINTER', 'No network receipt printer is configured for this till; use browser printing');
-  assertNetworkPrintingAllowed(printer.settings.host);
   const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
   const ctx = await receiptContext(tenant as any, sale);
-  const bytes = renderReceiptEscPos(tenant as any, sale as any, { ...ctx, reprint: body.reprint, width: printer.settings.width ?? undefined, openDrawer: !body.reprint && printer.settings.openDrawerOnCash !== false && sale.payments.some((p) => p.method === 'cash') });
+  const cash = sale.payments.some((p) => p.method === 'cash');
+  if (body.localPrinter) {
+    const bytes = renderReceiptEscPos(tenant as any, sale as any, { ...ctx, reprint: body.reprint, width: body.width, openDrawer: !body.reprint && body.openDrawer !== false && cash });
+    await printToLocalPrinter(body.localPrinter, bytes);
+    if (body.reprint) await audit(req, { action: 'sale.receipt_reprinted', entity: 'Sale', entityId: sale._id });
+    res.json({ ok: true, printer: body.localPrinter });
+    return;
+  }
+  if (!body.tillId) throw badRequest('Choose the till, or a printer on this computer');
+  const printer = await tillNetworkPrinter(body.tillId);
+  const bytes = renderReceiptEscPos(tenant as any, sale as any, { ...ctx, reprint: body.reprint, width: printer.settings!.width ?? undefined, openDrawer: !body.reprint && body.openDrawer !== false && printer.settings!.openDrawerOnCash !== false && cash });
   await sendRaw(printer.settings.host, printer.settings.port ?? 9100, bytes);
   if (body.reprint) await audit(req, { action: 'sale.receipt_reprinted', entity: 'Sale', entityId: sale._id });
   res.json({ ok: true });
 });
 
+/** The till's network receipt printer (the cash drawer hangs off its DK port). */
+async function tillNetworkPrinter(tillId: unknown) {
+  const till = await Till.findById(tillId).lean();
+  const printer = till?.receiptPrinterId ? await HardwareDevice.findById(till.receiptPrinterId).lean() : await HardwareDevice.findOne({ kind: 'receipt_printer', tillId, active: true }).lean();
+  if (!printer || printer.connection !== 'network' || !printer.settings?.host) throw new AppError(409, 'NO_NETWORK_PRINTER', 'No network receipt printer is configured for this till; use browser printing');
+  assertNetworkPrintingAllowed(printer.settings.host);
+  return printer;
+}
+
+/**
+ * Opens the cash drawer on the receipt printer's DK port: by itself when a cash sale completes (before the
+ * receipt, which may wait for KRA), or on purpose from the till ("Open drawer", recorded with the reason).
+ */
+router.post('/hardware/drawer/open', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({ tillId: objectId.optional(), localPrinter: z.string().trim().max(120).optional(), saleId: objectId.optional(), reason: z.string().trim().max(200).optional() }), req.body ?? {});
+  const kick = new EscPosBuilder(32).openDrawer(0).build();
+  let where: string;
+  if (body.localPrinter) {
+    await printToLocalPrinter(body.localPrinter, kick);
+    where = body.localPrinter;
+  } else {
+    if (!body.tillId) throw badRequest('Choose the till, or a printer on this computer');
+    const printer = await tillNetworkPrinter(body.tillId);
+    await sendRaw(printer.settings!.host!, printer.settings!.port ?? 9100, kick);
+    where = printer.name;
+  }
+  // Opening the drawer without a sale is recorded, like on any cash register.
+  if (!body.saleId) await audit(req, { action: 'till.drawer_opened', entity: 'Till', entityId: body.tillId, details: { printer: where, reason: body.reason ?? 'No sale' } });
+  res.json({ ok: true, printer: where });
+});
+
+/** The device bridge opened the drawer on the till PC without a sale: recorded like the server's own opening. */
+router.post('/hardware/drawer/opened', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({ tillId: objectId.optional(), reason: z.string().trim().max(200).optional() }), req.body ?? {});
+  await audit(req, { action: 'till.drawer_opened', entity: 'Till', entityId: body.tillId, details: { printer: 'device bridge', reason: body.reason ?? 'No sale' } });
+  res.json({ ok: true });
+});
+
+/** The printers installed on the computer Afey POS runs on, for a till to choose from. */
+router.get('/hardware/printers/local', requirePermission('sales.create'), async (_req, res) => {
+  if (!serverHasPrinters()) {
+    res.json({ data: { available: false, reason: 'This is the online head-office server, which has no printers. Use the till’s network printer or the Afey device bridge.', printers: [] } });
+    return;
+  }
+  const printers = await listLocalPrinters();
+  res.json({ data: { available: true, ...(printers.length ? {} : { reason: 'No printer is installed on the Afey POS computer yet. Install the receipt printer in Windows (or CUPS), then look again.' }), printers } });
+});
+
+/** Prints a test slip so the cashier can see the chosen printer works, and the drawer opens. */
+router.post('/hardware/printers/local/test', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({ printer: z.string().trim().min(1).max(120), width: z.number().int().min(24).max(96).optional(), openDrawer: z.boolean().default(false) }), req.body);
+  const tenant = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
+  await printToLocalPrinter(body.printer, testSlipEscPos(tenant?.name ?? 'Afey POS', body.printer, body.width ?? 32, body.openDrawer));
+  await audit(req, { action: 'hardware.printer_tested', details: { printer: body.printer } });
+  res.json({ ok: true });
+});
+
+const labelItems = z.array(z.object({
+  name: z.string().max(60), price: z.string().max(20), unit: z.string().max(40).optional(),
+  barcode: z.string().regex(/^[A-Za-z0-9-]{1,40}$/), copies: z.number().int().min(1).max(500).default(1),
+})).min(1).max(500);
+
+/** A valid retail GTIN prints as a real EAN-13 symbol; everything else as Code 128. Returns the printer command. */
+function barcodeCommand(language: 'zpl' | 'tspl', raw: string): string {
+  const info = detectBarcode(raw);
+  const ean13 = info.format === 'EAN-13' && info.checkDigitValid ? info.code : info.format === 'UPC-A' && info.checkDigitValid ? `0${info.code}` : info.format === 'UPC-E' && info.gtin13 ? info.gtin13 : null;
+  if (language === 'zpl') {
+    // ^BE = EAN-13 (give 13 digits, the printer validates the check); ^BC = Code 128. ^BY2 = ~0.25 mm module.
+    return ean13 ? `^FO30,105^BY2^BEN,65,Y,N^FD${ean13}^FS` : `^FO20,110^BY2^BCN,60,Y,N,N^FD${raw}^FS`;
+  }
+  // TSPL: "EAN13" takes the 12-digit body (it computes the check); "128" is Code 128.
+  return ean13 ? `BARCODE 40,95,"EAN13",65,1,0,3,3,"${ean13.slice(0, 12)}"` : `BARCODE 20,100,"128",60,1,0,2,2,"${raw}"`;
+}
+
+/** 50 x 30 mm labels in ZPL (Zebra, 203 dpi) or TSPL (TSC, Xprinter...). */
+function labelPayload(language: 'zpl' | 'tspl', items: z.infer<typeof labelItems>) {
+  const clean = (s: string) => s.replace(/[\^~"\\]/g, '');
+  return items.map((i) =>
+    language === 'zpl'
+      ? `^XA^CI28^PW400^LL240^FO20,15^A0N,26,26^FD${clean(i.name)}^FS${i.unit ? `^FO20,45^A0N,20,20^FD${clean(i.unit)}^FS` : ''}^FO20,${i.unit ? 68 : 50}^A0N,34,34^FD${clean(i.price)}^FS${barcodeCommand('zpl', i.barcode)}^PQ${i.copies}^XZ`
+      : `SIZE 50 mm,30 mm\nGAP 2 mm,0\nCLS\nTEXT 20,10,"3",0,1,1,"${clean(i.name)}"\n${i.unit ? `TEXT 20,38,"2",0,1,1,"${clean(i.unit)}"\n` : ''}TEXT 20,${i.unit ? 58 : 45},"4",0,1,1,"${clean(i.price)}"\n${barcodeCommand('tspl', i.barcode)}\nPRINT ${i.copies}\n`,
+  ).join('\n');
+}
+
 /** Label data in ZPL or TSPL for label printers (browser labels are rendered client-side). */
 router.post('/hardware/labels', requirePermission('products.read'), async (req, res) => {
-  const body = parse(z.object({ language: z.enum(['zpl', 'tspl']), items: z.array(z.object({ name: z.string().max(60), price: z.string().max(20), barcode: z.string().regex(/^[A-Za-z0-9-]{1,40}$/), copies: z.number().int().min(1).max(500).default(1) })).min(1).max(500) }), req.body);
-  const clean = (s: string) => s.replace(/[\^~"\\]/g, '');
-  const out = body.items.map((i) =>
-    body.language === 'zpl'
-      ? `^XA^CI28^FO20,20^A0N,28,28^FD${clean(i.name)}^FS^FO20,60^A0N,36,36^FD${clean(i.price)}^FS^FO20,110^BY2^BCN,60,Y,N,N^FD${i.barcode}^FS^PQ${i.copies}^XZ`
-      : `SIZE 50 mm,30 mm\nGAP 2 mm,0\nCLS\nTEXT 20,10,"3",0,1,1,"${clean(i.name)}"\nTEXT 20,45,"4",0,1,1,"${clean(i.price)}"\nBARCODE 20,90,"128",60,1,0,2,2,"${i.barcode}"\nPRINT ${i.copies}\n`,
-  );
-  res.json({ data: { language: body.language, payload: out.join('\n') } });
+  const body = parse(z.object({ language: z.enum(['zpl', 'tspl']), items: labelItems }), req.body);
+  res.json({ data: { language: body.language, payload: labelPayload(body.language, body.items) } });
+});
+
+/** Prints labels from the server: to a printer installed on the Afey POS computer, or to a network label printer. */
+router.post('/hardware/labels/print', requirePermission('products.read'), async (req, res) => {
+  const body = parse(z.object({ language: z.enum(['zpl', 'tspl']), items: labelItems, localPrinter: z.string().trim().min(1).max(120).optional(), deviceId: objectId.optional() }).refine((b) => Boolean(b.localPrinter) !== Boolean(b.deviceId), 'Choose one printer'), req.body);
+  const data = Buffer.from(labelPayload(body.language, body.items), 'utf8');
+  const count = body.items.reduce((a, i) => a + i.copies, 0);
+  if (body.localPrinter) {
+    if (!serverHasPrinters()) throw new AppError(400, 'USE_BRIDGE', 'The online head-office server has no printers: print through this PC (print window) or its device bridge');
+    await printToLocalPrinter(body.localPrinter, data);
+  } else {
+    const d = await HardwareDevice.findById(body.deviceId).lean();
+    if (!d || d.kind !== 'label_printer') throw notFound('Label printer');
+    if (d.connection !== 'network' || !d.settings?.host) throw badRequest(`${d.name} is not a network printer: print it through this PC or the device bridge`);
+    assertNetworkPrintingAllowed(d.settings.host);
+    await sendRaw(d.settings.host, d.settings.port ?? 9100, data);
+  }
+  await audit(req, { action: 'labels.printed', details: { labels: count, printer: body.localPrinter ?? String(body.deviceId), language: body.language } });
+  res.json({ ok: true, labels: count });
+});
+
+/** Label printers configured under Hardware (for the print panel; no settings beyond name and connection). */
+router.get('/hardware/label-printers', requirePermission('products.read'), async (_req, res) => {
+  const rows = await HardwareDevice.find({ kind: 'label_printer' }, { name: 1, connection: 1, 'settings.labelLanguage': 1 }).sort({ name: 1 }).lean();
+  res.json({ data: rows.map((d) => ({ _id: d._id, name: d.name, connection: d.connection, language: d.settings?.labelLanguage ?? 'zpl', serverCanPrint: d.connection === 'network' && env().DEPLOYMENT_MODE !== 'hq' })) });
 });
 
 export const hardwareRoutes = router;

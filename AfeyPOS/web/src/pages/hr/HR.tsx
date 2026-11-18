@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, download, openPrintable } from '../../lib/api';
@@ -8,6 +8,7 @@ import { date, money } from '../../lib/format';
 import { DataTable } from '../../components/DataTable';
 import { Badge, Button, Card, Checkbox, ErrorBox, Field, Input, Loading, Modal, MoneyInput, PageHeader, Select, Stat, StatusBadge, Tabs, useConfirm, useToast } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { ReportActions } from '../../components/ReportActions';
 
 const thisMonth = () => new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 7);
 const lastMonth = () => {
@@ -277,19 +278,20 @@ export function AttendancePage() {
   const toast = useToast();
   const [period, setPeriod] = useState(thisMonth());
   const q = useQuery({ queryKey: ['hr-attendance', period], queryFn: () => api<{ data: any[] }>('/hr/attendance', { query: { period } }).then((r) => r.data) });
+  const ref = useRef<HTMLDivElement>(null);
   const rows = q.data ?? [];
   const clockedIn = rows.filter((r) => r.clockedInNow).length;
   const averageRate = rows.length ? Math.round(rows.reduce((sum, r) => sum + (r.attendanceRate ?? 0), 0) / rows.length) : 0;
   return (
     <div>
-      <PageHeader title="Attendance" subtitle="Count is days with a clock-in. Rate is that count divided by calendar days elapsed; staff schedules and holidays are not stored." actions={<div className="flex flex-wrap gap-2">{me?.deploymentMode !== 'hq' && <Button variant="secondary" onClick={() => void download('/hr/attendance/launcher.cmd', 'AfeyPOS-Attendance.cmd').then(() => toast.success('Launcher downloaded. Run it on the Afey POS computer.')).catch(toast.error)}><Icon name="download" className="h-4 w-4" />Download attendance launcher</Button>}<Button variant="secondary" onClick={() => window.open('http://127.0.0.1:5175', '_blank', 'noopener,noreferrer')}>Open local attendance terminal</Button><Button variant="secondary" onClick={() => void download('/hr/attendance', `attendance-${period}.csv`, { period, format: 'csv' }).catch(toast.error)}><Icon name="download" className="h-4 w-4" />CSV</Button></div>} />
+      <PageHeader title="Attendance" subtitle="Count is days with a clock-in. Rate is that count divided by calendar days elapsed; staff schedules and holidays are not stored." actions={<div className="flex flex-wrap gap-2"><ReportActions target={ref} title="Attendance" meta={[["Month", period]]} csv={false} />{me?.deploymentMode !== 'hq' && <Button variant="secondary" onClick={() => void download('/hr/attendance/launcher.cmd', 'AfeyPOS-Attendance.cmd').then(() => toast.success('Launcher downloaded. Run it on the Afey POS computer.')).catch(toast.error)}><Icon name="download" className="h-4 w-4" />Download attendance launcher</Button>}<Button variant="secondary" onClick={() => window.open('http://127.0.0.1:5175', '_blank', 'noopener,noreferrer')}>Open local attendance terminal</Button><Button variant="secondary" onClick={() => void download('/hr/attendance', `attendance-${period}.csv`, { period, format: 'csv' }).catch(toast.error)}><Icon name="download" className="h-4 w-4" />CSV</Button></div>} />
       {me?.deploymentMode !== 'hq' && <div className="mb-4 rounded-lg border border-brand-200 bg-brand-50/50 p-4 text-sm text-ink-700 dark:border-brand-900 dark:bg-brand-950/20 dark:text-ink-200">
         <p className="font-semibold">Local attendance terminal</p>
         <p className="mt-1">Download and run the Windows command file on the Afey POS computer. It starts the terminal on port 5175 and opens it when ready. When the local bridge is configured in <code>bridge/config.json</code>, the launcher pairs the terminal with that bridge automatically for fingerprint attendance. Card scanner events save to this installation; branch attendance records sync to head office when the internet returns.</p>
       </div>}
       <Field label="Month" className="mb-3 max-w-xs"><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} /></Field>
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3"><Stat label="Staff tracked" value={String(rows.length)} /><Stat label="Clocked in now" value={String(clockedIn)} /><Stat label="Average attendance rate" value={`${averageRate}%`} hint="Calendar days elapsed" /></div>
-      <div className="card"><DataTable rows={rows.map((r) => ({ ...r, id: r.employeeNo }))} loading={q.isLoading} empty="Only employees linked to a staff login have attendance" columns={[
+      <div className="card" ref={ref}><DataTable rows={rows.map((r) => ({ ...r, id: r.employeeNo }))} loading={q.isLoading} empty="Only employees linked to a staff login have attendance" columns={[
         { key: 'no', header: 'No.', render: (r: any) => r.employeeNo }, { key: 'n', header: 'Name', render: (r: any) => r.name },
         { key: 'd', header: 'Attendance count', className: 'num', render: (r: any) => r.attendanceCount },
         { key: 'rate', header: 'Rate', className: 'num', render: (r: any) => <Badge tone={r.attendanceRate >= 80 ? 'green' : r.attendanceRate >= 50 ? 'amber' : 'red'}>{r.attendanceRate}%</Badge> },
@@ -338,6 +340,7 @@ export function PayrollRunPage() {
   const qc = useQueryClient();
   const { can, has } = useAuth();
   const q = useQuery({ queryKey: ['payroll', id], queryFn: () => api<{ data: any }>(`/hr/payroll/${id}`).then((r) => r.data) });
+  const ref = useRef<HTMLDivElement>(null);
   const [line, setLine] = useState<any>(null);
   if (!q.data) return <Loading />;
   const run = q.data;
@@ -346,8 +349,9 @@ export function PayrollRunPage() {
   const act = (p: Promise<any>, msg: string | ((r: any) => string)) => p.then((r) => { toast.success(typeof msg === 'string' ? msg : msg(r)); refresh(); }).catch(toast.error);
   const payoutStatus = (pid: string) => run.payouts?.find((p: any) => p._id === pid)?.status;
   return (
-    <div>
+    <div ref={ref}>
       <PageHeader title={`Payroll ${run.period}`} subtitle={`${run.number} · prepared by ${run.preparedByName ?? '—'}${run.approvedByName ? ` · approved by ${run.approvedByName}` : ''}`} actions={<>
+        <ReportActions target={ref} title={`Payroll ${run.period}`} subtitle={run.number} meta={[['Status', run.status], ['Prepared by', run.preparedByName ?? '—'], ...(run.approvedByName ? [['Approved by', run.approvedByName] as [string, string]] : [])]} orientation="landscape" />
         <Button variant="secondary" onClick={() => openPrintable(`/hr/payroll/${run._id}/payslips`)}><Icon name="printer" className="h-4 w-4" />Payslips</Button>
         <Button variant="secondary" onClick={() => download(`/hr/payroll/${run._id}/statutory`, `statutory-${run.period}.csv`, { format: 'csv' })}><Icon name="download" className="h-4 w-4" />PAYE / SHIF / NSSF</Button>
         {run.lines.some((l: any) => l.payMethod === 'bank') && <Button variant="secondary" onClick={() => download(`/hr/payroll/${run._id}/bank-file`, `bank-${run.period}.csv`)}>Bank file</Button>}

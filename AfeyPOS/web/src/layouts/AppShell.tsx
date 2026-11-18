@@ -11,9 +11,9 @@ import { cx, QueryRefreshCtx, useToast } from '../components/ui';
 import { applyTheme, getWorkstation, setWorkstation } from '../lib/workstation';
 import { connectRealtime, disconnectRealtime, useRealtime } from '../lib/realtime';
 
-const GROUPS: Record<string, string> = { sell: 'Sales', stock: 'Inventory', buy: 'Suppliers & purchasing', parties: 'Customers & marketing', people: 'People', finance: 'Finance', admin: 'Administration' };
+const GROUPS: Record<string, string> = { sell: 'Sales', stock: 'Inventory', buy: 'Suppliers & purchasing', parties: 'Customers & marketing', people: 'People', reports: 'Reports', finance: 'Finance', admin: 'Administration' };
 
-const GROUP_ICONS: Record<string, string> = { sell: 'cart', stock: 'box', buy: 'truck', parties: 'users', people: 'user', finance: 'wallet', admin: 'settings' };
+const GROUP_ICONS: Record<string, string> = { sell: 'cart', stock: 'box', buy: 'truck', parties: 'users', people: 'user', reports: 'chart', finance: 'wallet', admin: 'settings' };
 
 const ago = (iso: string) => {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -126,14 +126,14 @@ export function AppShell() {
   };
   const badges: Record<string, number> = { stockAlerts: alerts.data ?? 0 };
   const child = (n: { key: string; path: string; label: string }) => (
-    <NavLink key={n.key} to={n.path} end={n.path === '/inventory' || n.path === '/settings'} onClick={close}
+    <NavLink key={n.key} to={n.path} end={n.path === '/inventory' || n.path === '/settings' || n.path === '/reports'} onClick={close}
       className={({ isActive }) => cx('flex items-center gap-2 border-l-[3px] py-[7px] pl-11 pr-3 text-[12.5px] transition-colors', isActive ? 'border-brand-500 bg-side-active font-semibold text-white' : 'border-transparent text-side-text hover:bg-side-hover hover:text-white')}>
       <span className="truncate">{n.label}</span>
       {badges[n.key] ? <span className="ml-auto min-w-[20px] rounded-full bg-brand-500 px-1.5 text-center text-[10px] font-bold leading-5 text-white" aria-label={`${badges[n.key]} alerts`}>{badges[n.key]}</span> : null}
     </NavLink>
   );
   const item = (n: { key: string; path: string; icon: string; label: string }, end = false) => (
-    <NavLink key={n.key} to={n.path} end={end || n.path === '/inventory' || n.path === '/settings'} onClick={close} title={mini ? n.label : undefined}
+    <NavLink key={n.key} to={n.path} end={end || n.path === '/inventory' || n.path === '/settings' || n.path === '/reports'} onClick={close} title={mini ? n.label : undefined}
       className={({ isActive }) => cx('flex items-center gap-2.5 border-l-[3px] py-[7px] text-[12.5px] transition-colors', mini ? 'justify-center px-0' : 'pl-4 pr-3', isActive ? 'border-brand-500 bg-side-active font-semibold text-white' : 'border-transparent text-side-text hover:bg-side-hover hover:text-white')}>
       <Icon name={n.icon} className="h-[15px] w-[15px] shrink-0" />
       {!mini && <span className="truncate">{n.label}</span>}
@@ -202,7 +202,16 @@ export function AppShell() {
                 </button>
                 <Link to="/" className="ml-1 hidden items-center gap-2 sm:flex" aria-label="Afey POS home"><Logo className="h-6 w-auto" /><span className="text-[14px] font-bold text-ink-800 dark:text-white">Checkout</span></Link>
               </>
-            ) : <button className="rounded p-1.5 text-ink-600 hover:bg-ink-100 lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Icon name="menu" className="h-5 w-5" /></button>}
+            ) : <>
+              <button className="rounded p-1.5 text-ink-600 hover:bg-ink-100 lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Icon name="menu" className="h-5 w-5" /></button>
+              {/* Back to the previous page (the dashboard when there is none, e.g. a page opened from a link). */}
+              {loc.pathname !== '/' && (
+                <button type="button" onClick={() => ((window.history.state?.idx ?? 0) > 0 ? nav(-1) : nav('/', { replace: true }))} title="Back to the previous page" aria-label="Previous page"
+                  className="inline-flex items-center gap-1 rounded-md border border-[#d5d9de] bg-white px-2 py-1 text-[13px] font-semibold text-ink-700 shadow-sm transition hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-200 dark:hover:bg-ink-800">
+                  <Icon name="chevron" className="h-3.5 w-3.5 rotate-180" /><span className="hidden sm:inline">Back</span>
+                </button>
+              )}
+            </>}
             <div className={cx('hidden items-center gap-1 text-ink-500', !pos && 'sm:flex')}>
               {can('sales.create') && has('pos') && <Link to="/pos" className="rounded p-1.5 hover:bg-ink-100 hover:text-ink-800 dark:hover:bg-ink-800" title="Checkout" aria-label="Open checkout"><Icon name="cart" className="h-4 w-4" /></Link>}
               {can('sales.read') && <Link to="/returns" className="rounded p-1.5 hover:bg-ink-100 hover:text-ink-800 dark:hover:bg-ink-800" title="Returns" aria-label="Open returns"><Icon name="undo" className="h-4 w-4" /></Link>}

@@ -1,17 +1,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { CASHIER_PAGE_OPTIONS, MODULES, PAYMENT_PROVIDER_INFO, RECEIPT_TEMPLATES, mergeCheckoutRules, mergeReceipt, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
+import { Types } from 'mongoose';
+import { CASHIER_PAGE_OPTIONS, PAYMENT_METHOD_OPTIONS, MODULES, PAYMENT_PROVIDER_INFO, RECEIPT_TEMPLATES, mergeCheckoutRules, mergeReceipt, PAYMENT_PROVIDERS, PERMISSIONS, TENANT_ROLES, type ModuleKey, type PaymentProviderKey } from '@afeypos/shared';
 import {
-  AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, Expense, RepairTicket, Shift,
+  AuditLog, Branch, IntegrationConfig, NotificationLog, NotificationTemplate, Tenant, Till, User, Warehouse, RepairTicket, Shift,
 } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { requireModule, requirePermission, signedIn } from '../../http/auth.js';
-import { AppError, badRequest, forbidden, notFound } from '../../lib/errors.js';
-import { audit } from '../../lib/audit.js';
+import { AppError, badRequest, forbidden, notFound, unprocessable } from '../../lib/errors.js';
+import { audit, auditSignature, auditSigningText } from '../../lib/audit.js';
 import { hashPassword, pinLookupHash } from '../../lib/crypto.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { nextNumber } from '../../lib/numbering.js';
 import { env } from '../../config/env.js';
+import { etimsGateway } from '../etims/service.js';
 import { revokeAllSessions } from '../auth/service.js';
 import { passwordSchema } from '../tenants/provisioning.js';
 import { nextEmployeeNo } from '../staff/cards.js';
@@ -20,13 +22,13 @@ import { openSecrets, presentConfig, sealSecrets } from '../integrations/configs
 import { gatewayCallbackUrl, paymentGatewayFor } from '../payments/gateways.js';
 import { createSmsProvider } from '../../integrations/sms/index.js';
 import { createEmailProvider } from '../../integrations/email/index.js';
-import { callbackUrlProblems, callbackUrls, gatewayFor, handleC2B } from '../payments/mpesa.js';
+import { c2bShortCodeOf, callbackUrlProblems, callbackUrls, gatewayFor, handleC2B, mpesaParts } from '../payments/mpesa.js';
 import { explainC2BError } from '../../integrations/mpesa/daraja.js';
 import { etimsGateway } from '../etims/service.js';
 import { notify } from '../notifications/service.js';
 import { DEFAULT_TEMPLATES } from '../notifications/templates.js';
 import { receiptContext, renderReceiptHtml, renderReceiptText, sampleSale } from '../hardware/receipt.js';
-import { CashMovement, Sale } from '../../models/index.js';
+import { PaymentIntent, Sale } from '../../models/index.js';
 import { checkUserAccessChange, roleRoutes } from './roles.js';
 
 const showKeys = ['logo', 'tagline', 'address', 'phone', 'email', 'taxPin', 'cashier', 'till', 'branch', 'customer', 'sku', 'unitPrice', 'itemCount', 'taxSummary', 'savings', 'loyalty', 'barcode', 'qr', 'poweredBy'] as const;
@@ -66,11 +68,13 @@ const settingsSchema = z.object({
       restrictedSaleHours: z.object({ start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).or(z.literal('')), end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).or(z.literal('')) }).partial(),
       dailyReportEmails: z.array(z.string().email()).max(5),
       logoFileId: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/).or(z.literal('')),
+      appIcon: z.object({ source: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/), i192: z.string().regex(/^[a-f0-9]{32}\.png$/), i512: z.string().regex(/^[a-f0-9]{32}\.png$/), m512: z.string().regex(/^[a-f0-9]{32}\.png$/) }).nullable(),
       tagline: z.string().max(120),
       creditReminders: z.object({ enabled: z.boolean(), overdueDays: z.number().int().min(1).max(180) }).partial(),
       staffLogin: z.object({ cardRequiresPin: z.boolean() }).partial(),
       store: z.object({ enabled: z.boolean(), branchId: objectId.nullable(), warehouseId: objectId.nullable(), pickup: z.boolean(), delivery: z.boolean(), deliveryAreas: z.array(z.object({ name: z.string().trim().min(1).max(60), feeCents: z.number().int().min(0) })).max(50), deliveryFeeCents: z.number().int().min(0), freeDeliveryAboveCents: z.number().int().min(0), minOrderCents: z.number().int().min(0), payOnDelivery: z.boolean(), mpesa: z.boolean(), notifyPhone: z.string().max(20), contactPhone: z.string().max(20), announcement: z.string().max(200), hours: z.string().max(120), mpesaConfigId: objectId.nullable(), gatewayConfigId: objectId.nullable(), publicUrl: z.string().trim().url().max(200).or(z.literal('')) }).partial(),
       crm: z.object({ tiers: z.array(z.object({ name: z.string().trim().min(1).max(30), minSpendCents: z.number().int().min(0) })).min(1).max(8), birthdayGreeting: z.object({ enabled: z.boolean(), channel: z.enum(['sms', 'email']), offer: z.string().max(200) }).partial() }).partial(),
+      expenses: z.object({ approvalAboveCents: z.number().int().min(0) }).partial(),
       returns: z.object({ windowDays: z.number().int().min(0).max(365), approvalAboveCents: z.number().int().min(0), restockByDefault: z.boolean() }).partial(),
     })
     .partial(),
@@ -132,10 +136,18 @@ router.post('/settings/receipt/preview', requirePermission('settings.manage'), a
 // ---------- checkout rules and card terminals ----------
 const bp = z.number().int().min(0).max(10000);
 const rulesSchema = z.object({
-  items: z.object({ removeNeedsApproval: z.boolean(), reduceQtyNeedsApproval: z.boolean(), clearNeedsApproval: z.boolean(), holdAllowed: z.boolean() }).partial(),
+  items: z.object({ removeNeedsApproval: z.boolean(), reduceQtyNeedsApproval: z.boolean(), clearNeedsApproval: z.boolean(), holdAllowed: z.boolean(), maxQtyPerLine: z.number().int().min(0).max(100000) }).partial(),
   discounts: z.object({ allowed: z.boolean(), lineLimitBp: bp, saleLimitBp: bp, maxAmountCents: positiveCents }).partial(),
   shifts: z.object({ required: z.boolean(), minOpeningFloatCents: positiveCents, blindClose: z.boolean(), closeNeedsApproval: z.boolean(), maxCashInDrawerCents: positiveCents, oneOpenShiftPerCashier: z.boolean() }).partial(),
+  mpesa: z.object({ watchTillPayments: z.boolean(), autoComplete: z.boolean() }).partial(),
+  pricing: z.object({ wholesaleAtTill: z.boolean(), wholesaleNeedsApproval: z.boolean(), wholesaleByQuantity: z.boolean(), roundToWholeShilling: z.boolean() }).partial(),
+  kra: z.object({ waitSeconds: z.number().int().min(0).max(120), printUnsigned: z.boolean() }).partial(),
+  security: z.object({ lockAfterMinutes: z.number().int().min(0).max(240) }).partial(),
+  display: z.object({ productGrid: z.boolean() }).partial(),
+  transfers: z.object({ approvalRequired: z.boolean() }).partial(),
+  customer: z.object({ phone: z.enum(['off', 'ask', 'mpesa', 'both']), createFromPhone: z.boolean(), awardLoyalty: z.boolean(), required: z.boolean() }).partial(),
   cashierPages: z.array(z.enum(CASHIER_PAGE_OPTIONS.map((p) => p.key) as [string, ...string[]])).max(CASHIER_PAGE_OPTIONS.length),
+  paymentMethods: z.array(z.enum(PAYMENT_METHOD_OPTIONS.map((p) => p.key) as [string, ...string[]])).min(1, 'Keep at least one way to pay').max(PAYMENT_METHOD_OPTIONS.length),
 }).partial();
 const terminalsSchema = z.array(z.object({ name: z.string().trim().min(1).max(40), bank: z.string().trim().max(40), terminalId: z.string().trim().max(40) })).max(30);
 const presentRules = (t: any) => ({ rules: mergeCheckoutRules(t.settings?.checkoutRules, t.settings ?? {}), cardTerminals: t.settings?.cardTerminals ?? [] });
@@ -148,13 +160,43 @@ router.get('/settings/checkout-rules', requirePermission('settings.manage'), asy
 router.put('/settings/checkout-rules', requirePermission('settings.manage'), async (req, res) => {
   const body = parse(z.object({ rules: rulesSchema, cardTerminals: terminalsSchema.optional() }), req.body);
   const current = mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
-  const rules = mergeCheckoutRules({ ...current, ...body.rules, items: { ...current.items, ...body.rules.items }, discounts: { ...current.discounts, ...body.rules.discounts }, shifts: { ...current.shifts, ...body.rules.shifts } });
+  const rules = mergeCheckoutRules({ ...current, ...body.rules, items: { ...current.items, ...body.rules.items }, discounts: { ...current.discounts, ...body.rules.discounts }, shifts: { ...current.shifts, ...body.rules.shifts }, mpesa: { ...current.mpesa, ...body.rules.mpesa }, pricing: { ...current.pricing, ...body.rules.pricing }, kra: { ...current.kra, ...body.rules.kra }, security: { ...current.security, ...body.rules.security }, display: { ...current.display, ...body.rules.display }, transfers: { ...current.transfers, ...body.rules.transfers }, customer: { ...current.customer, ...body.rules.customer } });
   // The older single settings stay in step for anything that still reads them.
   const set: Record<string, unknown> = { 'settings.checkoutRules': rules, 'settings.requireOpenShift': rules.shifts.required, 'settings.cashierDiscountLimitBp': rules.discounts.saleLimitBp };
   if (body.cardTerminals) set['settings.cardTerminals'] = body.cardTerminals;
   const t = await runAsPlatform(() => Tenant.findByIdAndUpdate(req.tenant!._id, { $set: set }, { new: true }).lean());
   await audit(req, { action: 'settings.checkout_rules_updated', entity: 'Tenant', entityId: req.tenant!._id, details: { rules } });
   res.json({ data: presentRules(t) });
+});
+
+// ---------- till buttons: icon, picture, label and colours of the checkout buttons and More actions ----------
+const TILL_BUTTON_KEYS = [
+  'mpesa', 'cash', 'card', 'loyalty', 'voucher', 'customer', 'hold', 'more',
+  'qty', 'ldisc', 'del', 'gdisc', 'resume', 'browse', 'endshift', 'drawer', 'drop', 'display', 'clear',
+] as const;
+const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Colours are #RRGGBB');
+const tillButtonSchema = z.object({
+  /** One of the app's built-in icons. */
+  icon: z.string().regex(/^[a-z]{2,20}$/).optional(),
+  /** An uploaded picture (PNG, JPEG or WEBP) shown instead of the drawing. */
+  image: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/).optional(),
+  label: z.string().trim().max(24).optional(),
+  bg: hex.optional(),
+  text: hex.optional(),
+}).strict();
+const tillButtonsSchema = z.record(z.enum(TILL_BUTTON_KEYS), tillButtonSchema);
+
+router.get('/settings/till-buttons', requirePermission('settings.manage'), async (req, res) => {
+  res.json({ data: req.tenant!.settings?.tillButtons ?? {}, keys: TILL_BUTTON_KEYS });
+});
+
+router.put('/settings/till-buttons', requirePermission('settings.manage'), async (req, res) => {
+  const body = parse(z.object({ buttons: tillButtonsSchema }), req.body);
+  // Empty entries mean "as it comes": they are not stored.
+  const buttons = Object.fromEntries(Object.entries(body.buttons).map(([k, v]) => [k, Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined && x !== ''))]).filter(([, v]) => Object.keys(v as object).length));
+  await runAsPlatform(() => Tenant.updateOne({ _id: req.tenant!._id }, { $set: { 'settings.tillButtons': buttons } }));
+  await audit(req, { action: 'settings.till_buttons_updated', entity: 'Tenant', entityId: req.tenant!._id, details: { buttons: Object.keys(buttons) } });
+  res.json({ data: buttons });
 });
 
 /** Enable or hide modules. Disabling never deletes data. */
@@ -171,6 +213,7 @@ router.put('/settings/modules', requirePermission('settings.manage'), async (req
 const userSchema = z.object({
   name: z.string().trim().min(2).max(120),
   email: z.string().trim().toLowerCase().email(),
+  username: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9._-]{2,29}$/, 'Username: 3-30 letters, digits, dots, dashes or underscores').or(z.literal('')).optional(),
   phone: z.string().max(30).optional(),
   roles: z.array(z.enum(TENANT_ROLES as [string, ...string[]]).or(z.string().regex(/^custom:[a-z0-9-]{2,40}$/))).min(1).max(10),
   extraPermissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length).default([]),
@@ -181,6 +224,11 @@ const userSchema = z.object({
   photoFileId: z.string().regex(/^[a-f0-9]{32}\.(png|jpg|webp)$/).or(z.literal('')).optional(),
   employeeNo: z.string().max(30).optional(),
 });
+
+async function assertUsernameFree(username: string | undefined, self: unknown) {
+  if (!username) return;
+  if (await User.exists({ username, _id: { $ne: self } })) throw new AppError(409, 'USERNAME_TAKEN', `The username "${username}" is already used`);
+}
 
 function present(u: any) {
   const { passwordHash: _p, pinHash, pinLookupHash: _pl, twoFactor, card, ...rest } = u;
@@ -195,11 +243,12 @@ router.get('/settings/users', requirePermission('users.manage'), async (_req, re
 router.post('/settings/users', requirePermission('users.manage'), async (req, res) => {
   const body = parse(userSchema.extend({ password: passwordSchema, pin: z.string().regex(/^\d{4,8}$/).optional() }), req.body);
   await checkUserAccessChange(req, null, { roles: body.roles, extraPermissions: body.extraPermissions, deniedPermissions: body.deniedPermissions, branchIds: body.branchIds.map(String) });
+  await assertUsernameFree(body.username, null);
   const lookupHash = body.pin ? pinLookupHash(String(req.tenant!._id), body.pin) : undefined;
   if (lookupHash && await User.exists({ pinLookupHash: lookupHash })) throw badRequest('That PIN is already assigned to another staff member. Choose a unique PIN for PIN-only sign-in.');
   let u;
   try {
-    u = await User.create({ ...body, employeeNo: body.employeeNo || (await nextEmployeeNo()), passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined, pinLookupHash: lookupHash });
+    u = await User.create({ ...body, username: body.username || undefined, employeeNo: body.employeeNo || (await nextEmployeeNo()), passwordHash: await hashPassword(body.password), pinHash: body.pin ? await hashPassword(body.pin) : undefined, pinLookupHash: lookupHash });
   } catch (err: any) {
     if (err?.code === 11000 && err?.keyPattern?.pinLookupHash) throw badRequest('That PIN is already assigned to another staff member. Choose a unique PIN for PIN-only sign-in.');
     throw err;
@@ -219,8 +268,12 @@ router.patch('/settings/users/:id', requirePermission('users.manage'), async (re
     roles: body.roles ?? (target.roles as string[]), extraPermissions: body.extraPermissions ?? target.extraPermissions ?? [], deniedPermissions: body.deniedPermissions ?? target.deniedPermissions ?? [],
     branchIds: (body.branchIds ?? target.branchIds ?? []).map(String), status: body.status,
   });
-  const { password, pin, ...rest } = body;
+  const { password, pin, username, ...rest } = body;
   Object.assign(target, rest);
+  if (username !== undefined) {
+    await assertUsernameFree(username, target._id);
+    target.username = username || undefined;
+  }
   if (password) target.passwordHash = await hashPassword(password);
   // Managers set or clear a till PIN; keyed lookup allows PIN-only sign-in without retaining plaintext.
   if (pin !== undefined) {
@@ -243,7 +296,9 @@ router.patch('/settings/users/:id', requirePermission('users.manage'), async (re
 router.get('/settings/locations', signedIn('needed to choose a till or warehouse'), async (_req, res) => {
   // Every signed-in user sees branch and warehouse names (stock transfers name the other side);
   // tills are branch-scoped, so restricted users only get their own branches' tills.
-  const [branches, warehouses, tills] = await Promise.all([Branch.find({}).lean(), Warehouse.find({}).lean(), Till.find({}).lean()]);
+  // Deleted branches, stores and tills are kept for history but no longer listed.
+  const live = { deletedAt: { $exists: false } };
+  const [branches, warehouses, tills] = await Promise.all([Branch.find(live).lean(), Warehouse.find(live).lean(), Till.find(live).lean()]);
   res.json({ data: { branches, warehouses, tills } });
 });
 
@@ -298,25 +353,44 @@ const integrationSchema = z.object({
   isDefault: z.boolean().default(false),
   environment: z.enum(['sandbox', 'production']).default('sandbox'),
   branchIds: z.array(objectId).default([]),
-  settings: z.record(z.string(), z.union([z.string().max(300), z.number(), z.boolean()])).default({}),
+  tillIds: z.array(objectId).max(200).default([]),
+  settings: z.record(z.string(), z.union([z.string().max(300), z.number(), z.boolean(), z.array(z.string().max(120)).max(30)])).default({}),
   secrets: z.record(z.string(), z.string().max(4000)).optional(),
 });
 
 const PROVIDERS: Record<string, string[]> = {
   mpesa: ['daraja', 'mock'],
   payment: PAYMENT_PROVIDERS.filter((p) => PAYMENT_PROVIDER_INFO[p].availability === 'available'),
-  etims: ['oscu', 'vscu', 'mock'],
+  etims: ['oscu', 'vscu', 'etr', 'mock'],
   sms: ['talksasa', 'africastalking', 'console'],
   email: ['smtp', 'console'],
 };
 
 const isSimulator = (c: { provider: string }) => c.provider === 'mock' || c.provider === 'simulator';
 
+/** An ETR device is reached on the Afey POS computer: the online head office cannot reach one in a shop. */
+function assertEtrSettings(st: Record<string, unknown>) {
+  const how = String(st.connection ?? 'http');
+  if (!['http', 'folder', 'tremol', 'simulator'].includes(how)) throw badRequest('ETR device: choose how Afey POS reaches its program');
+  if (how !== 'simulator' && env().DEPLOYMENT_MODE === 'hq') throw badRequest('ETR device: it is plugged into the shop computer, so set it up on that computer (the branch server), not on the online head office');
+  if (how === 'http' && !/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost)/.test(String(st.url ?? ''))) throw badRequest('ETR device: enter the address of its program on this computer, e.g. http://127.0.0.1:4444');
+  if (how === 'tremol' && st.url && !/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost)/.test(String(st.url))) throw badRequest('Tremol: the ZFP Lab Server address must be on this computer or the shop network, e.g. http://127.0.0.1:4444');
+  if (how === 'folder' && (!st.inbox || !st.outbox)) throw badRequest('ETR device: enter the inbox and outbox folders of its program');
+}
+
 /** Checks a payment gateway config has every required field (secrets may already be stored). */
 function assertGatewayFields(provider: string, settings: Record<string, unknown>, secrets: Record<string, unknown>) {
   const info = PAYMENT_PROVIDER_INFO[provider as PaymentProviderKey];
   const missing = info.fields.filter((f) => f.required && !(f.secret ? secrets[f.key] : settings[f.key])).map((f) => f.label);
   if (missing.length) throw badRequest(`${info.label}: missing ${missing.join(', ')}`);
+}
+
+/** A config limited to some tills also lists their branches, so each branch server receives it by sync. */
+async function scopeToTills(body: { tillIds?: unknown[]; branchIds?: unknown[] }) {
+  if (!body.tillIds?.length) return;
+  const tills = await Till.find({ _id: { $in: body.tillIds } }, { branchId: 1 }).lean();
+  if (tills.length !== new Set(body.tillIds.map(String)).size) throw badRequest('Choose existing tills');
+  body.branchIds = [...new Set(tills.map((t) => String(t.branchId)))].map((id) => new Types.ObjectId(id));
 }
 
 router.get('/settings/integrations', requirePermission('integrations.manage'), async (req, res) => {
@@ -338,8 +412,10 @@ router.post('/settings/integrations', requirePermission('integrations.manage'), 
     if (!/^[AP]\d{9}[A-Z]$/.test(String(body.settings.tin ?? '').toUpperCase())) throw badRequest('eTIMS: enter the KRA PIN, e.g. P051234567X');
     if (!/^\d{2}$/.test(String(body.settings.bhfId ?? ''))) throw badRequest('eTIMS: branch id is two digits, "00" for head office');
     if (body.provider === 'vscu' && !body.settings.baseUrl) throw badRequest('eTIMS: enter the VSCU address on your network');
+    if (body.provider === 'etr') assertEtrSettings(body.settings);
     body.settings.tin = String(body.settings.tin).toUpperCase();
   }
+  await scopeToTills(body);
   const { secrets, ...rest } = body;
   const cfg = new IntegrationConfig(rest);
   if (secrets) cfg.secretsEnc = sealSecrets(cfg._id, secrets);
@@ -352,19 +428,41 @@ router.patch('/settings/integrations/:id', requirePermission('integrations.manag
   const body = parse(integrationSchema.partial().omit({ kind: true }), req.body);
   const cfg = await IntegrationConfig.findById(idParam(req.params.id));
   if (!cfg) throw notFound('Integration');
+  await scopeToTills(body);
   const { secrets, ...rest } = body;
   Object.assign(cfg, rest);
   if (isSimulator(cfg) && cfg.environment === 'production') throw badRequest('The simulator cannot be used in production mode');
   if (secrets) cfg.secretsEnc = sealSecrets(cfg._id, { ...openSecrets(cfg), ...Object.fromEntries(Object.entries(secrets).filter(([, v]) => v !== '')) });
   if (cfg.kind === 'payment') assertGatewayFields(cfg.provider, cfg.settings ?? {}, openSecrets(cfg));
+  if (cfg.kind === 'etims' && cfg.provider === 'etr') assertEtrSettings(cfg.settings ?? {});
   cfg.markModified('settings');
   await cfg.save();
   await audit(req, { action: 'integration.updated', entity: 'IntegrationConfig', entityId: cfg._id, details: { fields: Object.keys(rest), secretKeys: Object.keys(secrets ?? {}) } });
   res.json({ data: presentConfig(cfg) });
 });
 
+/**
+ * Turns an integration off (the default), or removes it for good with ?remove=true. Removing takes its stored
+ * keys with it and is only for owners and administrators; payments already taken keep working, as each one
+ * remembers what it was paid into.
+ */
 router.delete('/settings/integrations/:id', requirePermission('integrations.manage'), async (req, res) => {
-  const r = await IntegrationConfig.findOneAndUpdate({ _id: idParam(req.params.id) }, { $set: { enabled: false } }, { new: true });
+  const id = idParam(req.params.id);
+  if (req.query.remove === 'true') {
+    if (!req.auth!.roles.includes('tenant_owner') && !req.auth!.roles.includes('business_admin')) throw forbidden('Only owners and administrators can remove an integration');
+    const r = await IntegrationConfig.findById(id);
+    if (!r) throw notFound('Integration');
+    // M-Pesa with money still coming in: turn it off instead, so late payments are still recognised.
+    if (r.kind === 'mpesa') {
+      const waiting = await PaymentIntent.countDocuments({ configId: r._id, status: 'pending' });
+      if (waiting) throw unprocessable(`${r.name} has ${waiting} payment${waiting === 1 ? '' : 's'} still waiting. Finish or cancel them first, or just disable it.`, 'INTEGRATION_IN_USE');
+    }
+    await IntegrationConfig.deleteOne({ _id: r._id });
+    await audit(req, { action: 'integration.removed', entity: 'IntegrationConfig', entityId: r._id, details: { kind: r.kind, provider: r.provider, name: r.name } });
+    res.json({ data: { id: r._id, removed: true } });
+    return;
+  }
+  const r = await IntegrationConfig.findOneAndUpdate({ _id: id }, { $set: { enabled: false } }, { new: true });
   if (!r) throw notFound('Integration');
   await audit(req, { action: 'integration.disabled', entity: 'IntegrationConfig', entityId: r._id });
   res.json({ data: presentConfig(r) });
@@ -379,10 +477,19 @@ router.post('/settings/integrations/:id/test', requirePermission('integrations.m
   let message = '';
   try {
     if (cfg.kind === 'mpesa') {
-      await gatewayFor(cfg).testCredentials();
-      message = 'Daraja OAuth token obtained';
+      const parts = mpesaParts(cfg);
+      const own = openSecrets(cfg);
+      const done: string[] = [];
+      // Each part is tested with its own Daraja app when it has one.
+      if (parts.stk || !own.c2bConsumerKey) { await gatewayFor(cfg, 'stk').testCredentials(); done.push(parts.stk ? 'prompt (STK) keys' : 'keys'); }
+      if (parts.c2b && own.c2bConsumerKey) { await gatewayFor(cfg, 'c2b').testCredentials(); done.push('C2B keys'); }
+      message = `Daraja OAuth token obtained (${done.join(' and ')})`;
     } else if (cfg.kind === 'payment') {
       message = await paymentGatewayFor(cfg).testCredentials();
+    } else if (cfg.kind === 'etims' && cfg.provider === 'etr') {
+      // An ETR device: its program must answer (or its folders be usable) on this computer.
+      await etimsGateway(cfg).initialize();
+      message = cfg.settings?.connection === 'simulator' ? 'ETR simulator ready' : cfg.settings?.connection === 'folder' ? `Folders ready: ${cfg.settings?.inbox} → ${cfg.settings?.outbox}` : `ETR program answers at ${cfg.settings?.url}`;
     } else if (cfg.kind === 'etims') {
       const reachability = await etimsGateway(cfg).testConnection();
       if (!openSecrets(cfg).cmcKey && cfg.provider !== 'mock') {
@@ -416,7 +523,7 @@ async function c2bPlan(req: any, cfg: InstanceType<typeof IntegrationConfig>, sh
   const t = await runAsPlatform(() => Tenant.findById(req.tenant!._id).lean());
   const urls = callbackUrls(t!._id, t!.callbackToken);
   // Paybill: the Paybill number. Buy Goods: Safaricom registers URLs on the store (head office) number.
-  const shortCode = String(shortCodeOverride || cfg.settings?.shortCode || cfg.settings?.tillNumber || '').trim();
+  const shortCode = String(shortCodeOverride || c2bShortCodeOf(cfg)).trim();
   const environment = cfg.environment as 'sandbox' | 'production';
   const problems = cfg.provider === 'mock' ? [] : callbackUrlProblems(urls.c2bConfirmation, environment);
   // Plain http is only a warning in the sandbox; everything else stops the registration.
@@ -438,13 +545,14 @@ router.post('/settings/integrations/:id/register-c2b', requirePermission('integr
   const cfg = await IntegrationConfig.findOne({ _id: idParam(req.params.id), kind: 'mpesa' });
   if (!cfg) throw notFound('Integration');
   if (!cfg.enabled) throw badRequest('Enable this M-Pesa configuration first');
+  if (!mpesaParts(cfg).c2b) throw badRequest('Turn on "Customer pays the Paybill/Till (C2B)" for this account first');
   const plan = await c2bPlan(req, cfg, body.shortCode);
   if (plan.blocking.length) throw new AppError(422, 'C2B_URL_INVALID', plan.blocking[0], { problems: plan.blocking });
   let ok = false;
   let message: string;
   let response: unknown;
   try {
-    response = await gatewayFor(cfg).registerC2BUrls(plan.confirmationUrl, plan.validationUrl, plan.shortCode);
+    response = await gatewayFor(cfg, 'c2b').registerC2BUrls(plan.confirmationUrl, plan.validationUrl, plan.shortCode);
     ok = true;
     message = `Registered for short code ${plan.shortCode}${(response as any)?.ResponseDescription ? `: ${(response as any).ResponseDescription}` : ''}`;
   } catch (err) {
@@ -479,7 +587,7 @@ router.post('/settings/integrations/:id/test-c2b', requirePermission('integratio
     return;
   }
   try {
-    const r = await gatewayFor(cfg).simulateC2B({ shortCode, amount: body.amount, phone: body.phone, billRef: 'TEST', buyGoods });
+    const r = await gatewayFor(cfg, 'c2b').simulateC2B({ shortCode, amount: body.amount, phone: body.phone, billRef: 'TEST', buyGoods });
     res.json({ data: { ok: true, message: `Safaricom accepted the test payment (${r.ResponseDescription ?? 'accepted'}). When it reaches this server, "Last payment received" updates within a minute.` } });
   } catch (err) {
     throw new AppError(422, 'C2B_TEST_FAILED', explainC2BError(err, 'sandbox'));
@@ -518,26 +626,28 @@ router.get('/audit', requirePermission('audit.read'), async (req, res) => {
   res.json({ data, total, page: q.page, limit: q.limit });
 });
 
-// ---------- expenses ----------
-router.get('/expenses', requirePermission('expenses.manage'), requireModule('expenses'), async (req, res) => {
-  const q = parse(pagination.extend({ from: z.coerce.date().optional(), to: z.coerce.date().optional(), category: z.string().optional() }), req.query);
-  const filter: Record<string, unknown> = {};
-  if (q.category) filter.category = q.category;
-  if (q.from || q.to) filter.date = { ...(q.from ? { $gte: q.from } : {}), ...(q.to ? { $lte: q.to } : {}) };
-  const [data, total] = await Promise.all([Expense.find(filter).sort({ date: -1 }).skip((q.page - 1) * q.limit).limit(q.limit).lean(), Expense.countDocuments(filter)]);
-  res.json({ data, total, page: q.page, limit: q.limit });
-});
-router.post('/expenses', requirePermission('expenses.manage'), requireModule('expenses'), async (req, res) => {
-  const body = parse(z.object({ category: z.string().trim().min(2).max(60), amountCents: positiveCents.refine((v) => v > 0), taxCents: positiveCents.default(0), method: z.enum(['cash', 'mpesa', 'bank', 'card', 'other']).default('cash'), branchId: objectId.optional(), shiftId: objectId.optional(), payee: z.string().max(120).optional(), reference: z.string().max(80).optional(), notes: z.string().max(500).optional(), date: z.coerce.date().optional() }), req.body);
-  const number = await nextNumber('expense', 'EXP');
-  const e = await Expense.create({ ...body, number, userId: req.auth!.userId });
-  if (body.method === 'cash' && body.shiftId) {
-    const shift = await Shift.findOne({ _id: body.shiftId, status: 'open' });
-    if (!shift) throw badRequest('Shift is not open');
-    await CashMovement.create({ shiftId: shift._id, tillId: shift.tillId, type: 'expense', amountCents: -body.amountCents, reason: body.category, userId: req.auth!.userId, ref: { type: 'Expense', id: e._id, number } });
+/**
+ * Checks the audit trail: every signed entry must still match its signature (edited entries do not), and each
+ * server's entry numbers must run without gaps (a gap is a deleted entry, or an action that was rolled back).
+ */
+router.get('/audit/verify', requirePermission('audit.read'), async (req, res) => {
+  const tenantId = req.tenant!._id;
+  const altered: { id: unknown; origin: string; seq: number; action: string; at: Date }[] = [];
+  const gaps: { origin: string; from: number; to: number }[] = [];
+  const counts = new Map<string, number>();
+  let unsigned = 0;
+  let last: { origin: string; seq: number } | null = null;
+  const cursor = AuditLog.find({}, { ip: 0 }).sort({ origin: 1, seq: 1 }).lean().cursor();
+  for await (const e of cursor) {
+    if (!e.sig || !e.origin || !e.seq) { unsigned++; continue; }
+    counts.set(e.origin, (counts.get(e.origin) ?? 0) + 1);
+    if (auditSignature(auditSigningText({ ...e, tenantId } as any)) !== e.sig && altered.length < 100) altered.push({ id: e._id, origin: e.origin, seq: e.seq, action: e.action, at: e.at });
+    if (last && last.origin === e.origin && e.seq > last.seq + 1 && gaps.length < 100) gaps.push({ origin: e.origin, from: last.seq + 1, to: e.seq - 1 });
+    last = { origin: e.origin, seq: e.seq };
   }
-  await audit(req, { action: 'expense.recorded', entity: 'Expense', entityId: e._id, details: { amountCents: body.amountCents, category: body.category } });
-  res.status(201).json({ data: e });
+  await audit(req, { action: 'audit.verified', details: { altered: altered.length, gaps: gaps.length } });
+  res.json({ data: { ok: altered.length === 0, checked: [...counts.values()].reduce((a, b) => a + b, 0), servers: Object.fromEntries(counts), unsigned, altered, gaps,
+    note: 'Altered: the entry was changed after it was written. Gaps: numbers missing, from deleted entries or from actions that were cancelled before they finished. Entries from before signing started are counted as unsigned.' } });
 });
 
 // ---------- repairs (electronics) ----------

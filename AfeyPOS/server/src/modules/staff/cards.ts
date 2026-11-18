@@ -6,20 +6,20 @@
  */
 import { Router } from 'express';
 import type { Request } from 'express';
-import { Counter, User } from '../../models/index.js';
+import { User } from '../../models/index.js';
+import { nextNumber } from '../../lib/numbering.js';
 import { idParam } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
-import { base32Encode, decrypt, encrypt, sha256, verifyPassword } from '../../lib/crypto.js';
+import { base32Encode, decrypt, encrypt, sha256 } from '../../lib/crypto.js';
 import { AppError, notFound, unauthorized } from '../../lib/errors.js';
 import { audit } from '../../lib/audit.js';
 import crypto from 'node:crypto';
 
 const router = Router();
 
-/** EMP-0001, EMP-0002... (staff are created at head office, so no branch prefix). */
+/** EMP-0001, EMP-0002…; staff added on a branch server carry its code (EMP-MSA01-0001) so numbers never clash. */
 export async function nextEmployeeNo() {
-  const c = await Counter.findOneAndUpdate({ key: 'employee' }, { $inc: { seq: 1 } }, { upsert: true, new: true });
-  return `EMP-${String(c!.seq).padStart(4, '0')}`;
+  return nextNumber('employee', 'EMP', 4);
 }
 
 /** Card codes look like "AFE7Q2M9KX4TRB3P": a fixed prefix (so the till recognises a staff card) plus 13 base32 characters. */
@@ -36,19 +36,13 @@ export async function userByCard(code: string) {
 }
 
 /** Card plus PIN (when required): counts failures towards the same lockout as passwords. */
-/** `skipPin`: the card alone is enough (supervisor approvals at the till: scanning the card approves). */
-export async function authenticateCard(req: Request, code: string, pin?: string, opts: { skipPin?: boolean } = {}) {
+/**
+ * The staff card alone identifies the employee (sign-in, clock in/out, supervisor approval): no PIN. Cards hold a
+ * long random code; a lost card is blocked by issuing a new one (Users → Staff card), which revokes the old code.
+ */
+export async function authenticateCard(_req: Request, code: string) {
   const u = await userByCard(code);
   if (u.lockedUntil && u.lockedUntil > new Date()) throw new AppError(423, 'ACCOUNT_LOCKED', 'Account temporarily locked');
-  const needPin = !opts.skipPin && (req.tenant!.settings?.staffLogin?.cardRequiresPin ?? true);
-  if (needPin) {
-    if (!pin) throw new AppError(401, 'PIN_REQUIRED', 'Enter your PIN');
-    if (!u.pinHash || !(await verifyPassword(pin, u.pinHash))) {
-      const failed = (u.failedLogins ?? 0) + 1;
-      await User.updateOne({ _id: u._id }, { $set: { failedLogins: failed, ...(failed >= 5 ? { lockedUntil: new Date(Date.now() + 15 * 60_000) } : {}) } });
-      throw unauthorized(u.pinHash ? 'Wrong PIN' : 'Set a PIN for this employee before using the card');
-    }
-  }
   return u;
 }
 

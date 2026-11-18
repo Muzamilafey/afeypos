@@ -7,23 +7,20 @@
  * and are listed for the owner to fix. Receipts print the signature and the KRA QR code once signed.
  */
 import { Types } from 'mongoose';
-import { Counter, Customer, IntegrationConfig, Product, Sale, SaleReturn, Tenant, User } from '../../models/index.js';
+import { Counter, Customer, IntegrationConfig, Job, Product, Sale, SaleReturn, Tenant, User } from '../../models/index.js';
 import { runAsPlatform } from '../../lib/context.js';
 import { enqueue, registerJob } from '../../jobs/queue.js';
 import { IntegrationError } from '../../integrations/http.js';
-import { EtimsClient, MockEtimsGateway, etimsDate, type EtimsGateway, type EtimsSale, type EtimsSaleLine } from '../../integrations/etims/client.js';
-import { findActiveConfig, openSecrets } from '../integrations/configs.js';
+import { etimsDate, type EtimsSale, type EtimsSaleLine } from '../../integrations/etims/client.js';
+import type { EtrSignature } from '../../integrations/etims/etr.js';
+import { FISCAL_OPEN, statusForError, type FiscalSignature, type FiscalStatus } from '../../integrations/fiscal/adapter.js';
+import { configsForTill, findActiveConfig } from '../integrations/configs.js';
+import { etimsGateway, fiscalAdapter } from './adapters.js';
+import { logFiscal, recordHealth, withDeviceLock } from './fiscal.js';
 
 type Cfg = InstanceType<typeof IntegrationConfig>;
 
-export function etimsGateway(cfg: Cfg): EtimsGateway {
-  if (cfg.provider === 'mock') return new MockEtimsGateway();
-  const s = cfg.settings ?? {};
-  return new EtimsClient({
-    mode: cfg.provider === 'vscu' ? 'vscu' : 'oscu', environment: cfg.environment as 'sandbox' | 'production',
-    tin: String(s.tin ?? ''), bhfId: String(s.bhfId ?? '00'), dvcSrlNo: s.dvcSrlNo, baseUrl: s.baseUrl, cmcKey: openSecrets(cfg).cmcKey,
-  });
-}
+export { etimsGateway } from './adapters.js';
 
 /** KRA tax type from the line's VAT rate unless the product overrides it. */
 export function taxType(rateBp: number | null | undefined, override?: string | null): 'A' | 'B' | 'C' | 'D' | 'E' {
@@ -50,8 +47,22 @@ const QTY_UNIT: Record<string, string> = { pc: 'U', kg: 'KG', g: 'GRM', l: 'LTR'
 const r2 = (cents: number) => Math.round(cents) / 100;
 const PAYMENT_CODE: Record<string, string> = { cash: '01', credit: '02', bank: '04', card: '05', mpesa: '06', gateway: '06', loyalty: '07', voucher: '07', other: '07' };
 
-export async function etimsConfigForBranch(branchId?: Types.ObjectId | null) {
-  return findActiveConfig('etims', branchId);
+export async function etimsConfigForBranch(branchId?: Types.ObjectId | null, tillId?: Types.ObjectId | null) {
+  return findActiveConfig('etims', branchId, tillId);
+}
+
+/** The ETR devices a till may sign with: its own, then its branch's, then the ones for the whole business. */
+export async function etimsDevicesForTill(branchId?: Types.ObjectId | null, tillId?: Types.ObjectId | null) {
+  return configsForTill('etims', branchId, tillId);
+}
+
+/** True if the sale has at least one line whose product is not excluded from eTIMS. */
+async function saleHasSendableLine(saleId: Types.ObjectId) {
+  const sale = await Sale.findById(saleId, { lines: 1 }).lean();
+  const ids = (sale?.lines ?? []).map((l: any) => l.productId).filter(Boolean);
+  if (!ids.length) return false;
+  const excluded = new Set((await Product.find({ _id: { $in: ids }, 'etims.doNotSend': true }, { _id: 1 }).lean()).map((p) => String(p._id)));
+  return (sale!.lines as any[]).some((l) => l.productId && !excluded.has(String(l.productId)));
 }
 
 async function nextInvoiceNo(configId: Types.ObjectId) {
@@ -60,12 +71,16 @@ async function nextInvoiceNo(configId: Types.ObjectId) {
 }
 
 /** Called inside the checkout transaction: reserve the eTIMS invoice number and queue the submission. */
-export async function queueSaleForEtims(saleId: Types.ObjectId, branchId: Types.ObjectId, caps: { modules: readonly string[] }) {
+export async function queueSaleForEtims(saleId: Types.ObjectId, branchId: Types.ObjectId, caps: { modules: readonly string[] }, opts: { tillId?: Types.ObjectId | null; configId?: Types.ObjectId | null } = {}) {
   if (!caps.modules.includes('etims')) return;
-  const cfg = await etimsConfigForBranch(branchId);
+  // The device the till chose, if it may use it; otherwise the till's own, its branch's, or the business's.
+  const allowed = await etimsDevicesForTill(branchId, opts.tillId);
+  const cfg = (opts.configId && allowed.find((c) => String(c._id) === String(opts.configId))) ?? allowed[0] ?? null;
   if (!cfg) return;
+  // If every item on the sale is marked "do not send to KRA", reserve no invoice number (no gap in the sequence).
+  if (!(await saleHasSendableLine(saleId))) return;
   const invcNo = await nextInvoiceNo(cfg._id);
-  await Sale.updateOne({ _id: saleId }, { $set: { etims: { status: 'pending', configId: cfg._id, invcNo, orgInvcNo: 0, attempts: 0 } } });
+  await Sale.updateOne({ _id: saleId }, { $set: { etims: { status: 'pending', configId: cfg._id, invcNo, orgInvcNo: 0, attempts: 0, statusChangedAt: new Date() } } });
   await enqueue('etims.submit', { kind: 'sale', id: String(saleId) }, { maxAttempts: 60, dedupeKey: `etims:sale:${saleId}` });
 }
 
@@ -75,7 +90,7 @@ export async function queueReturnForEtims(returnId: Types.ObjectId, sale: { _id:
   const cfg = sale.etims.configId ? await IntegrationConfig.findById(sale.etims.configId) : await etimsConfigForBranch(sale.branchId);
   if (!cfg) return;
   const invcNo = await nextInvoiceNo(cfg._id);
-  await SaleReturn.updateOne({ _id: returnId }, { $set: { etims: { status: 'pending', configId: cfg._id, invcNo, orgInvcNo: sale.etims.invcNo, attempts: 0 } } });
+  await SaleReturn.updateOne({ _id: returnId }, { $set: { etims: { status: 'pending', configId: cfg._id, invcNo, orgInvcNo: sale.etims.invcNo, attempts: 0, statusChangedAt: new Date() } } });
   await enqueue('etims.submit', { kind: 'return', id: String(returnId) }, { maxAttempts: 60, dedupeKey: `etims:return:${returnId}` });
 }
 
@@ -89,8 +104,11 @@ interface LineIn { productId: Types.ObjectId; name?: string | null; qty?: number
 async function buildLines(lines: LineIn[]) {
   const products = new Map((await Product.find({ _id: { $in: lines.map((l) => l.productId) } }).lean()).map((p) => [String(p._id), p]));
   const items: EtimsSaleLine[] = [];
-  for (const [i, l] of lines.entries()) {
+  for (const l of lines) {
     const p: any = products.get(String(l.productId));
+    // Products the business marked "do not send to KRA" are left off the fiscal invoice entirely.
+    if (p?.etims?.doNotSend) continue;
+    const i = items.length;
     const qtyUnit = p?.etims?.qtyUnitCd || QTY_UNIT[p?.baseUnit ?? 'pc'] || 'U';
     const pkg = p?.etims?.pkgUnitCd || 'NT';
     const qty = Math.abs(l.qty ?? 0);
@@ -165,34 +183,158 @@ async function buildCreditNote(ret: any): Promise<EtimsSale> {
     pmtTyCd: ret.refundMethod === 'mpesa' ? '06' : ret.refundMethod === 'card' ? '05' : ret.refundMethod === 'account' ? '02' : '01', salesSttsCd: '02',
     cfmDt: etimsDate(at), salesDt: etimsDate(at, false), rfdDt: etimsDate(at), rfdRsnCd: ret.isVoid ? '11' : '05', totItemCnt: items.length, ...totals(items),
     prchrAcptcYn: 'N', remark: (ret.reason ?? '').slice(0, 400) || null, ...h.user, receipt: { ...h.receipt, rptNo: ret.etims.invcNo }, itemList: items,
+    // ETR devices refer to the original sale by its receipt and CU invoice numbers.
+    ...({ orgTrdInvcNo: sale?.number, orgCuInvoiceNo: sale?.etims?.cuInvoiceNo ?? undefined } as object),
   };
 }
 
+/** The fields stored when the device or KRA signed (or a status query found the signature). */
+export function signedFields(cfg: Cfg, sig: FiscalSignature, via: 'device' | 'status_query' | 'manual') {
+  const etr = cfg.provider === 'etr' ? (sig as EtrSignature) : null;
+  return {
+    'etims.status': 'signed', 'etims.rcptNo': sig.curRcptNo, 'etims.totRcptNo': sig.totRcptNo, 'etims.intrlData': sig.intrlData, 'etims.rcptSign': sig.rcptSign,
+    'etims.sdcId': sig.sdcId ?? cfg.settings?.sdcId, 'etims.mrcNo': sig.mrcNo ?? cfg.settings?.mrcNo, 'etims.sdcDateTime': sig.sdcDateTime, 'etims.signedAt': new Date(),
+    'etims.via': via, 'etims.statusChangedAt': new Date(),
+    // The ETR device gives its own CU invoice number and QR link; eTIMS receipts link to KRA's eTIMS page.
+    ...(etr ? { 'etims.device': 'etr', 'etims.cuInvoiceNo': etr.cuInvoiceNo, 'etims.cuSerial': etr.cuSerial, 'etims.qrUrl': etr.qrUrl ?? '' } : { 'etims.qrUrl': etimsQrUrl(cfg, sig.rcptSign) }),
+  };
+}
+
+/** Claimable by a worker: on its way, and not being sent by another worker right now. */
+const CLAIMABLE: FiscalStatus[] = ['pending', 'awaiting_confirmation', 'device_disconnected', 'processing'];
+const LEASE_MS = 150_000;
+
+export function fiscalModel(kind: 'sale' | 'return') {
+  return (kind === 'sale' ? Sale : SaleReturn) as unknown as typeof Sale;
+}
+
+export async function buildFiscalPayload(kind: 'sale' | 'return', doc: any) {
+  return kind === 'sale' ? buildSale(doc) : buildCreditNote(doc);
+}
+
+/**
+ * Sends one sale or credit note to its fiscal device, exactly once:
+ *  1. the document is claimed (status "processing"), so no other worker sends it at the same time;
+ *  2. the device's lease is taken, so one shared device handles one invoice at a time;
+ *  3. if an earlier send may have reached the device (no answer, or a worker died while sending), the device is
+ *     asked first; where it cannot be asked and a resend could duplicate, it goes to reconciliation instead;
+ *  4. the outcome is stored on the document and in the fiscal transaction log.
+ * The same invoice number is used on every attempt.
+ */
 registerJob('etims.submit', async ({ kind, id }: { kind: 'sale' | 'return'; id: string }) => {
-  const model = kind === 'sale' ? Sale : SaleReturn;
-  const doc: any = await (model as typeof Sale).findById(id).lean();
-  if (!doc?.etims || doc.etims.status === 'signed') return;
+  const model = fiscalModel(kind);
+  const doc: any = await model.findById(id).lean();
+  if (!doc?.etims || !FISCAL_OPEN.includes(doc.etims.status)) return;
   const cfg = await IntegrationConfig.findById(doc.etims.configId);
+  const ref = { kind, id: doc._id, number: doc.number, invcNo: doc.etims.invcNo, branchId: doc.branchId, attempt: (doc.etims.attempts ?? 0) + 1 };
   if (!cfg) {
-    await (model as typeof Sale).updateOne({ _id: id }, { $set: { 'etims.status': 'failed', 'etims.error': 'eTIMS configuration removed' } });
+    await model.updateOne({ _id: id }, { $set: { 'etims.status': 'failed', 'etims.error': 'eTIMS configuration removed', 'etims.statusChangedAt': new Date() } });
     return;
   }
-  const payload = kind === 'sale' ? await buildSale(doc) : await buildCreditNote(doc);
+  const now = new Date();
+  const before: any = await model.findOneAndUpdate(
+    { _id: id, 'etims.status': { $in: CLAIMABLE }, $or: [{ 'etims.claimUntil': null }, { 'etims.claimUntil': { $lt: now } }] },
+    { $set: { 'etims.status': 'processing', 'etims.claimUntil': new Date(now.getTime() + LEASE_MS), 'etims.lastAttemptAt': now } },
+    { new: false, projection: { etims: 1 } },
+  ).lean();
+  // Another worker is sending it right now; its outcome stands (the sweep picks it up if that worker died).
+  if (!before) return;
+  const prev = before.etims.status as FiscalStatus;
+  const adapter = fiscalAdapter(cfg);
+  const caps = adapter.getCapabilities();
+  const operation = kind === 'sale' ? 'invoice' : 'credit_note';
+  const settle = (set: Record<string, unknown>, inc = true) => model.updateOne({ _id: id }, { $set: { 'etims.statusChangedAt': new Date(), ...set }, $unset: { 'etims.claimUntil': 1 }, ...(inc ? { $inc: { 'etims.attempts': 1 } } : {}) });
+
+  let payload: EtimsSale;
   try {
-    const sig = await etimsGateway(cfg).saveSale(payload);
-    await (model as typeof Sale).updateOne({ _id: id }, {
-      $set: {
-        'etims.status': 'signed', 'etims.rcptNo': sig.curRcptNo, 'etims.totRcptNo': sig.totRcptNo, 'etims.intrlData': sig.intrlData, 'etims.rcptSign': sig.rcptSign,
-        'etims.sdcId': sig.sdcId ?? cfg.settings?.sdcId, 'etims.mrcNo': sig.mrcNo ?? cfg.settings?.mrcNo, 'etims.sdcDateTime': sig.sdcDateTime, 'etims.qrUrl': etimsQrUrl(cfg, sig.rcptSign), 'etims.signedAt': new Date(),
-      },
-      $inc: { 'etims.attempts': 1 }, $unset: { 'etims.error': 1 },
+    payload = await buildFiscalPayload(kind, doc);
+  } catch (err: any) {
+    await settle({ 'etims.status': 'failed', 'etims.error': `Could not prepare the invoice: ${String(err?.message ?? err).slice(0, 250)}` }, false);
+    return;
+  }
+
+  let entered = false;
+  try {
+    await withDeviceLock(cfg._id, LEASE_MS, async () => {
+      entered = true;
+      // Maybe sent before: ask the device first, never send blindly.
+      const maybeSent = (prev === 'awaiting_confirmation' || prev === 'processing') && !doc.etims.resendConfirmedBy;
+      if (maybeSent) {
+        if (caps.transactionStatus) {
+          const t0 = Date.now();
+          try {
+            const answer = await adapter.getTransactionStatus(payload);
+            if (answer.found) {
+              await settle({ ...signedFields(cfg, answer.signature, 'status_query') }, true);
+              await model.updateOne({ _id: id }, { $unset: { 'etims.error': 1 } });
+              await logFiscal({ cfg, operation: 'status_query', doc: ref, outcome: 'signed', ok: true, request: { invcNo: payload.invcNo, trdInvcNo: payload.trdInvcNo }, response: answer.signature, durationMs: Date.now() - t0 });
+              await recordHealth(cfg._id, true, 'Answered a status query');
+              return;
+            }
+            await logFiscal({ cfg, operation: 'status_query', doc: ref, outcome: 'not_recorded', ok: true, request: { invcNo: payload.invcNo, trdInvcNo: payload.trdInvcNo }, response: answer.raw ?? { found: false }, durationMs: Date.now() - t0 });
+          } catch (err: any) {
+            const { status } = statusForError(err);
+            const next = status === 'rejected' || status === 'pending' ? 'awaiting_confirmation' : status;
+            await settle({ 'etims.status': next, 'etims.error': String(err?.message ?? err).slice(0, 300) });
+            await logFiscal({ cfg, operation: 'status_query', doc: ref, outcome: next, ok: false, error: String(err?.message ?? err), durationMs: Date.now() - t0 });
+            if (next === 'requires_reconciliation') return;
+            throw err;
+          }
+        } else if (!caps.safeResend) {
+          // Cannot ask, and sending again could create a second fiscal record: a person decides.
+          await settle({ 'etims.status': 'requires_reconciliation', 'etims.error': 'The device may have signed this invoice but its answer was lost, and it cannot be asked. Check the device journal, then record the signature or confirm it was not signed.' }, false);
+          await logFiscal({ cfg, operation: 'reconcile', doc: ref, outcome: 'requires_reconciliation', ok: false, error: 'Uncertain send; device has no status query' });
+          return;
+        }
+      }
+      const t0 = Date.now();
+      try {
+        const sig = kind === 'sale' ? await adapter.submitInvoice(payload) : await adapter.submitCreditNote(payload);
+        await model.updateOne({ _id: id }, { $set: signedFields(cfg, sig, 'device'), $inc: { 'etims.attempts': 1 }, $unset: { 'etims.error': 1, 'etims.claimUntil': 1, 'etims.resendConfirmedBy': 1 } });
+        await logFiscal({ cfg, operation, doc: ref, outcome: 'signed', ok: true, request: payload, response: sig, durationMs: Date.now() - t0 });
+        await recordHealth(cfg._id, true, 'Signed an invoice');
+      } catch (err: any) {
+        const { status, retry } = statusForError(err);
+        const message = String(err?.message ?? err).slice(0, 300);
+        await settle({ 'etims.status': status, 'etims.error': message });
+        await logFiscal({ cfg, operation, doc: ref, outcome: status, ok: false, error: message, request: payload, response: err?.body, durationMs: Date.now() - t0 });
+        if (status === 'device_disconnected') await recordHealth(cfg._id, false, message);
+        if (retry) throw err; // retried by the job queue with backoff
+      }
     });
   } catch (err: any) {
-    const permanent = err instanceof IntegrationError && !err.retryable;
-    await (model as typeof Sale).updateOne({ _id: id }, { $set: { 'etims.error': String(err?.message ?? err).slice(0, 300), ...(permanent ? { 'etims.status': 'failed' } : {}) }, $inc: { 'etims.attempts': 1 } });
-    if (!permanent) throw err; // retried by the job queue with backoff
+    // Lease not obtained (device busy): give the document back as it was and try again shortly. Anything that
+    // went wrong after the lease was taken may have happened after sending, so it is checked before any resend.
+    const back = entered || prev === 'processing' ? 'awaiting_confirmation' : prev;
+    await model.updateOne({ _id: id, 'etims.status': 'processing' }, { $set: { 'etims.status': back, 'etims.error': String(err?.message ?? err).slice(0, 300) }, $unset: { 'etims.claimUntil': 1 } });
+    throw err;
   }
 });
+
+/**
+ * Safety net, run by the scheduler: invoices whose job was lost or gave up (a device off for days), or whose
+ * worker died mid-send, are queued again. The submit job's status check keeps this from sending anything twice.
+ */
+export async function sweepFiscalQueue(now = new Date()) {
+  let queued = 0;
+  const bucket = Math.floor(now.getTime() / (10 * 60_000));
+  for (const kind of ['sale', 'return'] as const) {
+    const model = fiscalModel(kind);
+    const open: any[] = await model.find({ 'etims.status': { $in: FISCAL_OPEN }, $or: [{ 'etims.claimUntil': null }, { 'etims.claimUntil': { $lt: now } }] }, { _id: 1, etims: 1 }).limit(500).lean();
+    for (const d of open) {
+      const active = await Job.exists({ type: 'etims.submit', 'payload.id': String(d._id), status: { $in: ['queued', 'running'] } });
+      if (active) continue;
+      await enqueue('etims.submit', { kind, id: String(d._id) }, { maxAttempts: 60, dedupeKey: `etims:${kind}:${d._id}:sweep:${bucket}` });
+      queued++;
+    }
+  }
+  return queued;
+}
+
+/** A device just came back: send what is waiting for it now instead of at the next backoff. */
+export async function hurryFiscalQueue() {
+  await Job.updateMany({ type: 'etims.submit', status: 'queued' }, { $set: { runAt: new Date() } });
+}
 
 /** Registers (or updates) a product as an eTIMS item on every configured device. */
 export async function queueItemRegistration(productId: Types.ObjectId, caps: { modules: readonly string[] }) {
@@ -204,10 +346,13 @@ export async function queueItemRegistration(productId: Types.ObjectId, caps: { m
 registerJob('etims.item', async ({ productId }: { productId: string }) => {
   const p: any = await Product.findById(productId).lean();
   if (!p) return;
+  // The business chose not to send this item to KRA: do not register it.
+  if (p.etims?.doNotSend) return;
   const qtyUnit = p.etims?.qtyUnitCd || QTY_UNIT[p.baseUnit] || 'U';
   const pkg = p.etims?.pkgUnitCd || 'NT';
   const itemCd = await itemCodeFor(p, pkg, qtyUnit);
-  const configs = await IntegrationConfig.find({ kind: 'etims', enabled: true });
+  // ETR (TIMS) devices do not keep an item list.
+  const configs = await IntegrationConfig.find({ kind: 'etims', enabled: true, provider: { $ne: 'etr' } });
   try {
     for (const cfg of configs) {
       await etimsGateway(cfg).saveItem({

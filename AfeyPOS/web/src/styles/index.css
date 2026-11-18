@@ -46,3 +46,37 @@
 @media (prefers-reduced-motion: reduce) {
   .modal-backdrop, .modal-panel, .modal-drawer { animation: none; }
 }
+
+/* ---- payment animations (M-Pesa waiting, success, cash) ---- */
+@keyframes pay-ripple { 0% { transform: scale(0.6); opacity: 0.55; } 100% { transform: scale(1.9); opacity: 0; } }
+@keyframes pay-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@keyframes pay-pop { 0% { transform: scale(0.4); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
+@keyframes pay-draw { from { stroke-dashoffset: 48; } to { stroke-dashoffset: 0; } }
+@keyframes pay-ring { from { stroke-dashoffset: 190; } to { stroke-dashoffset: 0; } }
+@keyframes pay-burst { 0% { transform: rotate(var(--a)) translateY(0) scale(1); opacity: 1; } 100% { transform: rotate(var(--a)) translateY(-46px) scale(0.3); opacity: 0; } }
+@keyframes pay-dots { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+@keyframes pay-note { 0% { transform: translateY(14px) rotate(var(--r)); opacity: 0; } 100% { transform: translateY(0) rotate(var(--r)); opacity: 1; } }
+@keyframes pay-shine { from { transform: translateX(-120%); } to { transform: translateX(220%); } }
+.pay-ripple { animation: pay-ripple 2.1s cubic-bezier(0.2, 0.6, 0.3, 1) infinite; }
+.pay-bob { animation: pay-bob 2.4s ease-in-out infinite; }
+.pay-pop { animation: pay-pop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
+.pay-draw { stroke-dasharray: 48; animation: pay-draw 0.45s 0.35s ease-out both; }
+.pay-ring { stroke-dasharray: 190; animation: pay-ring 0.6s ease-out both; }
+.pay-burst { animation: pay-burst 0.8s 0.3s ease-out both; }
+.pay-dots > span { animation: pay-dots 1.2s infinite; }
+.pay-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.pay-dots > span:nth-child(3) { animation-delay: 0.3s; }
+.pay-note { animation: pay-note 0.5s ease-out both; }
+.pay-shine { animation: pay-shine 2.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .pay-ripple, .pay-bob, .pay-burst, .pay-dots > span, .pay-shine { animation: none; }
+  .pay-pop, .pay-draw, .pay-ring, .pay-note { animation-duration: 0.01s; }
+}
+@keyframes pay-paper { 0% { transform: translateY(-100%); } 70% { transform: translateY(0); } 100% { transform: translateY(0); } }
+@keyframes pay-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-1px); } 75% { transform: translateX(1px); } }
+@keyframes pay-line { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.pay-paper { animation: pay-paper 1.6s ease-out infinite; }
+.pay-paper-once { animation: pay-paper 0.9s ease-out both; }
+.pay-shake { animation: pay-shake 0.18s linear infinite; }
+.pay-line { transform-origin: left; animation: pay-line 0.5s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .pay-paper, .pay-shake { animation: none; } .pay-paper-once, .pay-line { animation-duration: 0.01s; } }

@@ -1,15 +1,21 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { IntegrationConfig, Product, Sale, SaleReturn } from '../../models/index.js';
+import { IntegrationConfig, Product, Sale, SaleReturn, Till } from '../../models/index.js';
 import { idParam, objectId, parse } from '../../http/validate.js';
 import { requirePermission } from '../../http/auth.js';
-import { notFound } from '../../lib/errors.js';
+import { AppError, notFound } from '../../lib/errors.js';
+import { env } from '../../config/env.js';
+import { detectEtr } from './detect.js';
 import { audit } from '../../lib/audit.js';
 import { enqueue } from '../../jobs/queue.js';
+import { etimsDevicesForTill } from './service.js';
 import { openSecrets, sealSecrets } from '../integrations/configs.js';
 import { etimsGateway, queueItemRegistration } from './service.js';
+import { fiscalRoutes } from './fiscalRoutes.js';
+import { FISCAL_NEEDS_ATTENTION, FISCAL_OPEN } from '../../integrations/fiscal/adapter.js';
 
 const router = Router();
+router.use(fiscalRoutes);
 
 /** Device initialisation: KRA returns the SCU id, MRC number and the communication key used on every call. */
 router.post('/settings/integrations/:id/etims/initialize', requirePermission('integrations.manage'), async (req, res) => {
@@ -25,14 +31,36 @@ router.post('/settings/integrations/:id/etims/initialize', requirePermission('in
   res.json({ data: { sdcId: info.sdcId, mrcNo: info.mrcNo, taxpayer: info.taxprNm, branch: info.bhfNm } });
 });
 
+/**
+ * "Find ETR on this computer": ETR programs, the local addresses they answer on, inbox/outbox folders and the
+ * device among USB / COM ports, for the owner to pick. Only on the computer the device can be plugged into.
+ */
+router.get('/etims/etr/detect', requirePermission('integrations.manage'), async (_req, res) => {
+  if (env().DEPLOYMENT_MODE === 'hq') throw new AppError(409, 'ETR_ON_SHOP_COMPUTER', 'This is the online head office: an ETR device is plugged into the shop computer. Open Afey POS on the shop computer (the branch server) to find it.');
+  res.json({ data: await detectEtr() });
+});
+
+/** The KRA ETR devices this till may sign with, so it can be chosen when a shop has more than one. */
+router.get('/etims/devices', requirePermission('sales.create'), async (req, res) => {
+  const q = parse(z.object({ tillId: objectId.optional() }), req.query);
+  const till = q.tillId ? await Till.findById(q.tillId).lean() : null;
+  const devices = await etimsDevicesForTill(till?.branchId, till?._id);
+  res.json({
+    data: devices.map((c, i) => ({
+      id: c._id, name: c.name, mode: c.provider === 'vscu' ? 'vscu' : c.provider === 'etr' ? 'etr' : 'oscu', environment: c.environment, isDefault: i === 0,
+      tin: c.settings?.tin ?? '', bhfId: c.settings?.bhfId ?? '00', serial: c.settings?.dvcSrlNo ?? c.settings?.cuSerial ?? '', initialised: Boolean(c.settings?.sdcId),
+    })),
+  });
+});
+
 router.get('/etims/status', requirePermission('reports.financial'), async (_req, res) => {
   const [configs, sales, returns, failedSales, failedReturns, pendingSales, unregistered] = await Promise.all([
     IntegrationConfig.find({ kind: 'etims' }).lean(),
     Sale.aggregate([{ $match: { 'etims.status': { $exists: true } } }, { $group: { _id: '$etims.status', n: { $sum: 1 } } }]),
     SaleReturn.aggregate([{ $match: { 'etims.status': { $exists: true } } }, { $group: { _id: '$etims.status', n: { $sum: 1 } } }]),
-    Sale.find({ 'etims.status': 'failed' }, { number: 1, totalCents: 1, completedAt: 1, etims: 1 }).sort({ completedAt: -1 }).limit(100).lean(),
-    SaleReturn.find({ 'etims.status': 'failed' }, { number: 1, refundCents: 1, createdAt: 1, etims: 1 }).sort({ createdAt: -1 }).limit(100).lean(),
-    Sale.find({ 'etims.status': 'pending' }, { number: 1, totalCents: 1, completedAt: 1, etims: 1 }).sort({ completedAt: 1 }).limit(100).lean(),
+    Sale.find({ 'etims.status': { $in: FISCAL_NEEDS_ATTENTION } }, { number: 1, totalCents: 1, completedAt: 1, etims: 1 }).sort({ completedAt: -1 }).limit(100).lean(),
+    SaleReturn.find({ 'etims.status': { $in: FISCAL_NEEDS_ATTENTION } }, { number: 1, refundCents: 1, createdAt: 1, etims: 1 }).sort({ createdAt: -1 }).limit(100).lean(),
+    Sale.find({ 'etims.status': { $in: FISCAL_OPEN } }, { number: 1, totalCents: 1, completedAt: 1, etims: 1 }).sort({ completedAt: 1 }).limit(100).lean(),
     Product.countDocuments({ active: true, 'etims.registeredAt': { $exists: false } }),
   ]);
   res.json({
@@ -51,7 +79,12 @@ router.get('/etims/status', requirePermission('reports.financial'), async (_req,
 router.post('/etims/retry', requirePermission('reports.financial'), async (req, res) => {
   const body = parse(z.object({ kind: z.enum(['sale', 'return']), id: objectId }), req.body);
   const model = body.kind === 'sale' ? Sale : SaleReturn;
-  const r = await (model as typeof Sale).updateOne({ _id: body.id, 'etims.status': { $in: ['failed', 'pending'] } }, { $set: { 'etims.status': 'pending' }, $unset: { 'etims.error': 1 } });
+  // An invoice that may already be recorded is not simply resent: it goes through reconciliation.
+  const doc: any = await (model as typeof Sale).findById(body.id, { etims: 1 }).lean();
+  if (doc?.etims?.status === 'requires_reconciliation') throw new AppError(409, 'FISCAL_RECONCILE', 'This invoice may already be recorded on the device. Open it under Fiscal devices → Transactions to reconcile it.');
+  if (doc?.etims?.status === 'processing') throw new AppError(409, 'FISCAL_BUSY', 'This invoice is being sent right now');
+  const next = doc?.etims?.status === 'awaiting_confirmation' ? 'awaiting_confirmation' : 'pending';
+  const r = await (model as typeof Sale).updateOne({ _id: body.id, 'etims.status': { $in: ['failed', 'rejected', 'pending', 'device_disconnected', 'awaiting_confirmation'] } }, { $set: { 'etims.status': next, 'etims.statusChangedAt': new Date() }, $unset: { 'etims.error': 1 } });
   if (!r.matchedCount) throw notFound('Unsigned invoice');
   await enqueue('etims.submit', { kind: body.kind, id: String(body.id) }, { maxAttempts: 60, dedupeKey: `etims:${body.kind}:${body.id}:retry:${Date.now()}` });
   await audit(req, { action: 'etims.retry', details: body });

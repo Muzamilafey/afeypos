@@ -25,11 +25,31 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
 
   await page.getByRole('link', { name: 'Products', exact: true }).click();
   await page.getByRole('button', { name: 'New product' }).click();
+  // The product wizard: name, how it sells, units, pricing, SKU, stock, hardware, review.
+  const next = () => page.getByRole('button', { name: 'Next', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('Fresh milk 500ml');
-  await page.getByLabel('SKU / code').fill('MILK500');
-  await page.getByLabel('retail price').fill('65');
+  await next();
+  await expect(page.getByRole('button', { name: /By weight/ })).toBeVisible();
+  await next();
+  await next();
+  await page.getByLabel('Selling price').fill('65');
   await page.getByLabel('Cost (per base unit)').fill('48');
+  await expect(page.getByTestId('price-calculator')).toContainText('Margin');
+  await page.getByLabel('Minimum price').fill('40');
+  await page.getByLabel('Selling price').fill('30');
+  await expect(page.getByTestId('price-warnings')).toContainText('below cost');
+  await page.getByLabel('Selling price').fill('65');
+  await next();
+  await page.getByLabel('SKU / code').fill('MILK500');
+  await page.getByLabel('Scan or type a barcode').fill('5901234123457');
+  await page.getByLabel('Scan or type a barcode').press('Enter');
+  await expect(page.getByTestId('wizard-barcodes')).toContainText('Check digit OK');
+  await next();
   await page.getByLabel(/Quantity \(pc\)/).fill('24');
+  await next();
+  await next();
+  await expect(page.getByTestId('wizard-review')).toContainText('MILK500');
+  await page.screenshot({ path: 'test-results/product-wizard.png', fullPage: true });
   await page.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Product saved')).toBeVisible();
   await page.screenshot({ path: 'test-results/product.png', fullPage: true });
@@ -40,8 +60,18 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await expect(page.getByTestId('cash-count-total')).toContainText('1,000.00');
   await page.getByRole('button', { name: /^Start shift/ }).click();
   const scan = page.getByLabel('Scan or search products');
-  await scan.fill('MILK500');
-  await scan.press('Enter');
+
+  // Browse (F5) lists every product with its price, and clicking one adds it.
+  await expect(scan).toBeVisible();
+  await scan.press('F5');
+  await expect(page.getByRole('dialog').getByText('Browse products')).toBeVisible();
+  await expect(page.getByTestId('browse-products')).toContainText('Fresh milk 500ml');
+  await expect(page.getByTestId('browse-products')).toContainText('65.00');
+  await page.screenshot({ path: 'test-results/pos-browse.png', fullPage: true });
+  await page.getByTestId('browse-products').getByRole('button', { name: /Fresh milk 500ml/ }).click();
+  await expect(page.getByTestId('cart-total')).toHaveText(/65\.00/);
+  await page.getByRole('button', { name: 'Close' }).click();
+
   await scan.fill('MILK500');
   await scan.press('Enter');
   await expect(page.getByTestId('cart-total')).toHaveText(/130\.00/);
@@ -53,7 +83,11 @@ test('set up a minimart, add a product and complete a cash sale', async ({ page 
   await expect(page.getByText(/Sale RCP-\d+ complete/)).toBeVisible();
   await expect(page.getByText(/Change: .*70\.00/)).toBeVisible();
   await page.screenshot({ path: 'test-results/sale-complete.png' });
-  await page.getByRole('button', { name: 'New sale' }).click();
+  // Enter starts the next sale wherever the focus is (here on Print receipt).
+  await page.getByRole('button', { name: 'Print receipt' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(/Sale RCP-\d+ complete/)).toHaveCount(0);
+  await expect(page.getByTestId('printing')).toHaveCount(0);
 
   // Checkout is full screen: no sidebar; Go back leaves it.
   await expect(page.getByRole('navigation', { name: 'Main' })).toHaveCount(0);

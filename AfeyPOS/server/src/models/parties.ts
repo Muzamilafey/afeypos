@@ -54,6 +54,8 @@ const supplierSchema = new Schema(
     /** Amount the business owes the supplier (payable). */
     balanceCents: { type: Number, default: 0 },
     paymentTermsDays: { type: Number, default: 30 },
+    /** Days from ordering to delivery, used for suggested orders and on-time checks. */
+    leadTimeDays: { type: Number, default: 7 },
     active: { type: Boolean, default: true },
   },
   { timestamps: true },

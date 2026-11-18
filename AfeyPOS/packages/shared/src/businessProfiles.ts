@@ -312,7 +312,7 @@ export interface NavItem {
   module?: ModuleKey;
   anyModule?: ModuleKey[];
   permission?: Permission;
-  group: 'sell' | 'stock' | 'buy' | 'parties' | 'people' | 'finance' | 'admin';
+  group: 'sell' | 'stock' | 'buy' | 'parties' | 'people' | 'reports' | 'finance' | 'admin';
 }
 
 export const NAVIGATION: NavItem[] = [
@@ -328,6 +328,7 @@ export const NAVIGATION: NavItem[] = [
   { key: 'repairs', label: 'Repairs', path: '/repairs', icon: 'wrench', module: 'repairs', permission: 'sales.create', group: 'sell' },
   { key: 'products', label: 'Products', path: '/products', icon: 'box', module: 'inventory', permission: 'products.read', group: 'stock' },
   { key: 'units', label: 'Units', path: '/inventory/units', icon: 'layers', module: 'inventory', permission: 'products.read', group: 'stock' },
+  { key: 'receiveStock', label: 'Receive stock', path: '/inventory/receive', icon: 'package', module: 'inventory', permission: 'inventory.receive', group: 'stock' },
   { key: 'stock', label: 'Stock levels', path: '/inventory', icon: 'layers', module: 'inventory', permission: 'inventory.read', group: 'stock' },
   { key: 'transfers', label: 'Stock transfers', path: '/inventory/transfers', icon: 'shuffle', module: 'stockTransfers', permission: 'inventory.transfer', group: 'stock' },
   { key: 'categories', label: 'Categories', path: '/inventory/categories', icon: 'grid', module: 'inventory', permission: 'products.read', group: 'stock' },
@@ -351,25 +352,58 @@ export const NAVIGATION: NavItem[] = [
   { key: 'attendance', label: 'Attendance', path: '/hr/attendance', icon: 'clipboard', module: 'hr', permission: 'hr.manage', group: 'people' },
   { key: 'loyalty', label: 'Loyalty program', path: '/loyalty', icon: 'star', module: 'loyalty', permission: 'customers.read', group: 'parties' },
   { key: 'crm', label: 'CRM & campaigns', path: '/crm', icon: 'users', module: 'crm', permission: 'customers.read', group: 'parties' },
+  { key: 'communications', label: 'Communications', path: '/communications', icon: 'megaphone', permission: 'comms.send', group: 'parties' },
   { key: 'accounting', label: 'Accounts', path: '/accounting', icon: 'doc', module: 'accounting', permission: 'accounting.read', group: 'finance' },
-  { key: 'reports', label: 'Reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'finance' },
+  // Reports: one menu entry per report (pages/Finance.tsx ReportsPage, by path).
+  { key: 'reportSales', label: 'Sales Reports', path: '/reports/sales', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportInventory', label: 'Inventory Reports', path: '/reports/inventory', icon: 'chart', module: 'reports', permission: 'inventory.read', group: 'reports' },
+  { key: 'reportHr', label: 'HR Reports', path: '/reports/hr', icon: 'chart', module: 'hr', permission: 'hr.manage', group: 'reports' },
+  { key: 'reportFinancial', label: 'Financial Reports', path: '/reports/financial', icon: 'chart', module: 'reports', permission: 'reports.financial', group: 'reports' },
+  { key: 'reportCustomers', label: 'Customer Reports', path: '/reports/customers', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportBrands', label: 'Brand Report', path: '/reports/brands', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportBalance', label: 'Balance Sheet', path: '/reports/balance-sheet', icon: 'chart', module: 'accounting', permission: 'accounting.read', group: 'reports' },
+  { key: 'reportTransactions', label: 'Transaction Report', path: '/reports/transactions', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportProfit', label: 'Profit Report', path: '/reports/profit', icon: 'chart', module: 'reports', permission: 'reports.financial', group: 'reports' },
+  { key: 'reportUserSales', label: 'User Sales', path: '/reports/user-sales', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportBranchSales', label: 'Branch Sales', path: '/reports/branch-sales', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportLosses', label: 'Loss Report', path: '/reports/losses', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportTrending', label: 'Trending Products', path: '/reports/trending', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportTop', label: 'Most Selling Products', path: '/reports/most-selling', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportNotSelling', label: 'Not Selling (3 Days)', path: '/reports/not-selling', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportSuppliers', label: 'Supplier Report', path: '/reports/suppliers', icon: 'chart', module: 'suppliers', permission: 'reports.financial', group: 'reports' },
+  { key: 'reportDrawer', label: 'Drawer Calculations', path: '/reports/drawer', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
+  { key: 'reportAgeing', label: 'Stock Ageing Report', path: '/reports/stock-ageing', icon: 'clock', module: 'reports', permission: 'inventory.read', group: 'reports' },
+  { key: 'reportCashFlow', label: 'Cash Flow Movement', path: '/reports/cash-flow', icon: 'wallet', module: 'reports', permission: 'reports.financial', group: 'reports' },
+  { key: 'reportStockAnalysis', label: 'Stock analysis', path: '/reports/stock-analysis', icon: 'trendUp', module: 'reports', permission: 'inventory.read', group: 'reports' },
+  { key: 'reportTransfers', label: 'Stock Transfer Report', path: '/reports/stock-transfers', icon: 'chart', module: 'stockTransfers', permission: 'inventory.read', group: 'reports' },
+  { key: 'assistant', label: 'AI Assistant', path: '/assistant', icon: 'sparkles', permission: 'assistant.use', group: 'reports' },
+  { key: 'reports', label: 'More reports', path: '/reports', icon: 'chart', module: 'reports', permission: 'reports.read', group: 'reports' },
   { key: 'expenses', label: 'Expenses', path: '/expenses', icon: 'wallet', module: 'expenses', permission: 'expenses.manage', group: 'finance' },
   { key: 'mpesa', label: 'M-Pesa', path: '/payments/mpesa', icon: 'phone', module: 'mpesa', permission: 'payments.reconcile', group: 'finance' },
+  { key: 'mpesaReceived', label: 'M-Pesa payments', path: '/payments/mpesa/received', icon: 'phone', module: 'mpesa', permission: 'payments.reconcile', group: 'finance' },
+  { key: 'mpesaLogs', label: 'M-Pesa logs', path: '/payments/mpesa/logs', icon: 'activity', module: 'mpesa', permission: 'payments.reconcile', group: 'finance' },
+  { key: 'cashPayments', label: 'Cash', path: '/payments/cash', icon: 'wallet', permission: 'payments.reconcile', group: 'finance' },
   { key: 'payouts', label: 'M-Pesa payouts', path: '/payments/payouts', icon: 'phone', module: 'mpesa', permission: 'payouts.request', group: 'finance' },
   { key: 'etims', label: 'KRA eTIMS', path: '/etims', icon: 'shield', module: 'etims', permission: 'reports.financial', group: 'finance' },
+  { key: 'cardTerminalPayments', label: 'Card terminal payments', path: '/payments/card-terminals', icon: 'card', module: 'pos', permission: 'terminals.reconcile', group: 'finance' },
   { key: 'gatewayPayments', label: 'Online payments', path: '/payments/online', icon: 'card', module: 'payments', permission: 'payments.reconcile', group: 'finance' },
   { key: 'audit', label: 'Audit trail', path: '/audit', icon: 'shield', permission: 'audit.read', group: 'finance' },
   { key: 'settings', label: 'Settings', path: '/settings', icon: 'settings', permission: 'settings.manage', group: 'admin' },
   { key: 'receiptSettings', label: 'Receipts', path: '/settings/receipts', icon: 'receipt', module: 'pos', permission: 'settings.manage', group: 'admin' },
+  { key: 'tillButtons', label: 'Till buttons', path: '/settings/till-buttons', icon: 'grid', module: 'pos', permission: 'settings.manage', group: 'admin' },
   { key: 'checkoutRules', label: 'Checkout rules', path: '/settings/checkout-rules', icon: 'lock', module: 'pos', permission: 'settings.manage', group: 'admin' },
+  { key: 'cardTerminals', label: 'Bank card terminals', path: '/settings/payments/terminals', icon: 'card', module: 'pos', permission: 'terminals.manage', group: 'admin' },
   { key: 'users', label: 'Users', path: '/settings/users', icon: 'user', permission: 'users.manage', group: 'admin' },
   { key: 'roles', label: 'Roles & permissions', path: '/settings/roles', icon: 'shield', permission: 'users.manage', group: 'admin' },
   { key: 'locations', label: 'Branches & tills', path: '/settings/locations', icon: 'map', permission: 'branches.manage', group: 'admin' },
   { key: 'sync', label: 'Branch sync', path: '/settings/sync', icon: 'refresh', module: 'multiBranch', permission: 'settings.manage', group: 'admin' },
   { key: 'onlineShop', label: 'Online shop', path: '/settings/online-shop', icon: 'store', module: 'onlineStore', permission: 'settings.manage', group: 'admin' },
   { key: 'storeStudio', label: 'Store studio', path: '/settings/store-studio', icon: 'sparkles', module: 'onlineStore', permission: 'settings.manage', group: 'admin' },
+  { key: 'fiscalDevices', label: 'Tax & fiscal devices', path: '/settings/fiscal', icon: 'shield', module: 'etims', permission: 'reports.financial', group: 'admin' },
   { key: 'integrations', label: 'Integrations', path: '/settings/integrations', icon: 'plug', permission: 'integrations.manage', group: 'admin' },
   { key: 'hardware', label: 'Hardware', path: '/settings/hardware', icon: 'printer', module: 'hardware', permission: 'hardware.manage', group: 'admin' },
+  { key: 'deviceCompatibility', label: 'Device compatibility', path: '/settings/hardware/compatibility', icon: 'plug', module: 'hardware', permission: 'hardware.manage', group: 'admin' },
+  { key: 'weighingScales', label: 'Weighing scales', path: '/settings/hardware/scales', icon: 'activity', module: 'hardware', permission: 'hardware.manage', group: 'admin' },
 ];
 
 export function navigationFor(caps: Pick<Capabilities, 'modules'>, permissions: ReadonlySet<Permission>): NavItem[] {

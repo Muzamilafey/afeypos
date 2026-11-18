@@ -1,28 +1,42 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { allocateProportionally, calculateTax, CARD_NETWORKS, KENYA_BANKS, lineAmount, mergeCheckoutRules, roundQty, type PriceListKey } from '@afeypos/shared';
-import { PosTile, type PosTileKind } from '../components/PosTiles';
+import { allocateProportionally, calculateTax, CARD_NETWORKS, KENYA_BANKS, lineAmount, mergeCheckoutRules, paymentMethodAllowed, roundQty, type PriceListKey } from '@afeypos/shared';
+import { ButtonArt, PosTile, type PosTileKind } from '../components/PosTiles';
+import { useFileImage, useTillButtons } from '../lib/tillButtons';
+import { NumPad, typeInto } from '../components/NumPad';
 import { api, ApiError, newRequestId } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { usePublicConfig } from './Auth';
 import { useLocations } from '../lib/hooks';
 import { getWorkstation, setWorkstation } from '../lib/workstation';
 import { bridgeConfigured, fingerprint } from '../lib/bridge';
-import { money, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
-import { useRealtime } from '../lib/realtime';
-import { printHtml, printReceipt } from '../lib/printing';
+import { DeviceCheckBar } from '../components/DeviceCheckBar';
+import { money, mpesaPayer, paymentLabel, qty as fmtQty, toCentsInput } from '../lib/format';
+import { connectRealtime, useRealtime } from '../lib/realtime';
+import { TxnStatus, type TerminalTxn } from './settings/CardTerminals';
+import { openCashDrawer, printHtml, printHtmlString, printReceipt } from '../lib/printing';
 import { CashCount, cashCountTotal, type CashCounts } from '../components/CashCount';
-import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useToast } from '../components/ui';
+import { Badge, Button, Checkbox, cx, ErrorBox, Field, Input, Modal, MoneyInput, Select, Spinner, useConfirm, useToast } from '../components/ui';
 import { Icon } from '../components/icons';
 import { GatewayPanel, type GatewayOption } from '../components/GatewayPayment';
-import { MpesaPanel } from '../components/MpesaPayment';
+import { MpesaPaid, MpesaPanel, needsConfirm, type MpesaAccount } from '../components/MpesaPayment';
+import { CashVisual, MpesaMark, PaySuccess, PrintingVisual } from '../components/PayVisuals';
+import { WeighModal } from '../components/Weigh';
+
+/** Fiscal states in which the KRA stamp may still arrive. */
+const FISCAL_WAITING = ['pending', 'processing', 'awaiting_confirmation', 'device_disconnected'];
+import { openCustomerDisplay, useCustomerDisplayFeed, type DisplayState } from './CustomerDisplay';
 
 interface Product {
   _id: string; name: string; sku: string; baseUnit: string; units: { code: string; name: string; factor: number }[]; prices: Record<string, number | undefined>;
-  taxRateBp: number | null; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>;
+  type?: 'stock' | 'service' | 'non_stock'; trackStock?: boolean;
+  taxRateBp: number | null; soldByWeight?: boolean; trackSerials: boolean; trackBatches: boolean; allowFractional: boolean; requiresPrescription: boolean; ageRestricted: boolean; minAge?: number; categoryId?: string; stock?: { qty: number }; attributes?: Record<string, string | undefined>; images?: string[];
 }
-interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean }
-interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string }
-interface Payment { method: string; amountCents: number; tenderedCents?: number; reference?: string; paymentIntentId?: string; label?: string }
+interface Line { __approved?: boolean; key: string; product: Product; unitCode: string; qty: number; unitPriceCents: number; quotedCents: number; discountCents: number; serials: string[]; prescriptionRef?: string; promotion?: boolean; wholesaleQty?: boolean }
+interface Cart { id: string; label: string; lines: Line[]; customer: { _id: string; name: string; priceList?: string; balanceCents?: number; creditLimitCents?: number; loyaltyPoints?: number; kind?: string } | null; priceList: PriceListKey; cartDiscountCents: number; couponCode: string; ageVerified: boolean; salesDocumentId?: string;
+  /** Payments taken for this sale that was not completed (e.g. Back pressed after M-Pesa confirmed), and an M-Pesa prompt still waiting. */
+  checkout?: { payments: Payment[]; pendingIntentId?: string } }
+interface Payment { method: string; amountCents: number; tenderedCents?: number; reference?: string; paymentIntentId?: string; terminalTransactionId?: string; label?: string }
 
 const newCart = (n: number, priceList: PriceListKey): Cart => ({ id: newRequestId(), label: `Sale ${n}`, lines: [], customer: null, priceList, cartDiscountCents: 0, couponCode: '', ageVerified: false });
 
@@ -30,7 +44,10 @@ export function POSPage() {
   const { me } = useAuth();
   const locs = useLocations();
   const [tillId, setTillId] = useState(getWorkstation().tillId ?? '');
-  const tills = (locs.data?.tills ?? []).filter((t) => t.active && (!me?.user.branchIds.length || me.user.branchIds.includes(t.branchId)));
+  // A branch server sells only from its own branch's tills (other branches' tills arrive by sync, read-only).
+  const serverBranch = usePublicConfig().data?.branchCode?.toUpperCase();
+  const serverBranchId = serverBranch ? locs.data?.branches.find((b) => b.code?.toUpperCase() === serverBranch)?._id : undefined;
+  const tills = (locs.data?.tills ?? []).filter((t) => t.active && (!me?.user.branchIds.length || me.user.branchIds.includes(t.branchId)) && (!serverBranch || t.branchId === serverBranchId));
   useEffect(() => {
     if (!tillId && tills.length === 1) setTillId(tills[0]._id);
   }, [tills, tillId]);
@@ -53,7 +70,24 @@ export function POSPage() {
   return <Checkout till={till} shift={shift.data} onShiftClosed={() => shift.refetch()} />;
 }
 
-function OpenShift({ tillId, tillName, onOpened, onChangeTill }: { tillId: string; tillName: string; onOpened: () => void; onChangeTill: () => void }) {
+const MOVEMENT_LABEL: Record<string, string> = { float: 'Opening float', sale: 'Cash sales', refund: 'Cash refunds', cash_in: 'Cash added', cash_out: 'Cash paid out', drop: 'Cash drops', customer_payment: 'Customer payments', expense: 'Expenses paid' };
+const MOVEMENT_ORDER = ['float', 'sale', 'customer_payment', 'cash_in', 'refund', 'cash_out', 'expense', 'drop'];
+
+/** Who, where and when, at the top of the shift screens. */
+function ShiftHeader({ icon, tone, title, subtitle, chips }: { icon: string; tone: 'green' | 'blue'; title: string; subtitle: string; chips: string[] }) {
+  return (
+    <div className={cx('mb-5 flex flex-wrap items-center gap-4 rounded-xl px-5 py-4 text-white', tone === 'green' ? 'bg-gradient-to-r from-[#1f5a40] to-[#2f7d57]' : 'bg-gradient-to-r from-[#1f4f7a] to-[#3a7cc0]')}>
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/15 ring-2 ring-white/30"><Icon name={icon} className="h-6 w-6" /></span>
+      <div className="min-w-0 flex-1">
+        <h2 className="text-xl font-bold">{title}</h2>
+        <p className="text-sm opacity-85">{subtitle}</p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">{chips.map((c) => <span key={c} className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold">{c}</span>)}</div>
+    </div>
+  );
+}
+
+function OpenShift({ tillId, tillName, onOpened, onChangeTill, embedded = false }: { tillId: string; tillName: string; onOpened: () => void; onChangeTill: () => void; embedded?: boolean }) {
   const { me } = useAuth();
   const [counts, setCounts] = useState<CashCounts>({});
   const [byTotal, setByTotal] = useState(false);
@@ -66,20 +100,29 @@ function OpenShift({ tillId, tillName, onOpened, onChangeTill }: { tillId: strin
     setBusy(true); setError(null);
     try { await api('/shifts', { body: { tillId, openingFloatCents: amount, denominations: byTotal ? undefined : counts } }); onOpened(); } catch (e) { setError(e); } finally { setBusy(false); }
   };
+  const now = new Date();
   return (
-    <div className="mx-auto max-w-xl card p-6">
-      <div className="mb-4 flex items-start gap-3">
-        <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><Icon name="play" className="h-5 w-5" /></span>
-        <div><h2 className="text-lg font-bold">Start shift on {tillName}</h2><p className="text-sm text-ink-500">Count the cash in the drawer (the float) before you start selling.</p></div>
-      </div>
-      {byTotal
-        ? <Field label="Opening float"><MoneyInput value={floatCents} onChange={setFloat} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') open(); }} /></Field>
-        : <CashCount counts={counts} onChange={setCounts} autoFocus label="Opening float" />}
-      <button type="button" className="mt-2 text-xs font-semibold text-brand-600 hover:underline" onClick={() => setByTotal(!byTotal)}>{byTotal ? 'Count notes and coins instead' : 'Enter the total instead'}</button>
-      <div className="mt-4"><ErrorBox error={error} /></div>
-      <div className="mt-4 flex gap-2">
-        <Button className="flex-1" size="lg" loading={busy} onClick={open}>Start shift · {money(amount)}</Button>
-        <Button variant="secondary" size="lg" onClick={onChangeTill}>Change till</Button>
+    <div className={embedded ? '' : 'mx-auto max-w-5xl p-2'}>
+      <ShiftHeader icon="play" tone="green" title={`Start shift on ${tillName}`} subtitle="Count the cash in the drawer (the float) before you start selling."
+        chips={[me?.user.name ?? '', now.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }), now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })].filter(Boolean)} />
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className={embedded ? '' : 'card p-4'}>
+          {byTotal
+            ? <Field label="Opening float"><MoneyInput value={floatCents} onChange={setFloat} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') open(); }} /></Field>
+            : <CashCount counts={counts} onChange={setCounts} autoFocus label="Opening float" />}
+        </div>
+        <aside className="space-y-3 lg:sticky lg:top-4 lg:self-start">
+          <div className="rounded-xl border border-ink-100 bg-white p-4 shadow-sm dark:border-ink-800 dark:bg-ink-900">
+            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-500">Float to start with</div>
+            <div className="mt-1 text-3xl font-black tabular-nums text-ink-900 dark:text-white" data-testid="float-total">{money(amount)}</div>
+            <p className="mt-1 text-xs text-ink-500">{amount === 0 ? 'No float: the drawer starts empty.' : 'This is what the drawer should hold now.'}</p>
+            <Button className="mt-4 w-full" size="lg" loading={busy} onClick={open}>Start shift · {money(amount)}</Button>
+            <button type="button" className="mt-3 w-full text-center text-xs font-semibold text-brand-600 hover:underline" onClick={() => setByTotal(!byTotal)}>{byTotal ? 'Count notes and coins instead' : 'Enter the total instead'}</button>
+          </div>
+          <ErrorBox error={error} />
+          <Button variant="secondary" className="w-full" onClick={onChangeTill}>Change till</Button>
+          <p className="px-1 text-[11px] text-ink-500">Tip: type a number and press Enter to move to the next note. Arrow up / down adds or removes one.</p>
+        </aside>
       </div>
     </div>
   );
@@ -119,44 +162,102 @@ function EndShiftModal({ shift, cartHasItems, onClose, onClosed }: { shift: any;
       <Modal open onClose={onClosed} title={`Shift ${shift.number} closed`} icon="check" subtitle="The Z report was sent to the printer."
         footer={<><Button variant="secondary" onClick={() => printHtml(`/shifts/${shift._id}/report`).catch(toast.error)}><Icon name="printer" className="h-4 w-4" />Print Z report again</Button><Button autoFocus onClick={onClosed}>Done</Button></>}>
         <div className="space-y-3 text-sm">
-          <div className="flex justify-between rounded-lg bg-ink-50 px-4 py-3 dark:bg-ink-800/50"><span>Counted cash</span><b className="text-lg">{money(done.shift.countedCashCents)}</b></div>
-          {!blind && done.expectedCashCents !== undefined && <div className="flex justify-between px-4"><span>Expected</span><span>{money(done.expectedCashCents)}</span></div>}
-          {!blind && v !== undefined && <div className={cx('flex justify-between rounded-lg px-4 py-3 font-bold', v === 0 ? 'bg-emerald-50 text-emerald-800' : v < 0 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}><span>{v === 0 ? 'Balanced' : v < 0 ? 'Short' : 'Over'}</span><span>{money(v)}</span></div>}
+          <div className="rounded-xl bg-gradient-to-r from-[#1f5a40] to-[#2f7d57] px-5 py-4 text-white">
+            <div className="text-xs font-semibold uppercase tracking-wide opacity-85">Counted cash</div>
+            <div className="text-3xl font-black tabular-nums">{money(done.shift.countedCashCents)}</div>
+          </div>
+          {!blind && done.expectedCashCents !== undefined && <div className="flex justify-between px-1"><span className="text-ink-500">Expected in the drawer</span><span className="font-semibold tabular-nums">{money(done.expectedCashCents)}</span></div>}
+          {!blind && v !== undefined && <div className={cx('flex items-center justify-between rounded-lg px-4 py-3 text-base font-bold', v === 0 ? 'bg-emerald-50 text-emerald-800' : v < 0 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}><span>{v === 0 ? '✓ Balanced' : v < 0 ? 'Short' : 'Over'}</span><span className="tabular-nums">{money(Math.abs(v))}</span></div>}
           {blind && <p className="text-ink-500">The count is recorded. A supervisor reviews the difference.</p>}
         </div>
       </Modal>
     );
   }
+  const methods = Object.entries((s?.paymentsByMethod ?? {}) as Record<string, { totalCents: number; count: number }>).sort((a, b) => b[1].totalCents - a[1].totalCents);
+  const takings = s?.sales.totalCents ?? 0;
+  const moves = Object.entries((s?.cashMovements ?? {}) as Record<string, { totalCents: number; count: number }>).sort((a, b) => MOVEMENT_ORDER.indexOf(a[0]) - MOVEMENT_ORDER.indexOf(b[0]));
   return (
-    <Modal open onClose={onClose} title={`End shift ${shift.number}`} icon="clock" subtitle={`Started ${new Date(shift.openedAt).toLocaleString()} with a float of ${money(shift.openingFloatCents)}`}
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} disabled={cartHasItems} onClick={() => close()}>Close shift · {money(counted)}</Button></>}>
-      <div className="space-y-4">
-        {cartHasItems && <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">Finish or hold the current sale before ending the shift.</p>}
-        {s && (
-          <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Sales</div><b>{s.sales.count}</b></div>
-            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Takings</div><b>{money(s.sales.totalCents)}</b></div>
-            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Cash sales</div><b>{money(s.paymentsByMethod?.cash?.totalCents ?? 0)}</b></div>
-            <div className="rounded-md bg-ink-50 p-2.5 dark:bg-ink-800/50"><div className="text-[11px] uppercase text-ink-500">Expected cash</div><b>{blind ? 'Hidden' : money(s.expectedCashCents)}</b></div>
-          </div>
-        )}
-        <CashCount counts={counts} onChange={setCounts} autoFocus={!cartHasItems} label="Counted cash" />
-        {!blind && s && counted > 0 && (
-          <p className={cx('text-sm font-semibold', counted === s.expectedCashCents ? 'text-emerald-700' : counted < s.expectedCashCents ? 'text-red-600' : 'text-amber-700')}>
-            {counted === s.expectedCashCents ? 'Matches the expected cash.' : `${counted < s.expectedCashCents ? 'Short by' : 'Over by'} ${money(Math.abs(counted - s.expectedCashCents))}`}
-          </p>
-        )}
-        <Field label="Notes (optional)"><Input value={notes} maxLength={500} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. 500 note given to supervisor at 4 pm" /></Field>
-        <ErrorBox error={error} />
+    <Modal open onClose={onClose} size="xl" title={`End shift ${shift.number}`} icon="clock" subtitle={`Started ${new Date(shift.openedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })} with a float of ${money(shift.openingFloatCents)}`}
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button size="lg" loading={busy} disabled={cartHasItems} onClick={() => close()}>Close shift · {money(counted)}</Button></>}>
+      {cartHasItems && <p role="alert" className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">Finish or hold the current sale before ending the shift.</p>}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-4">
+          <CashCount counts={counts} onChange={setCounts} autoFocus={!cartHasItems} label="Counted cash" expectedCents={blind ? null : s?.expectedCashCents ?? null} columns={1} />
+          <Field label="Notes (optional)"><Input value={notes} maxLength={500} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. 500 note given to supervisor at 4 pm" /></Field>
+          <ErrorBox error={error} />
+        </div>
+        <aside className="space-y-3 lg:sticky lg:top-0 lg:self-start" data-testid="shift-summary">
+          {s && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg bg-[#9b7fd6] p-3 text-white"><div className="text-[11px] font-semibold uppercase opacity-85">Takings</div><div className="text-lg font-black tabular-nums">{money(takings)}</div></div>
+                <div className="rounded-lg bg-[#4a9be3] p-3 text-white"><div className="text-[11px] font-semibold uppercase opacity-85">Receipts</div><div className="text-lg font-black tabular-nums">{s.sales.count}</div></div>
+              </div>
+              <div className="rounded-xl border border-ink-100 p-3 dark:border-ink-800">
+                <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-ink-500">How customers paid</div>
+                {methods.length ? (
+                  <ul className="space-y-2 text-sm">
+                    {methods.map(([m, v]) => (
+                      <li key={m}>
+                        <div className="flex justify-between"><span>{paymentLabel(m)} <span className="text-xs text-ink-400">× {v.count}</span></span><span className="font-semibold tabular-nums">{money(v.totalCents)}</span></div>
+                        <div className="mt-0.5 h-1.5 rounded-full bg-ink-100 dark:bg-ink-800"><div className="h-1.5 rounded-full bg-brand-500" style={{ width: `${takings ? Math.max(2, (v.totalCents / takings) * 100) : 0}%` }} /></div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : <p className="text-sm text-ink-500">No sales in this shift.</p>}
+              </div>
+              <div className="rounded-xl border border-ink-100 p-3 dark:border-ink-800">
+                <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-ink-500">Cash in the drawer</div>
+                {blind ? <p className="text-sm text-ink-500">Count the cash: the expected amount is checked by a supervisor (blind close).</p> : (
+                  <ul className="space-y-1 text-sm">
+                    {moves.map(([k, v]) => <li key={k} className="flex justify-between"><span className="text-ink-600 dark:text-ink-300">{MOVEMENT_LABEL[k] ?? k}{v.count > 1 && k !== 'sale' ? ` (${v.count})` : ''}</span><span className={cx('tabular-nums', v.totalCents < 0 && 'text-red-600')}>{v.totalCents < 0 ? '−' : '+'} {money(Math.abs(v.totalCents))}</span></li>)}
+                    <li className="mt-1 flex justify-between border-t border-ink-100 pt-1.5 font-bold dark:border-ink-800"><span>Expected</span><span className="tabular-nums">{money(s.expectedCashCents)}</span></li>
+                    <li className="flex justify-between"><span>Counted</span><span className="tabular-nums">{money(counted)}</span></li>
+                    {counted > 0 && (() => { const d = counted - s.expectedCashCents; return <li className={cx('mt-1 flex justify-between rounded-md px-2 py-1 font-semibold', d === 0 ? 'bg-emerald-50 text-emerald-700' : d < 0 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800')}><span>{d === 0 ? 'Matches the expected cash.' : d < 0 ? 'Short by' : 'Over by'}</span>{d !== 0 && <span className="tabular-nums">{money(Math.abs(d))}</span>}</li>; })()}
+                  </ul>
+                )}
+              </div>
+            </>
+          )}
+        </aside>
       </div>
       {approval && <OverrideModal permission={approval.permission} message={approval.message} onClose={() => setApproval(null)} onApproved={(token) => { setApproval(null); close(token); }} />}
     </Modal>
   );
 }
 
+/** A tappable product in the supermarket-style checkout grid: its photo, or the business logo when it has none. */
+function ProductGridTile({ product, logoFileId, priceCents, onAdd }: { product: Product; logoFileId?: string; priceCents?: number; onAdd: () => void }) {
+  const photo = useFileImage(product.images?.[0]);
+  const logo = useFileImage(logoFileId);
+  const img = photo ?? logo;
+  const out = (product.stock?.qty ?? 0) <= 0 && product.trackStock !== false && product.type === 'stock';
+  return (
+    <button type="button" onClick={onAdd} aria-label={`Add ${product.name}`}
+      className="group flex flex-col overflow-hidden rounded-lg border border-ink-100 bg-white text-left shadow-sm transition hover:-translate-y-px hover:border-brand-400 hover:shadow-md dark:border-ink-800 dark:bg-ink-900">
+      <div className="relative flex aspect-square items-center justify-center overflow-hidden bg-ink-50 dark:bg-ink-800">
+        {img ? <img src={img} alt="" className={cx('h-full w-full', photo ? 'object-cover' : 'scale-[0.6] object-contain opacity-60')} draggable={false} />
+          : <Icon name="box" className="h-8 w-8 text-ink-300" />}
+        {out && <span className="absolute right-1 top-1 rounded bg-red-600 px-1 text-[9px] font-bold text-white">OUT</span>}
+      </div>
+      <div className="flex flex-1 flex-col gap-0.5 p-1.5">
+        <div className="line-clamp-2 text-[11px] font-semibold leading-tight text-ink-800 dark:text-ink-100">{product.name}</div>
+        <div className="mt-auto text-xs font-black text-brand-700 dark:text-brand-300">{money(priceCents)}</div>
+      </div>
+    </button>
+  );
+}
+
 function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: string; warehouseId: string; branchId: string }; shift: any; onShiftClosed: () => void }) {
   const { me, can, has } = useAuth();
   const toast = useToast();
+  const confirm = useConfirm();
+  const tillButtons = useTillButtons();
+  // An on-screen number keypad on the checkout page itself (for touch tills without a keyboard).
+  const [showKeypad, setShowKeypad] = useState(() => { try { return localStorage.getItem('afey.keypad') === '1'; } catch { return false; } });
+  const toggleKeypad = () => setShowKeypad((v) => { const n = !v; try { localStorage.setItem('afey.keypad', n ? '1' : '0'); } catch { /* ignore */ } return n; });
+  const padInto = (k: string) => { const el = document.activeElement as HTMLInputElement | null; const t = el && el.tagName === 'INPUT' ? el : searchRef.current; if (t) typeInto(t, k); };
+  const padEnter = () => { const el = document.activeElement as HTMLInputElement | null; const t = el && el.tagName === 'INPUT' ? el : searchRef.current; t?.focus(); t?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); };
   const qc = useQueryClient();
   const caps = me!.capabilities;
   const settings = me!.tenant.settings ?? {};
@@ -214,6 +315,54 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     enabled: search.length >= 2 || Boolean(category),
   });
 
+  // Browse products: everything on sale, a page at a time, searchable and filtered by category.
+  // Auto-lock after the set minutes without use (Checkout rules); the sale on screen is kept.
+  const [locked, setLocked] = useState(false);
+  const [dropping, setDropping] = useState(false);
+  useEffect(() => {
+    const minutes = rules.security?.lockAfterMinutes ?? 0;
+    if (!minutes) return;
+    let last = Date.now();
+    const bump = () => { last = Date.now(); };
+    const events = ['pointerdown', 'keydown', 'touchstart', 'wheel'] as const;
+    events.forEach((e) => window.addEventListener(e, bump, true));
+    const t = setInterval(() => { if (Date.now() - last >= minutes * 60_000) setLocked(true); }, 5000);
+    return () => { events.forEach((e) => window.removeEventListener(e, bump, true)); clearInterval(t); };
+  }, [rules.security?.lockAfterMinutes]);
+  // The verified counter scale on this till (simulated scales never weigh real sales).
+  const scaleQ = useQuery({ queryKey: ['till-scale', till._id], queryFn: () => api<{ data: any[] }>('/scales', { query: { tillId: till._id } }).then((r) => r.data), staleTime: 60_000 });
+  const counterScale = (scaleQ.data ?? []).find((x) => x.role !== 'label' && x.status === 'verified' && !x.simulated && (x.adapter === 'keyboard' || (x.adapter === 'bridge-serial' && bridgeConfigured())));
+  const [weighing, setWeighing] = useState<Product | null>(null);
+  // Retail / Wholesale switch at the till, when the checkout rules allow it.
+  const showWholesale = rules.pricing.wholesaleAtTill && caps.priceLists.includes('wholesale');
+  // Supermarket-style product grid in the checkout page (Checkout rules > Show products as a grid).
+  const gridMode = Boolean(rules.display?.productGrid);
+  const logoFileId = me?.tenant.settings?.logoFileId as string | undefined;
+  const [browseQ, setBrowseQ] = useState('');
+  const [browsePage, setBrowsePage] = useState(1);
+  const BROWSE_PER_PAGE = 48;
+  const browse = useQuery({
+    queryKey: ['pos-browse', browseQ, category, browsePage],
+    queryFn: () => api<{ data: Product[]; total: number }>('/products', {
+      query: { q: browseQ || undefined, categoryId: category ?? undefined, active: 'true', page: browsePage, limit: BROWSE_PER_PAGE, warehouseId: till.warehouseId },
+    }),
+    enabled: panel?.kind === 'browse' || gridMode,
+    placeholderData: (prev) => prev,
+  });
+  const browseRef = useRef<HTMLInputElement>(null);
+  // In grid mode the top scan/search box also filters the grid.
+  useEffect(() => { if (gridMode) { setBrowseQ(search); setBrowsePage(1); } }, [search, gridMode]);
+  const openBrowse = useCallback(() => {
+    setBrowseQ('');
+    setBrowsePage(1);
+    setPanel({ kind: 'browse' });
+    setTimeout(() => browseRef.current?.focus(), 30);
+  }, []);
+  const closeBrowse = useCallback(() => {
+    setPanel(null);
+    setTimeout(() => searchRef.current?.focus(), 30);
+  }, []);
+
   const quote = useCallback(async (product: Product, unitCode: string, q: number, c: Cart) => {
     const r = await api<{ data: { unitPriceCents: number; source: string } }>(`/products/${product._id}/quote`, { body: { unitCode, qty: q, priceList: c.priceList, customerId: c.customer?._id, branchId: till.branchId, couponCode: c.couponCode || undefined } });
     return r.data;
@@ -221,6 +370,11 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
 
   const addProduct = useCallback(async (product: Product, opts: { unitCode?: string; qty?: number; priceCents?: number } = {}) => {
     setError(null);
+    // Weighed items go on this till's scale first (unless a scale label already carried the weight or price).
+    if (product.soldByWeight && counterScale && opts.qty === undefined && opts.priceCents === undefined && (opts.unitCode ?? product.baseUnit) === product.baseUnit) {
+      setWeighing(product);
+      return;
+    }
     const c0 = currentCart();
     const unitCode = opts.unitCode ?? product.baseUnit;
     const existing = c0.lines.find((l) => l.product._id === product._id && l.unitCode === unitCode && !product.trackSerials && opts.qty === undefined && opts.priceCents === undefined);
@@ -231,17 +385,16 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       if (opts.priceCents !== undefined && qt.unitPriceCents > 0) lineQty = roundQty(opts.priceCents / qt.unitPriceCents);
       update((c) => {
         const ex = existing && c.lines.find((l) => l.key === existing.key);
-        if (ex) return { ...c, lines: c.lines.map((l) => (l.key === ex.key ? { ...l, qty: lineQty, unitPriceCents: l.unitPriceCents === l.quotedCents ? qt.unitPriceCents : l.unitPriceCents, quotedCents: qt.unitPriceCents, promotion: qt.source === 'promotion' } : l)) };
+        if (ex) return { ...c, lines: c.lines.map((l) => (l.key === ex.key ? { ...l, qty: lineQty, unitPriceCents: l.unitPriceCents === l.quotedCents ? qt.unitPriceCents : l.unitPriceCents, quotedCents: qt.unitPriceCents, promotion: qt.source === 'promotion', wholesaleQty: qt.source === 'wholesale_qty' } : l)) };
         const key = newRequestId();
         setSelectedKey(key);
-        return { ...c, lines: [...c.lines, { key, product, unitCode, qty: lineQty, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, discountCents: 0, serials: [], promotion: qt.source === 'promotion' }] };
+        return { ...c, lines: [...c.lines, { key, product, unitCode, qty: lineQty, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, discountCents: 0, serials: [], promotion: qt.source === 'promotion', wholesaleQty: qt.source === 'wholesale_qty' }] };
       });
       if (existing) setSelectedKey(existing.key);
     } catch (e) {
       setError(e);
     }
-     
-  }, [quote, update]);
+  }, [quote, update, counterScale]);
 
   const lookupAndAdd = async (code: string) => {
     try {
@@ -294,6 +447,8 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
         const qt = await quote(next.product, next.unitCode, next.qty, cart);
         if (line.unitPriceCents === line.quotedCents || patch.unitCode) next.unitPriceCents = qt.unitPriceCents;
         next.quotedCents = qt.unitPriceCents;
+        next.promotion = qt.source === 'promotion';
+        next.wholesaleQty = qt.source === 'wholesale_qty';
       } catch (e) {
         setError(e);
       }
@@ -305,12 +460,13 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
   const requoteAll = async (c: Cart) => {
     const lines = await Promise.all(c.lines.map(async (l) => {
       const qt = await quote(l.product, l.unitCode, l.qty, c).catch(() => null);
-      return qt ? { ...l, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, promotion: qt.source === 'promotion' } : l;
+      return qt ? { ...l, unitPriceCents: qt.unitPriceCents, quotedCents: qt.unitPriceCents, promotion: qt.source === 'promotion', wholesaleQty: qt.source === 'wholesale_qty' } : l;
     }));
     update(() => ({ ...c, lines }));
   };
 
   // Totals computed with the same shared functions the server uses.
+  const roundWhole = Boolean(rules.pricing?.roundToWholeShilling);
   const totals = useMemo(() => {
     const gross = cart.lines.map((l) => lineAmount(l.qty, l.unitPriceCents));
     const disc = cart.lines.map((l, i) => Math.min(l.discountCents, gross[i]));
@@ -325,8 +481,10 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       tax += t.tax;
     });
     const discount = disc.reduce((a, b) => a + b, 0) + cartDiscount;
-    return { linesGross, discount, tax, total, items: cart.lines.reduce((a, l) => a + l.qty, 0) };
-  }, [cart, settings.defaultTaxRateBp, settings.pricesIncludeTax]);
+    // Round the payable to the nearest whole shilling when the rules say so.
+    const rounding = roundWhole && total > 0 ? Math.round(total / 100) * 100 - total : 0;
+    return { linesGross, discount, tax, total: total + rounding, rounding, items: cart.lines.reduce((a, l) => a + l.qty, 0) };
+  }, [cart, settings.defaultTaxRateBp, settings.pricesIncludeTax, roundWhole]);
 
   const suspend = () => {
     if (!cart.lines.length || !rules.items.holdAllowed) return;
@@ -335,8 +493,12 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     toast.info(`${cart.label} suspended`);
   };
   /** The cashier clears a sale (or discards a held one): recorded, and may need a supervisor. */
-  const clearCart = (i: number) => {
+  const clearCart = async (i: number) => {
     const c = carts[i];
+    // Money already received for this sale (M-Pesa, card): say so before it is put aside.
+    const received = (c?.checkout?.payments ?? []).filter((p) => p.paymentIntentId || p.terminalTransactionId);
+    if (received.length && !(await confirm({ title: 'This sale is already paid', danger: true, confirmLabel: 'Clear anyway',
+      message: <>{received.map((p) => p.label ?? paymentLabel(p.method)).join(', ')} ({money(received.reduce((a, p) => a + p.amountCents, 0))}) was received for this sale. If you clear it, the payment is not lost: it can be used on another sale with <b>Enter M-Pesa code</b>, or refunded.</> }))) return;
     if (!c?.lines.length) return removeCart(i);
     guardRemoval('clear', c.lines, () => removeCart(i));
   };
@@ -366,10 +528,11 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       const idx = cart.lines.findIndex((l) => l.key === selected?.key);
       const key = e.key;
       if (key === 'F2') { e.preventDefault(); searchRef.current?.focus(); return; }
-      if (key === 'F3') { e.preventDefault(); if (has('mpesa')) pay('mpesa'); return; }
+      if (key === 'F3') { e.preventDefault(); if (has('mpesa') && allowed('mpesa')) pay('mpesa'); return; }
       if (key === 'F4') { e.preventDefault(); setCustomerOpen(true); return; }
-      if (key === 'F6') { e.preventDefault(); pay('card'); return; }
-      if (key === 'F7') { e.preventDefault(); if (!cantPay) setVoucherOpen(true); return; }
+      if (key === 'F5') { e.preventDefault(); openBrowse(); return; }
+      if (key === 'F6') { e.preventDefault(); if (allowed('card')) pay('card'); return; }
+      if (key === 'F7') { e.preventDefault(); if (!cantPay && allowed('voucher')) setVoucherOpen(true); return; }
       if (key === 'F8') { e.preventDefault(); suspend(); return; }
       if (key === 'F9' || key === 'F12') { e.preventDefault(); pay('cash'); return; }
       if (key === 'F10') { e.preventDefault(); setPanel({ kind: 'more' }); return; }
@@ -406,32 +569,58 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
     if (line) guardRemoval('remove', [line], () => update((c) => ({ ...c, lines: c.lines.filter((x) => x.key !== key) })));
   };
   const taxLabel = settings.pricesIncludeTax === false ? 'Tax' : `Tax${settings.defaultTaxRateBp ? ` (${settings.defaultTaxRateBp / 100}%)` : ''}`;
-  const pay = (method: string) => cart.lines.length && !(needsAge && !cart.ageVerified) && setPaying(method);
+  // Only the ways to pay the owner allows (Checkout rules); a method that is off opens the first allowed one.
+  const allowed = (m: string) => paymentMethodAllowed(rules, m);
+  // The customer-facing screen follows the basket, the payment and the finished sale.
+  const displayState = useMemo<DisplayState>(() => {
+    if (lastSale) return { status: 'paid', lines: [], discountCents: 0, taxCents: 0, totalCents: lastSale.totalCents, paidCents: lastSale.totalCents, changeCents: lastSale.changeCents, payment: paymentLabel(([...(lastSale.payments ?? [])].sort((a: any, b: any) => b.amountCents - a.amountCents)[0]?.method) ?? ''), at: Date.now() };
+    return {
+      status: !cart.lines.length ? 'idle' : paying ? 'paying' : 'basket',
+      lines: cart.lines.map((l) => ({ name: l.product.name, qty: l.qty, unit: l.unitCode, unitPriceCents: l.unitPriceCents, totalCents: lineAmount(l.qty, l.unitPriceCents) - l.discountCents, discountCents: l.discountCents })),
+      discountCents: totals.discount, taxCents: totals.tax, totalCents: totals.total, message: paying ? `Paying by ${paymentLabel(paying)}…` : undefined, at: Date.now(),
+    };
+  }, [cart.lines, totals, paying, lastSale]);
+  useCustomerDisplayFeed(displayState);
+  const pay = (method: string) => cart.lines.length && !(needsAge && !cart.ageVerified) && setPaying(allowed(method) ? method : rules.paymentMethods[0]);
   const cantPay = !cart.lines.length || (needsAge && !cart.ageVerified);
   // Main tiles: ways to pay and the sale's customer. Editing the sale is under More.
-  const tiles: { kind: PosTileKind; label: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string; badge?: string }[] = [
+  const allTiles: { kind: PosTileKind; label: string; onClick: () => void; disabled?: boolean; hint?: string; title?: string; badge?: string }[] = [
     { kind: 'mpesa', label: 'M-Pesa payment', hint: 'F3', onClick: () => pay('mpesa'), disabled: cantPay || !has('mpesa'), title: has('mpesa') ? undefined : 'Turn on M-Pesa in Settings > Integrations' },
     { kind: 'cash', label: 'Cash payment', onClick: () => pay('cash'), disabled: cantPay, hint: 'Enter' },
     { kind: 'card', label: 'Card payment', hint: 'F6', onClick: () => pay('card'), disabled: cantPay },
     { kind: 'loyalty', label: 'Loyalty card', onClick: () => setLoyaltyOpen(true), disabled: !has('loyalty'), title: has('loyalty') ? undefined : 'Turn on the Loyalty module in Settings' },
     { kind: 'voucher', label: 'Voucher', hint: 'F7', onClick: () => setVoucherOpen(true), disabled: cantPay, badge: cart.couponCode || undefined },
-    { kind: 'customer', label: cart.customer ? `Customer: ${cart.customer.name}` : 'Customer', onClick: () => setCustomerOpen(true), hint: 'F4', badge: cart.customer ? '✓' : undefined },
+    ...(rules.customer.phone !== 'off' ? [{ kind: 'customer' as const, label: cart.customer ? `Customer: ${cart.customer.name}` : 'Customer', onClick: () => setCustomerOpen(true), hint: 'F4', badge: cart.customer ? '✓' : undefined }] : []),
     { kind: 'hold', label: 'Hold sale', onClick: suspend, disabled: !cart.lines.length || !rules.items.holdAllowed, hint: 'F8', title: rules.items.holdAllowed ? undefined : 'Holding sales is turned off in Checkout rules' },
   ];
+  const tiles = allTiles.filter((t) => !['mpesa', 'cash', 'card', 'voucher'].includes(t.kind) || allowed(t.kind));
+  // The owner's own icons, pictures, wording and colours (Settings > Till buttons).
+  const buttonLooks = tillButtons;
   const more: { key: string; label: string; icon: string; tone: string; onClick: () => void; disabled?: boolean; count?: number; lock?: boolean }[] = [
     { key: 'qty', label: 'Quantity', icon: 'plus', tone: 'text-emerald-600 bg-emerald-50', onClick: () => setPanel({ kind: 'line', focus: 'qty' }), disabled: !selected },
     { key: 'ldisc', label: 'Line discount', icon: 'percent', tone: 'text-sky-600 bg-sky-50', onClick: () => setPanel({ kind: 'line', focus: 'discount' }), disabled: !selected || !can('sales.discount') },
     { key: 'del', label: 'Delete item', icon: 'trash', tone: 'text-red-600 bg-red-50', onClick: () => { setPanel(null); if (selected) removeLine(selected.key); }, disabled: !selected, lock: needsApproval('remove') },
     { key: 'gdisc', label: 'Sale discount', icon: 'tag', tone: 'text-violet-600 bg-violet-50', onClick: () => setPanel({ kind: 'cart' }), disabled: !cart.lines.length || !can('sales.discount') },
     { key: 'resume', label: 'Resume held', icon: 'play', tone: 'text-orange-600 bg-orange-50', onClick: () => setPanel({ kind: 'resume' }), disabled: !held.length, count: held.length },
-    { key: 'browse', label: 'Browse products', icon: 'grid', tone: 'text-teal-600 bg-teal-50', onClick: () => setPanel({ kind: 'browse' }) },
+    { key: 'browse', label: 'Browse products', icon: 'grid', tone: 'text-teal-600 bg-teal-50', onClick: openBrowse },
     ...(shift ? [{ key: 'endshift', label: 'End shift', icon: 'clock', tone: 'text-amber-700 bg-amber-50', onClick: () => { setPanel(null); setEndingShift(true); } }] : []),
+    { key: 'drawer', label: 'Open drawer', icon: 'wallet', tone: 'text-emerald-700 bg-emerald-50', onClick: () => {
+      setPanel(null);
+      openCashDrawer({ tillId: till._id, reason: 'Opened from the till (no sale)' })
+        .then((ok) => (ok ? toast.success('Cash drawer opened') : toast.error('This computer has no route to the cash drawer: choose its printer in Hardware → This computer.')))
+        .catch(toast.error);
+    } },
+    ...(shift && can('cash.movement') ? [{ key: 'drop', label: 'Drop cash', icon: 'wallet', tone: 'text-amber-700 bg-amber-50', onClick: () => { setPanel(null); setDropping(true); } }] : []),
+    { key: 'display', label: 'Customer display', icon: 'expand', tone: 'text-sky-700 bg-sky-50', onClick: () => { setPanel(null); openCustomerDisplay(); } },
     { key: 'clear', label: 'Clear sale', icon: 'x', tone: 'text-ink-600 bg-ink-100', onClick: () => { setPanel(null); clearCart(active); }, disabled: !cart.lines.length, lock: needsApproval('clear') },
   ];
 
   return (
     // Fills the window under the shell's header (48px) and breadcrumb (42px), inside the page padding; the footer is hidden here.
-    <div className="flex flex-col gap-3 lg:h-[calc(100vh-80px)] lg:min-h-[520px] lg:flex-row">
+    <div className="flex flex-col gap-3 lg:h-[calc(100vh-80px)] lg:min-h-[520px]">
+      {/* When the till opens, a quick check of the device bridge, printer, scanner and fingerprint reader. */}
+      {shift && <DeviceCheckBar />}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
       {/* main: search, transaction lines, totals */}
       <section className="card flex min-w-0 flex-1 flex-col overflow-hidden" aria-label="Current sale">
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 px-4 py-3 dark:border-ink-800">
@@ -455,12 +644,11 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
               </div>
             )}
           </div>
-          <Button variant="secondary" onClick={() => setPanel({ kind: 'browse' })}><Icon name="grid" className="h-4 w-4" />Browse</Button>
-          {caps.checkout.showPriceListSelector && caps.priceLists.length > 1 && (
-            <select aria-label="Price list" className="input w-auto py-2" value={cart.priceList} onChange={(e) => { const c = { ...cart, priceList: e.target.value as PriceListKey }; requoteAll(c); }}>
-              {caps.priceLists.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          )}
+          <Button variant="secondary" onClick={openBrowse} title="Every product and its price (F5)"><Icon name="grid" className="h-4 w-4" />Browse<kbd className="ml-1.5 hidden rounded border border-ink-200 bg-ink-50 px-1 py-0.5 text-[10px] font-semibold text-ink-500 sm:inline dark:border-ink-700 dark:bg-ink-800">F5</kbd></Button>
+          <button type="button" aria-pressed={showKeypad} onClick={toggleKeypad} title="On-screen number keypad"
+            className={cx('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition', showKeypad ? 'border-brand-300 bg-brand-50 text-brand-700 dark:border-brand-800 dark:bg-brand-950/40 dark:text-brand-200' : 'border-ink-200 text-ink-600 hover:bg-ink-50 dark:border-ink-700 dark:text-ink-300')}>
+            <Icon name="keypad" className="h-3.5 w-3.5" />Keypad
+          </button>
           <Badge tone="green">{till.name}</Badge>
           {!shift && (
             <button type="button" onClick={() => setStartingShift(true)} className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
@@ -475,11 +663,48 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
           )}
         </div>
 
+        {gridMode && (
+          <div className="border-b border-ink-100 dark:border-ink-800" data-testid="pos-product-grid">
+            {categories.data && categories.data.length > 0 && (
+              <div className="flex flex-nowrap gap-1.5 overflow-x-auto px-5 pt-3">
+                <button onClick={() => { setCategory(null); setBrowsePage(1); }} className={cx('shrink-0 rounded-full px-3 py-1 text-xs font-semibold', !category ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>All</button>
+                {categories.data.filter((c) => c.active !== false).map((c) => (
+                  <button key={c._id} onClick={() => { setCategory(c._id === category ? null : c._id); setBrowsePage(1); }} className={cx('shrink-0 rounded-full px-3 py-1 text-xs font-semibold', category === c._id ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>{c.name}</button>
+                ))}
+              </div>
+            )}
+            <div className="grid max-h-[38vh] grid-cols-3 gap-2 overflow-y-auto p-3 sm:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6">
+              {browse.data?.data.map((p) => <ProductGridTile key={p._id} product={p} logoFileId={logoFileId} priceCents={p.prices?.[cart.priceList] ?? p.prices?.retail} onAdd={() => addProduct(p)} />)}
+              {browse.isLoading && <div className="col-span-full py-6 text-center"><Spinner /></div>}
+              {browse.data && !browse.data.data.length && <p className="col-span-full py-6 text-center text-sm text-ink-500">{browseQ ? `Nothing matches “${browseQ}”.` : 'No products here.'}</p>}
+            </div>
+            {browse.data && browse.data.total > BROWSE_PER_PAGE && (
+              <div className="flex items-center justify-between px-5 pb-2 text-xs text-ink-500">
+                <span>Page {browsePage} of {Math.ceil(browse.data.total / BROWSE_PER_PAGE)}</span>
+                <span className="flex gap-2">
+                  <Button size="sm" variant="secondary" disabled={browsePage <= 1} onClick={() => setBrowsePage((n) => n - 1)}>Prev</Button>
+                  <Button size="sm" variant="secondary" disabled={browsePage >= Math.ceil(browse.data.total / BROWSE_PER_PAGE)} onClick={() => setBrowsePage((n) => n + 1)}>Next</Button>
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex items-center gap-3 px-5 pb-2 pt-4">
           <Icon name="cart" className="h-5 w-5 text-brand-500" />
           <h2 className="text-[15px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-white">Transaction lines</h2>
           <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-bold text-brand-600 dark:bg-brand-500/15 dark:text-brand-200">{fmtQty(totals.items)} {totals.items === 1 ? 'ITEM' : 'ITEMS'}</span>
-          <button type="button" onClick={() => setCustomerOpen(true)} className="ml-auto flex max-w-[45%] items-center gap-1.5 truncate rounded-full bg-ink-50 px-3 py-1 text-xs font-semibold text-ink-600 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300"><Icon name="user" className="h-3.5 w-3.5" /><span className="truncate">{cart.customer ? cart.customer.name : 'Walk-in customer (F4)'}</span></button>
+          {showWholesale && (
+            <div role="group" aria-label="Price list" className="ml-auto flex rounded-full bg-ink-100 p-0.5 text-xs font-bold dark:bg-ink-800" data-testid="price-list-switch">
+              {(['retail', 'wholesale'] as const).map((pl) => (
+                <button key={pl} type="button" aria-pressed={cart.priceList === pl} onClick={() => { if (cart.priceList !== pl) requoteAll({ ...cart, priceList: pl }); searchRef.current?.focus(); }}
+                  className={cx('rounded-full px-3 py-1 capitalize transition', cart.priceList === pl ? (pl === 'wholesale' ? 'bg-amber-500 text-white' : 'bg-brand-500 text-white') : 'text-ink-600 hover:text-ink-900 dark:text-ink-300')}>
+                  {pl}{pl === 'wholesale' && rules.pricing.wholesaleNeedsApproval ? ' 🔒' : ''}
+                </button>
+              ))}
+            </div>
+          )}
+          {rules.customer.phone !== 'off' && <button type="button" onClick={() => setCustomerOpen(true)} className={cx(showWholesale ? '' : 'ml-auto', 'flex max-w-[45%] items-center gap-1.5 truncate rounded-full bg-ink-50 px-3 py-1 text-xs font-semibold text-ink-600 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300')}><Icon name="user" className="h-3.5 w-3.5" /><span className="truncate">{cart.customer ? cart.customer.name : 'Walk-in customer (F4)'}</span></button>}
           <span className="text-xs font-semibold text-ink-400">{cart.label}</span>
         </div>
         {error ? <div className="px-5 pb-2"><ErrorBox error={error} /></div> : null}
@@ -507,7 +732,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
             <div className="flex h-[60%] flex-col items-center justify-center px-6 text-center text-ink-400">
               <Icon name="barcode" className="mb-3 h-14 w-14" />
               <p className="font-semibold text-ink-500">Scan an item to start the sale</p>
-              <p className="mt-1 text-xs">Enter pay cash · F3 M-Pesa · F6 card · F7 voucher · F4 customer · F8 hold · F10 more</p>
+              <p className="mt-1 text-xs">Enter pay cash · F3 M-Pesa · F5 browse · F6 card · F7 voucher · F4 customer · F8 hold · F10 more</p>
               <p className="mt-0.5 text-xs">↑ ↓ pick a line · + − quantity · Delete remove · F2 scan box</p>
             </div>
           )}
@@ -526,21 +751,38 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
             </div>
           ))}
           <div className="col-span-2 flex min-w-0 flex-col items-end justify-center bg-[#f7f8fa] px-5 py-3 dark:bg-ink-950/60 md:col-span-1">
+            {(cart.checkout?.payments.length ?? 0) > 0 && (
+              <div className="mb-1 rounded bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/10" data-testid="cart-kept-payment">
+                Paid {money(cart.checkout!.payments.reduce((a, p) => a + p.amountCents, 0))} · press Pay to finish
+              </div>
+            )}
+            {cart.checkout?.pendingIntentId && !cart.checkout.payments.length && <div className="mb-1 text-xs font-semibold text-amber-700" data-testid="cart-kept-payment">M-Pesa prompt sent · press Pay to check it</div>}
             <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-ink-500">Total payable</div>
             <div className="font-black leading-none tracking-tight text-ink-900 dark:text-white" data-testid="cart-total"><span className="whitespace-nowrap text-3xl tabular-nums 2xl:text-4xl">{money(totals.total)}</span></div>
           </div>
         </div>
       </section>
 
+      {showKeypad && (
+        <div className="fixed bottom-4 left-4 z-40 w-56 rounded-xl border border-ink-200 bg-white p-2 shadow-2xl dark:border-ink-700 dark:bg-ink-900" data-testid="checkout-keypad">
+          <div className="mb-1.5 flex items-center justify-between px-1">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-ink-500">Keypad</span>
+            <button type="button" aria-label="Hide keypad" onMouseDown={(e) => e.preventDefault()} onClick={toggleKeypad} className="rounded p-0.5 text-ink-400 hover:text-ink-700"><Icon name="x" className="h-3.5 w-3.5" /></button>
+          </div>
+          <NumPad onPress={padInto} onEnter={padEnter} />
+        </div>
+      )}
+
       {/* actions */}
       <aside className="flex w-full flex-col gap-3 lg:w-[320px] 2xl:w-[400px]" aria-label="Sale actions">
         {pickupDue && <div role="alert" className="flex items-center gap-2 rounded-lg bg-amber-100 px-3 py-2 text-[13px] font-semibold text-amber-900 dark:bg-amber-900/40 dark:text-amber-100"><Icon name="alert" className="h-4 w-4 shrink-0" />Cash pickup due: hand cash over to a supervisor.</div>}
         <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-2 gap-2.5 overflow-y-auto">
-          {tiles.map((t) => <PosTile key={t.kind} {...t} big={big} />)}
-          <button type="button" onClick={() => setPanel({ kind: 'more' })} aria-haspopup="dialog"
+          {tiles.map((t) => <PosTile key={t.kind} {...t} big={big} custom={buttonLooks[t.kind]} />)}
+          <button type="button" onClick={() => setPanel({ kind: 'more' })} aria-haspopup="dialog" aria-label="More"
+            style={{ ...(buttonLooks.more?.bg ? { background: buttonLooks.more.bg } : {}), ...(buttonLooks.more?.text ? { color: buttonLooks.more.text } : {}) }}
             className="card flex min-h-[56px] items-center justify-center gap-2 transition hover:-translate-y-px hover:shadow-md">
-            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300"><Icon name="grid" className="h-4 w-4" /></span>
-            <span className="text-[13px] font-extrabold uppercase tracking-wide text-ink-800 dark:text-ink-100">More</span>
+            <ButtonArt look={buttonLooks.more} icon="grid" className="h-8 w-8 rounded-full bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300" size="h-4 w-4" />
+            <span className={cx('text-[13px] font-extrabold uppercase tracking-wide', !buttonLooks.more?.text && 'text-ink-800 dark:text-ink-100')}>{buttonLooks.more?.label || 'More'}</span>
             {held.length > 0 && <span className="rounded-full bg-orange-100 px-1.5 text-[11px] font-bold text-orange-700">{held.length}</span>}
           </button>
         </div>
@@ -551,7 +793,14 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
           <span className="rounded-full bg-white/20 px-3 py-1 text-sm font-bold">F9 · {money(totals.total)}</span>
         </button>
       </aside>
+      </div>
 
+      {dropping && shift && <CashDropModal shift={shift} tillId={till._id} onClose={() => { setDropping(false); setTimeout(() => searchRef.current?.focus(), 30); }} onDone={() => { pickup.refetch(); }} />}
+      {locked && <TillLock name={me!.user.name} onUnlocked={() => { setLocked(false); setTimeout(() => searchRef.current?.focus(), 30); }} />}
+      {weighing && counterScale && (
+        <WeighModal scale={counterScale} product={weighing} pricePerKgCents={weighing.prices?.retail} onClose={() => { setWeighing(null); searchRef.current?.focus(); }}
+          onAdd={(kg) => { const p = weighing; setWeighing(null); addProduct(p, { qty: kg }); searchRef.current?.focus(); }} />
+      )}
       {panel?.kind === 'line' && selected && (
         <LineModal line={selected} focus={panel.focus} allowFraction={caps.checkout.allowFractionalQty && selected.product.allowFractional} canDiscount={can('sales.discount')}
           onClose={() => { setPanel(null); searchRef.current?.focus(); }} onSave={(patch) => { setLine(selected.key, patch); setPanel(null); searchRef.current?.focus(); }} onRemove={() => { removeLine(selected.key); setPanel(null); }} />
@@ -578,23 +827,53 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
         </Modal>
       )}
       {panel?.kind === 'browse' && (
-        <Modal open onClose={() => { setPanel(null); setCategory(null); }} title="Browse products" icon="grid" size="xl">
-          {categories.data && categories.data.length > 0 && (
-            <div className="mb-3 flex flex-wrap gap-2">
-              {categories.data.filter((c) => c.active !== false).map((c) => <button key={c._id} onClick={() => setCategory(c._id === category ? null : c._id)} className={cx('rounded-full px-3.5 py-1.5 text-sm font-semibold', category === c._id ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>{c.name}</button>)}
+        <Modal open onClose={closeBrowse} title="Browse products" icon="grid" size="xl"
+          subtitle={browse.data ? `${browse.data.total} product${browse.data.total === 1 ? '' : 's'} on sale · click one to add it` : 'Every product and its price'}>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[220px] flex-1">
+              <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400" />
+              <input ref={browseRef} className="input pl-9" placeholder="Search by name or code" value={browseQ} aria-label="Search products"
+                onChange={(e) => { setBrowseQ(e.target.value); setBrowsePage(1); }} />
             </div>
-          )}
-          {!category ? <p className="text-sm text-ink-500">Choose a category.</p> : results.isFetching ? <Spinner /> : (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              {results.data?.map((p) => (
-                <button key={p._id} onClick={() => addProduct(p)} className="card p-3 text-left transition hover:border-brand-500">
-                  <div className="line-clamp-2 font-semibold">{p.name}</div>
-                  <div className="mt-1 flex items-center justify-between text-sm"><span className="text-ink-500">{p.sku}</span><span className="font-semibold">{money(p.prices?.[cart.priceList] ?? p.prices?.retail)}</span></div>
-                  <div className={cx('mt-1 text-xs', (p.stock?.qty ?? 0) <= 0 ? 'text-red-600' : 'text-ink-500')}>In stock: {fmtQty(p.stock?.qty)} {p.baseUnit}</div>
-                </button>
-              ))}
-              {results.data && !results.data.length && <p className="text-sm text-ink-500">No products in this category.</p>}
-            </div>
+            {categories.data && categories.data.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                <button onClick={() => { setCategory(null); setBrowsePage(1); }}
+                  className={cx('rounded-full px-3.5 py-1.5 text-sm font-semibold', !category ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>All</button>
+                {categories.data.filter((c) => c.active !== false).map((c) => (
+                  <button key={c._id} onClick={() => { setCategory(c._id === category ? null : c._id); setBrowsePage(1); }}
+                    className={cx('rounded-full px-3.5 py-1.5 text-sm font-semibold', category === c._id ? 'bg-brand-500 text-white' : 'bg-ink-100 hover:bg-ink-200 dark:bg-ink-800')}>{c.name}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          {browse.isLoading ? <Spinner /> : (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4" data-testid="browse-products">
+                {browse.data?.data.map((p) => {
+                  const out = (p.stock?.qty ?? 0) <= 0 && p.trackStock !== false && p.type === 'stock';
+                  return (
+                    <button key={p._id} onClick={() => addProduct(p)} className="card p-3 text-left transition hover:border-brand-500 hover:shadow-md">
+                      <div className="line-clamp-2 font-semibold">{p.name}</div>
+                      <div className="mt-1 flex items-center justify-between gap-2 text-sm">
+                        <span className="truncate text-ink-500">{p.sku}</span>
+                        <span className="shrink-0 font-bold text-brand-700 dark:text-brand-300">{money(p.prices?.[cart.priceList] ?? p.prices?.retail)}</span>
+                      </div>
+                      <div className={cx('mt-1 text-xs', out ? 'text-red-600' : 'text-ink-500')}>{p.type === 'stock' ? `In stock: ${fmtQty(p.stock?.qty)} ${p.baseUnit}` : p.type === 'service' ? 'Service' : 'Not counted'}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              {browse.data && !browse.data.data.length && <p className="py-8 text-center text-sm text-ink-500">{browseQ ? `Nothing matches “${browseQ}”.` : 'No products in this category.'}</p>}
+              {browse.data && browse.data.total > BROWSE_PER_PAGE && (
+                <div className="mt-3 flex items-center justify-between border-t border-ink-100 pt-3 text-sm dark:border-ink-800">
+                  <span className="text-ink-500">Page {browsePage} of {Math.ceil(browse.data.total / BROWSE_PER_PAGE)}</span>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="secondary" disabled={browsePage <= 1} onClick={() => setBrowsePage((n) => n - 1)}>Previous</Button>
+                    <Button size="sm" variant="secondary" disabled={browsePage >= Math.ceil(browse.data.total / BROWSE_PER_PAGE)} onClick={() => setBrowsePage((n) => n + 1)}>Next</Button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </Modal>
       )}
@@ -602,14 +881,18 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       {panel?.kind === 'more' && (
         <Modal open onClose={() => setPanel(null)} title="More actions" icon="grid" subtitle={selected ? `Selected: ${selected.product.name}` : 'Scan an item first to change it.'} size="md">
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-            {more.map((t) => (
-              <button key={t.key} type="button" onClick={t.onClick} disabled={t.disabled}
-                className="relative flex min-h-[92px] flex-col items-center justify-center gap-1.5 rounded-lg border border-ink-100 bg-white p-3 transition hover:-translate-y-px hover:border-brand-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none dark:border-ink-800 dark:bg-ink-900">
-                {t.lock && <Icon name="lock" className="absolute right-2 top-2 h-3.5 w-3.5 text-ink-400" aria-label="Needs a supervisor" />}
-                <span className={cx('flex h-9 w-9 items-center justify-center rounded-full', t.tone)}><Icon name={t.icon} className="h-[18px] w-[18px]" /></span>
-                <span className="text-[12.5px] font-extrabold uppercase tracking-wide">{t.label}{t.count ? ` (${t.count})` : ''}</span>
-              </button>
-            ))}
+            {more.map((t) => {
+              const look = buttonLooks[t.key];
+              return (
+                <button key={t.key} type="button" onClick={t.onClick} disabled={t.disabled} aria-label={t.label}
+                  style={{ ...(look?.bg ? { background: look.bg } : {}), ...(look?.text ? { color: look.text } : {}) }}
+                  className="relative flex min-h-[92px] flex-col items-center justify-center gap-1.5 rounded-lg border border-ink-100 bg-white p-3 transition hover:-translate-y-px hover:border-brand-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0 disabled:hover:shadow-none dark:border-ink-800 dark:bg-ink-900">
+                  {t.lock && <Icon name="lock" className="absolute right-2 top-2 h-3.5 w-3.5 text-ink-400" aria-label="Needs a supervisor" />}
+                  <ButtonArt look={look} icon={t.icon} className={cx('h-9 w-9 rounded-full', t.tone)} size="h-[18px] w-[18px]" />
+                  <span className="text-[12.5px] font-extrabold uppercase tracking-wide">{look?.label || t.label}{t.count ? ` (${t.count})` : ''}</span>
+                </button>
+              );
+            })}
           </div>
           {(needsApproval('remove') || needsApproval('clear')) && <p className="mt-3 flex items-center gap-1.5 text-xs text-ink-500"><Icon name="lock" className="h-3.5 w-3.5" />Locked actions need a supervisor's card scan.</p>}
         </Modal>
@@ -649,11 +932,12 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       {customerOpen && <CustomerPicker onClose={() => setCustomerOpen(false)} onPick={(c) => { setCustomerOpen(false); const next = { ...cart, customer: c, priceList: (c?.priceList as PriceListKey) && caps.priceLists.includes(c?.priceList as PriceListKey) ? (c!.priceList as PriceListKey) : cart.priceList }; requoteAll(next); }} />}
       {paying && (
         <PaymentModal cart={cart} total={totals.total} till={till} shift={shift} initialMethod={paying} initialVoucher={paying === 'voucher' ? voucherCode : undefined} onClose={() => setPaying(false)}
+          onKeep={(checkout) => { const id = cart.id; setCarts((cs) => cs.map((c) => (c.id === id ? { ...c, checkout } : c))); }}
           onDone={(sale) => { setPaying(false); setLastSale(sale); removeCart(active); pickup.refetch(); qc.invalidateQueries({ queryKey: ['pos-search'] }); searchRef.current?.focus(); }} />
       )}
       {startingShift && (
-        <Modal open onClose={() => setStartingShift(false)} title="Start shift" icon="play">
-          <OpenShift tillId={till._id} tillName={till.name} onOpened={() => { setStartingShift(false); onShiftClosed(); }} onChangeTill={() => setStartingShift(false)} />
+        <Modal open onClose={() => setStartingShift(false)} title="Start shift" icon="play" size="xl">
+          <OpenShift embedded tillId={till._id} tillName={till.name} onOpened={() => { setStartingShift(false); onShiftClosed(); }} onChangeTill={() => setStartingShift(false)} />
         </Modal>
       )}
       {endingShift && shift && <EndShiftModal shift={shift} cartHasItems={cart.lines.length > 0} onClose={() => { setEndingShift(false); searchRef.current?.focus(); }} onClosed={() => { setEndingShift(false); qc.invalidateQueries({ queryKey: ['shifts'] }); onShiftClosed(); }} />}
@@ -671,9 +955,17 @@ function SaleRow({ line, selected, allowFraction, big, onSelect, onChange, onRem
       className={cx('cursor-pointer border-b border-ink-50 transition dark:border-ink-800', selected ? 'bg-brand-50/70 shadow-[inset_3px_0_0_theme(colors.brand.500)] dark:bg-brand-500/10' : 'hover:bg-[#f7f8fa] dark:hover:bg-ink-800/40')}>
       <td className={cx('px-5', big ? 'py-4' : 'py-3')}>
         <div className="text-[15px] font-extrabold uppercase text-ink-900 dark:text-white">{line.product.name}</div>
-        <div className="mt-0.5 text-xs font-medium uppercase tracking-wide text-ink-400">SKU: {line.product.sku}{line.promotion && <span className="ml-2 normal-case text-emerald-600">promo</span>}{line.unitPriceCents !== line.quotedCents && <span className="ml-2 normal-case text-amber-600">price changed</span>}</div>
+        <div className="mt-0.5 text-xs font-medium uppercase tracking-wide text-ink-400">SKU: {line.product.sku}{line.promotion && <span className="ml-2 normal-case text-emerald-600">promo</span>}{line.wholesaleQty && <span className="ml-2 normal-case text-amber-600">wholesale price</span>}{line.unitPriceCents !== line.quotedCents && <span className="ml-2 normal-case text-amber-600">price changed</span>}</div>
       </td>
-      <td className="px-3 text-center"><span className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] font-bold uppercase text-ink-600 dark:border-ink-700">{line.unitCode}</span></td>
+      <td className="px-3 text-center" onClick={(e) => e.stopPropagation()}>
+        {line.product.units.length > 1 ? (
+          // Sold in several units (piece, pack, carton...): switch here; the line is re-priced for that unit.
+          <select aria-label={`Unit of ${line.product.name}`} value={line.unitCode} onFocus={onSelect} onChange={(e) => onChange({ unitCode: e.target.value })}
+            className="cursor-pointer rounded-full border border-brand-300 bg-brand-50 px-2 py-1 text-[11px] font-bold uppercase text-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 dark:border-brand-700 dark:bg-brand-500/15 dark:text-brand-200">
+            {line.product.units.map((u) => <option key={u.code} value={u.code}>{u.code}{u.factor !== 1 ? ` (${u.factor} ${line.product.baseUnit})` : ''}</option>)}
+          </select>
+        ) : <span className="rounded-full border border-ink-200 px-2 py-0.5 text-[11px] font-bold uppercase text-ink-600 dark:border-ink-700">{line.unitCode}</span>}
+      </td>
       <td className="px-3 text-right font-mono tabular-nums">{money(line.unitPriceCents)}</td>
       <td className="px-3" onClick={(e) => e.stopPropagation()}>
         <div className="mx-auto flex w-fit items-center rounded-full border border-ink-200 bg-white shadow-sm dark:border-ink-700 dark:bg-ink-900">
@@ -812,7 +1104,7 @@ function LoyaltyCardModal({ onClose, onFound }: { onClose: () => void; onFound: 
   );
 }
 
-function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher, onClose, onDone }: { cart: Cart; total: number; till: { _id: string }; shift: any; initialMethod?: string; initialVoucher?: string; onClose: () => void; onDone: (sale: any) => void }) {
+function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher, onClose, onDone, onKeep }: { cart: Cart; total: number; till: { _id: string }; shift: any; initialMethod?: string; initialVoucher?: string; onClose: () => void; onDone: (sale: any) => void; onKeep: (checkout: Cart['checkout']) => void }) {
   const { has, can, me } = useAuth();
   const terminals: { name: string; bank: string; terminalId: string }[] = me?.tenant.settings?.cardTerminals ?? [];
   const [voucher, setVoucher] = useState<{ code: string; info: any | null }>({ code: initialVoucher ?? '', info: null });
@@ -820,8 +1112,16 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   const toast = useToast();
   // Stable id for this payment attempt: retries after a network error replay instead of double-selling.
   const [requestId] = useState(newRequestId);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [method, setMethod] = useState(initialMethod || 'cash');
+  // The money field the cashier last touched, so the on-screen keypad types into it.
+  const [padTarget, setPadTarget] = useState<HTMLInputElement | null>(null);
+  const press = (k: string) => { if (padTarget) { typeInto(padTarget, k); padTarget.focus(); } };
+  // Payments already taken for this sale (the cashier went Back before completing it) come back with it.
+  const kept = cart.checkout;
+  const [payments, setPayments] = useState<Payment[]>(() => kept?.payments ?? []);
+  const checkoutRules = me?.tenant.checkoutRules ?? mergeCheckoutRules(undefined, me?.tenant.settings ?? {});
+  const keptMethod = kept?.pendingIntentId ? 'mpesa' : kept?.payments.at(-1)?.method;
+  const firstMethod = keptMethod && paymentMethodAllowed(checkoutRules, keptMethod) ? keptMethod : initialMethod;
+  const [method, setMethod] = useState(firstMethod && paymentMethodAllowed(checkoutRules, firstMethod) ? firstMethod : paymentMethodAllowed(checkoutRules, 'cash') ? 'cash' : checkoutRules.paymentMethods[0]);
   const paid = payments.reduce((a, p) => a + p.amountCents, 0);
   const remaining = total - paid;
   const [amount, setAmount] = useState<number | null>(remaining);
@@ -831,8 +1131,46 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [override, setOverride] = useState<{ permission: string; message: string } | null>(null);
+  // The terminal's last answer stays on screen (e.g. "remove your card") after it paid the rest of the sale.
+  const [terminalDone, setTerminalDone] = useState<TerminalTxn | null>(null);
+  const [mpesaDone, setMpesaDone] = useState<any>(null);
 
   useEffect(() => setAmount(remaining), [remaining]);
+
+  // Remember what was paid (and a prompt still waiting) on the sale, so Back by mistake loses nothing.
+  useEffect(() => {
+    const pendingIntentId = stk?.status === 'pending' ? stk.id : undefined;
+    onKeep(payments.length || pendingIntentId ? { payments, pendingIntentId } : undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payments, stk?.id, stk?.status]);
+  // On reopening: check the kept M-Pesa / online payments are still there and unused, and pick up a prompt
+  // that was still waiting (it may have been paid since).
+  useEffect(() => {
+    if (!kept) return;
+    let gone = false;
+    (async () => {
+      const checked = await Promise.all(kept.payments.map(async (p) => {
+        if (!p.paymentIntentId) return p;
+        const i = await api<{ data: any }>(`/payments/intents/${p.paymentIntentId}`).then((r) => r.data).catch(() => null);
+        if (!i || i.status !== 'succeeded') return null;
+        return p;
+      }));
+      if (gone) return;
+      const ok = checked.filter((p): p is Payment => Boolean(p));
+      // The sale may be smaller now: what is paid by M-Pesa, card or online never counts for more than the total.
+      let left = total;
+      const fitted = ok.map((p) => { const a = Math.min(p.amountCents, Math.max(0, left)); left -= a; return { ...p, amountCents: a }; }).filter((p) => p.amountCents > 0 || p.method === 'cash');
+      if (ok.length !== kept.payments.length) toast.info('A payment kept for this sale is no longer available and was removed');
+      else if (ok.length) toast.info(`Payment kept from before: ${ok.map((p) => p.label ?? paymentLabel(p.method)).join(', ')}`);
+      setPayments(fitted);
+      if (kept.pendingIntentId) {
+        const i = await api<{ data: any }>(`/payments/intents/${kept.pendingIntentId}`).then((r) => r.data).catch(() => null);
+        if (!gone && i && (i.status === 'pending' || i.status === 'succeeded')) setStk(i);
+      }
+    })();
+    return () => { gone = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Live M-Pesa / gateway status via websocket, with polling as a fallback.
   useRealtime('payment.updated', (p) => { if (stk && p.id === stk.id) setStk(p); }, [stk?.id]);
@@ -841,18 +1179,36 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
     const t = setInterval(async () => { try { setStk((await api<{ data: any }>(`/payments/intents/${stk.id}`)).data); } catch { /* keep waiting */ } }, 3000);
     return () => clearInterval(t);
   }, [stk]);
+  // A Till payment matched by amount waits for the cashier's "Continue" (it may be another customer's).
+  const [confirmedIds, setConfirmedIds] = useState<string[]>([]);
+  const confirmedNow = useRef<string | null>(null);
   useEffect(() => {
+    if (stk?.status === 'succeeded' && needsConfirm(stk) && !confirmedIds.includes(stk.id)) return;
     if (stk?.status === 'succeeded' && !payments.some((p) => p.paymentIntentId === stk.id)) {
       const isMpesa = (stk.provider ?? 'mpesa') === 'mpesa';
       const label = isMpesa ? 'M-Pesa' : paymentLabel('gateway', stk.provider);
       // A customer may have paid more than is left (e.g. a code entered at the till); only what is due is used.
       const free = (stk.paidAmountCents ?? stk.amountCents) - (stk.allocatedCents ?? 0);
-      setPayments((ps) => [...ps, { method: isMpesa ? 'mpesa' : 'gateway', amountCents: Math.min(free, ps.reduce((a, p) => a - p.amountCents, total)), paymentIntentId: stk.id, label: `${label} ${stk.receiptNumber ?? ''}` }]);
-      toast.success(`${label} payment confirmed`);
+      const who = mpesaPayer(stk);
+      setPayments((ps) => [...ps, { method: isMpesa ? 'mpesa' : 'gateway', amountCents: Math.min(free, ps.reduce((a, p) => a - p.amountCents, total)), paymentIntentId: stk.id, label: `${label} ${stk.receiptNumber ?? ''}${who ? ` · ${who}` : ''}` }]);
+      toast.success(`${label} payment confirmed: ${money(stk.paidAmountCents ?? stk.amountCents)}${who ? ` from ${who}` : ''}`);
+      if (isMpesa) setMpesaDone(stk);
+      // The money is in and it covers the sale: finish it and print, with nothing to press (Checkout rules).
+      // "Continue" on a found payment finishes the sale, like the automatic completion does.
+      const covers = Math.min(free, total) >= total - payments.reduce((a, p) => a + p.amountCents, 0);
+      if (isMpesa && covers && (checkoutRules.mpesa.autoComplete || confirmedNow.current === stk.id)) autoFinish.current = true;
     }
-  }, [stk, payments, toast, total]);
+  }, [stk, payments, toast, total, checkoutRules.mpesa.autoComplete, confirmedIds]);
 
-  const c2b = useQuery({ queryKey: ['c2b-open'], queryFn: () => api<{ data: any[] }>('/payments/intents', { query: { status: 'succeeded', unallocated: 'true', provider: 'mpesa', limit: 10 } }).then((r) => r.data), enabled: method === 'mpesa' && has('mpesa'), refetchInterval: 5000 });
+  // Completing runs once the confirmed payment is in the list, so the sale carries it.
+  const autoFinish = useRef(false);
+  useEffect(() => {
+    if (!autoFinish.current || busy || remaining > 0) return;
+    autoFinish.current = false;
+    void complete();
+  });
+
+  const mpesaAccounts = useQuery({ queryKey: ['mpesa-accounts', till._id], queryFn: () => api<{ data: MpesaAccount[] }>('/payments/mpesa/accounts', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('mpesa'), staleTime: 60_000 });
   const gateways = useQuery({ queryKey: ['gateways', till._id], queryFn: () => api<{ data: GatewayOption[] }>('/payments/gateways', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('payments'), staleTime: 60_000 });
 
   const methods = [
@@ -864,7 +1220,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
     ...(has('customerCredit') && cart.customer && cart.customer.kind !== 'walk_in' ? [{ key: 'credit', label: 'On account' }] : []),
     ...(has('loyalty') && cart.customer?.loyaltyPoints ? [{ key: 'loyalty', label: `Points (${cart.customer.loyaltyPoints})` }] : []),
     { key: 'voucher', label: 'Gift voucher' },
-  ];
+  ].filter((m) => paymentMethodAllowed(checkoutRules, m.key));
   // Gift voucher: look up the balance; Points: offer what the program allows on this sale.
   const checkVoucher = async (code = voucher.code) => {
     setError(null);
@@ -911,6 +1267,14 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   };
 
 
+  // Checkout rules decide whether the till collects the buyer's number (for loyalty) and shows a customer at all.
+  const custRules = checkoutRules.customer;
+  const askPhone = custRules.phone === 'ask' || custRules.phone === 'both';
+  const [phone, setPhone] = useState('');
+  // KRA: which ETR device signs this sale, when the till may use more than one.
+  const etrDevices = useQuery({ queryKey: ['etr-devices', till._id], queryFn: () => api<{ data: any[] }>('/etims/devices', { query: { tillId: till._id } }).then((r) => r.data), enabled: has('etims'), staleTime: 60_000 });
+  const [etrId, setEtrId] = useState('');
+
   const complete = async (overrideToken?: string, cashTendered?: number) => {
     setBusy(true);
     setError(null);
@@ -922,6 +1286,8 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
         clientRequestId: requestId,
         tillId: till._id,
         customerId: cart.customer?._id,
+        customerPhone: askPhone && !cart.customer ? phone.trim() || undefined : undefined,
+        etimsConfigId: etrDevices.data && etrDevices.data.length > 1 ? etrId || undefined : undefined,
         priceList: cart.priceList,
         couponCode: cart.couponCode || undefined,
         lines: cart.lines.map((l) => ({ productId: l.product._id, unitCode: l.unitCode, qty: l.qty, unitPriceCents: l.unitPriceCents !== l.quotedCents ? l.unitPriceCents : undefined, discountCents: l.discountCents || undefined, serials: l.serials.length ? l.serials : undefined, prescriptionRef: l.prescriptionRef })),
@@ -971,7 +1337,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   });
 
   return (
-    <Modal open onClose={onClose} title={`Payment · ${money(total)}`} size="lg"
+    <Modal open onClose={onClose} title={`Payment · ${money(total)}`} size="lg" dismissable={false}
       footer={<><Button variant="secondary" onClick={onClose}>Back</Button><Button size="lg" loading={busy} disabled={!canComplete} onClick={() => complete()}>Complete sale</Button></>}>
       <div className="grid gap-4 md:grid-cols-[1fr_220px]">
         <div>
@@ -980,20 +1346,26 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
           </div>
           {remaining > 0 && (
             <div className="space-y-3">
-              <Field label="Amount"><MoneyInput value={amount} onChange={setAmount} onKeyDown={(e) => { if (e.key === 'Enter' && method !== 'cash' && method !== 'mpesa' && method !== 'gateway') { e.preventDefault(); addPayment(); } }} /></Field>
+              <Field label="Amount"><MoneyInput value={amount} onChange={setAmount} onFocus={(e) => setPadTarget(e.currentTarget)} onKeyDown={(e) => { if (e.key === 'Enter' && method !== 'cash' && method !== 'mpesa' && method !== 'gateway') { e.preventDefault(); addPayment(); } }} /></Field>
               {method === 'cash' && (
                 <>
-                  <Field label="Cash received" hint="Enter completes the sale; leave empty for the exact amount"><MoneyInput value={tendered} onChange={setTendered} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onCashEnter(); } }} /></Field>
+                  <CashVisual dueCents={Math.min(amount ?? remaining, remaining)} tenderedCents={tendered} />
+                  <Field label="Cash received" hint="Enter completes the sale; leave empty for the exact amount"><MoneyInput value={tendered} onChange={setTendered} autoFocus onFocus={(e) => setPadTarget(e.currentTarget)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onCashEnter(); } }} /></Field>
                   <div className="flex flex-wrap gap-2">{[remaining, ...[50000, 100000, 200000].filter((v) => v > remaining)].slice(0, 4).map((v) => <Button key={v} size="sm" variant="secondary" onClick={() => setTendered(v)}>{money(v)}</Button>)}</div>
                 </>
               )}
               {method === 'mpesa' && (
-                <MpesaPanel amount={amount} tillId={till._id} intent={stk} setIntent={setStk} unallocated={c2b.data} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
-                  onUse={(i) => setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - (i.allocatedCents ?? 0), remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}` }])} />
+                <MpesaPanel confirmedIds={confirmedIds} onConfirm={(i) => { confirmedNow.current = i.id; setConfirmedIds((c) => (c.includes(i.id) ? c : [...c, i.id])); }} amount={amount} tillId={till._id} accounts={mpesaAccounts.data ?? []} watchTill={checkoutRules.mpesa.watchTillPayments} intent={stk} setIntent={setStk} usedIds={payments.map((p) => p.paymentIntentId!).filter(Boolean)}
+                  onUse={(i) => { setMpesaDone(i); setPayments((ps) => [...ps, { method: 'mpesa', amountCents: Math.min(i.paidAmountCents - (i.allocatedCents ?? 0), remaining), paymentIntentId: i.id, label: `M-Pesa ${i.receiptNumber}${mpesaPayer(i) ? ` · ${mpesaPayer(i)}` : ''}` }]); }} />
               )}
               {method === 'gateway' && gateways.data && <GatewayPanel gateways={gateways.data} amount={amount} tillId={till._id} customer={cart.customer} intent={stk} setIntent={setStk} />}
               {method === 'card' && (
+                <TerminalPanel tillId={till._id} amount={Math.min(amount ?? 0, remaining)} remaining={remaining} usedIds={payments.map((p) => p.terminalTransactionId!).filter(Boolean)}
+                  onApproved={(x) => { setTerminalDone(x); setPayments((ps) => (ps.some((p) => p.terminalTransactionId === x.id) ? ps : [...ps, { method: 'card', amountCents: x.amountCents, terminalTransactionId: x.id, label: `Card ${x.cardScheme ?? ''}${x.last4 ? ` ****${x.last4}` : ''}${x.sandbox ? ' (simulated)' : ''}`.trim() }])); }} />
+              )}
+              {method === 'card' && (
                 <div className="space-y-3 rounded-lg border border-sky-100 bg-sky-50/50 p-3 dark:border-sky-900 dark:bg-sky-950/20">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-ink-500">Card machine not connected to Afey POS</div>
                   <p className="text-xs text-ink-600 dark:text-ink-300">Cards from every bank in Kenya and abroad (Visa, Mastercard, UnionPay, Amex…) work on any bank's card machine. <b>1.</b> Key <b>{money(Math.min(amount ?? 0, remaining))}</b> into the card machine. <b>2.</b> The customer taps or inserts the card. <b>3.</b> Enter the approval code from the slip.</p>
                   <div className="grid gap-2 sm:grid-cols-2">
                     {terminals.length > 0 && <Field label="Card machine"><Select value={card.terminal} onChange={(e) => setCard({ ...card, terminal: e.target.value })} options={terminals.map((t) => ({ value: t.name, label: `${t.name}${t.bank ? ` (${t.bank})` : ''}` }))} /></Field>}
@@ -1019,18 +1391,41 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
               {method !== 'mpesa' && method !== 'gateway' && <Button variant="secondary" onClick={addPayment}>Add {paymentLabel(method).toLowerCase()} payment</Button>}
             </div>
           )}
+          {terminalDone && remaining <= 0 && <div className="mt-3"><TxnStatus txn={terminalDone} /></div>}
+          {mpesaDone && remaining <= 0 && <div className="mt-3"><MpesaPaid intent={mpesaDone} /></div>}
           <div className="mt-3"><ErrorBox error={error} /></div>
         </div>
         <div className="rounded-lg bg-ink-50 p-3 text-sm dark:bg-ink-800/50">
+          {askPhone && !cart.customer && (
+            <div className="mb-3">
+              <Field label={custRules.required ? 'Customer phone (needed)' : 'Customer phone (for points)'} hint={custRules.awardLoyalty ? 'Loyalty points go to this number' : undefined}>
+                <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="e.g. 0712345678" aria-label="Customer phone" />
+              </Field>
+            </div>
+          )}
+          {has('etims') && (etrDevices.data?.length ?? 0) > 1 && (
+            <div className="mb-3">
+              <Field label="KRA ETR device" hint="Which device signs this sale">
+                <Select value={etrId || etrDevices.data!.find((d) => d.isDefault)?.id || ''} onChange={(e) => setEtrId(e.target.value)}
+                  options={etrDevices.data!.map((d) => ({ value: d.id, label: `${d.name} · ${d.mode.toUpperCase()}${d.serial ? ` · ${d.serial}` : ''}${d.environment === 'sandbox' ? ' (test)' : ''}` }))} />
+              </Field>
+            </div>
+          )}
           <div className="label">Payments</div>
           <ul className="space-y-1">{payments.map((p, i) => (
-            <li key={i} className="flex items-center justify-between"><span>{p.label}</span><span className="flex items-center gap-1 tabular-nums">{money(p.amountCents)}{!p.paymentIntentId && <button aria-label="Remove payment" onClick={() => setPayments((ps) => ps.filter((_, j) => j !== i))}><Icon name="x" className="h-3.5 w-3.5" /></button>}</span></li>
+            <li key={i} className="flex items-center justify-between"><span>{p.label}</span><span className="flex items-center gap-1 tabular-nums">{money(p.amountCents)}{!p.paymentIntentId && !p.terminalTransactionId && <button aria-label="Remove payment" onClick={() => setPayments((ps) => ps.filter((_, j) => j !== i))}><Icon name="x" className="h-3.5 w-3.5" /></button>}</span></li>
           ))}</ul>
           <div className="mt-3 border-t border-ink-200 pt-2 dark:border-ink-700">
             <div className="flex justify-between"><span>Remaining</span><span className="font-semibold tabular-nums">{money(Math.max(0, remaining))}</span></div>
             <div className="flex justify-between text-lg font-semibold text-emerald-700"><span>Change</span><span className="tabular-nums" data-testid="change-due">{money(changeDue)}</span></div>
           </div>
           {shift && <p className="mt-3 text-xs text-ink-500">Shift {shift.number}</p>}
+          {remaining > 0 && (method === 'cash' || method === 'bank' || method === 'credit' || method === 'card') && (
+            <div className="mt-3 border-t border-ink-200 pt-3 dark:border-ink-700">
+              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-500">Keypad</div>
+              <NumPad onPress={press} onEnter={method === 'cash' ? onCashEnter : addPayment} enterLabel={method === 'cash' ? 'Enter' : 'Add'} />
+            </div>
+          )}
         </div>
       </div>
       {override && <OverrideModal permission={override.permission} message={override.message} onClose={() => setOverride(null)} onApproved={(token) => { setOverride(null); complete(token); }} />}
@@ -1042,10 +1437,33 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
  * Supervisor approval on the cashier's screen: scanning the supervisor's staff card approves at once (no PIN),
  * or, with a reader paired, the fingerprint tab listens for a finger as soon as it is chosen.
  */
-export function OverrideModal({ permission, message, onClose, onApproved }: { permission: string; message: string; onClose: () => void; onApproved: (token: string) => void }) {
+export function OverrideModal({ permission, message, onClose, onApproved, title = 'Supervisor approval', who = 'supervisor', allowLogin = false }: {
+  permission: string; message: string; onClose: () => void; onApproved: (token: string) => void;
+  title?: string; who?: string;
+  /** Also offer username or email with PIN or password (not at the till, where card and finger are the rule). */
+  allowLogin?: boolean;
+}) {
   const { me } = useAuth();
-  const [mode, setMode] = useState<'card' | 'finger'>('card');
+  const [mode, setMode] = useState<'card' | 'finger' | 'login'>('card');
   const [card, setCard] = useState('');
+  const [login, setLogin] = useState('');
+  const [secret, setSecret] = useState('');
+  const approveLogin = async () => {
+    if (!login.trim() || !secret || busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ overrideToken: string }>('/auth/override', { body: { email: login.trim().toLowerCase(), password: secret, pin: /^\d{4,8}$/.test(secret) ? secret : undefined, permission, tillId: getWorkstation().tillId || undefined } });
+      approvedRef.current(r.overrideToken);
+    } catch (e) {
+      setError(e);
+      setSecret('');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const cardRef = useRef<HTMLInputElement>(null);
@@ -1105,9 +1523,9 @@ export function OverrideModal({ permission, message, onClose, onApproved }: { pe
     return () => { ctrl.abort(); setListening(false); };
   }, [mode, permission, me]);
   const fingerOk = bridgeConfigured();
-  const modes = [{ key: 'card', label: 'Staff card' }, ...(fingerOk ? [{ key: 'finger', label: 'Fingerprint' }] : [])] as { key: typeof mode; label: string }[];
+  const modes = [{ key: 'card', label: 'Staff card' }, ...(fingerOk ? [{ key: 'finger', label: 'Fingerprint' }] : []), ...(allowLogin ? [{ key: 'login', label: 'Username / email' }] : [])] as { key: typeof mode; label: string }[];
   return (
-    <Modal open onClose={onClose} title="Supervisor approval" size="sm" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button>{mode === 'card' && <Button loading={busy} disabled={!card.trim()} onClick={() => approveCard()}>Approve</Button>}</>}>
+    <Modal open onClose={onClose} title={title} size="sm" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button>{mode === 'card' && <Button loading={busy} disabled={!card.trim()} onClick={() => approveCard()}>Approve</Button>}{mode === 'login' && <Button loading={busy} disabled={!login.trim() || !secret} onClick={approveLogin}>Confirm</Button>}</>}>
       <p className="mb-3 text-sm">{message}</p>
       {modes.length > 1 && (
         <div className="mb-3 flex gap-1 rounded-lg bg-ink-100 p-1 text-sm dark:bg-ink-800" role="radiogroup" aria-label="Approve with">
@@ -1116,8 +1534,8 @@ export function OverrideModal({ permission, message, onClose, onApproved }: { pe
       )}
       <div className="space-y-3">
         {mode === 'card' && (
-          <Field label="Supervisor card" hint="Scan the card: it approves straight away.">
-            <Input ref={cardRef} autoFocus type="password" autoComplete="off" value={card} placeholder="Scan the supervisor's card"
+          <Field label={`${who[0]!.toUpperCase()}${who.slice(1)} card`} hint="Scan the card: it approves straight away.">
+            <Input ref={cardRef} autoFocus type="password" autoComplete="off" value={card} placeholder={`Scan the ${who}'s card`}
               onChange={(e) => setCard(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); approveCard(); } }} />
           </Field>
         )}
@@ -1126,9 +1544,16 @@ export function OverrideModal({ permission, message, onClose, onApproved }: { pe
             <span className={`flex h-20 w-20 items-center justify-center rounded-full ${listening ? 'animate-pulse bg-brand-100 text-brand-700 ring-4 ring-brand-200 dark:bg-brand-950 dark:ring-brand-800' : 'bg-ink-100 text-ink-400 dark:bg-ink-800'}`}>
               <svg viewBox="0 0 24 24" className="h-10 w-10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M12 11v4m-4-4a4 4 0 0 1 8 0v2a8 8 0 0 1-1 4M5 9a7 7 0 0 1 13.7-2M5 13v-2m14 2c0 2-.4 3.7-1 5M9 21c1-2 1.5-4 1.5-6v-4a1.5 1.5 0 0 1 3 0" /></svg>
             </span>
-            <p className="text-sm font-medium">{listening ? 'Waiting for the supervisor’s finger…' : 'Getting the reader ready…'}</p>
-            <p className="text-xs text-ink-500">The supervisor places an enrolled finger on the reader.</p>
+            <p className="text-sm font-medium">{listening ? `Waiting for the ${who}’s finger…` : 'Getting the reader ready…'}</p>
+            <p className="text-xs text-ink-500">The {who} places an enrolled finger on the reader.</p>
           </div>
+        )}
+        {mode === 'login' && (
+          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); approveLogin(); }}>
+            <Field label="Username or email"><Input autoFocus autoComplete="off" value={login} onChange={(e) => setLogin(e.target.value)} placeholder="e.g. amina or amina@shop.co.ke" /></Field>
+            <Field label="PIN or password"><Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} /></Field>
+            <button type="submit" className="hidden" />
+          </form>
         )}
         <ErrorBox error={error} />
       </div>
@@ -1136,63 +1561,282 @@ export function OverrideModal({ permission, message, onClose, onApproved }: { pe
   );
 }
 
+/**
+ * Cash drop: the cashier enters the amount taken to the safe; a supervisor approves with staff card, fingerprint
+ * or PIN; the drawer opens, the amount comes off the expected cash and a numbered slip can be printed.
+ */
+function CashDropModal({ shift, tillId, onClose, onDone }: { shift: any; tillId: string; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const { me } = useAuth();
+  const [amount, setAmount] = useState<number | null>(null);
+  const [note, setNote] = useState('');
+  const [approving, setApproving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [done, setDone] = useState<any>(null);
+  const submit = async (token: string) => {
+    setApproving(false);
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ data: any }>(`/shifts/${shift._id}/drop`, { body: { amountCents: amount, note: note.trim() || undefined, overrideToken: token } });
+      setDone(r.data);
+      onDone();
+      openCashDrawer({ tillId, reason: `Cash drop ${r.data.number}` }).catch(() => undefined);
+      toast.success(`Cash drop ${r.data.number}: ${money(r.data.amountCents)} recorded`);
+    } catch (e) { setError(e); } finally { setBusy(false); }
+  };
+  const printSlip = () => {
+    const d = done;
+    const esc = (t: string) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    void printHtmlString(`<!doctype html><html><head><style>@page{size:80mm auto;margin:4mm}body{font:12px monospace;width:72mm}h2{text-align:center;margin:0 0 6px}.r{display:flex;justify-content:space-between}</style></head><body><h2>CASH DROP</h2><div class="r"><span>No.</span><b>${esc(d.number)}</b></div><div class="r"><span>Date</span><span>${esc(new Date(d.at).toLocaleString())}</span></div><div class="r"><span>Shift</span><span>${esc(shift.number)}</span></div><div class="r"><span>Cashier</span><span>${esc(me!.user.name)}</span></div><div class="r"><span>Approved by</span><span>${esc(d.supervisorName ?? '')}</span></div><hr><div class="r" style="font-size:16px"><span>Amount</span><b>${esc(money(d.amountCents))}</b></div>${d.reason ? `<p>${esc(d.reason)}</p>` : ''}<br><p>Cashier: ____________</p><p>Supervisor: ____________</p></body></html>`);
+  };
+  return (
+    <>
+      <Modal open onClose={onClose} title="Drop cash" icon="wallet" subtitle="Cash taken from this drawer to the safe or office. A supervisor approves it." size="sm"
+        footer={done ? <><Button variant="secondary" onClick={printSlip}><Icon name="printer" className="h-4 w-4" />Print slip</Button><Button onClick={onClose}>Done</Button></>
+          : <><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} disabled={!amount || amount <= 0} onClick={() => setApproving(true)}>Continue</Button></>}>
+        {done ? (
+          <div className="space-y-2 text-center" data-testid="drop-done">
+            <PaySuccess amountCents={done.amountCents} title={`Cash drop ${done.number}`} />
+            <p className="text-sm text-ink-600">Approved by {done.supervisorName}. Taken off the cash expected in the drawer.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <Field label="Amount to drop"><MoneyInput autoFocus value={amount} onChange={setAmount} aria-label="Amount to drop" onKeyDown={(e) => { if (e.key === 'Enter' && amount && amount > 0) setApproving(true); }} /></Field>
+            <Field label="Note (optional)"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Safe drop, bag 12" /></Field>
+            <ErrorBox error={error} />
+          </div>
+        )}
+      </Modal>
+      {approving && amount && <OverrideModal permission="shifts.manage" allowLogin title="Approve cash drop" message={`Cash drop of ${money(amount)} from ${me!.user.name}'s drawer`} onClose={() => setApproving(false)} onApproved={(token) => void submit(token)} />}
+    </>
+  );
+}
+
+/** Full-screen lock: only the signed-in cashier's PIN, password or card opens it; others sign in as themselves. */
+type UnlockMode = 'finger' | 'card' | 'pin' | 'password';
+
+function TillLock({ name, onUnlocked }: { name: string; onUnlocked: () => void }) {
+  const { logout, me } = useAuth();
+  // Fingerprint first when the signed-in person has one enrolled and a reader is set up; otherwise card, PIN, password.
+  const fingerOk = Boolean(me?.user.hasFingerprint) && bridgeConfigured();
+  const modes: { key: UnlockMode; label: string; icon: string }[] = [
+    ...(fingerOk ? [{ key: 'finger' as const, label: 'Fingerprint', icon: 'finger' }] : []),
+    { key: 'card', label: 'Staff card', icon: 'idcard' },
+    { key: 'pin', label: 'PIN', icon: 'keypad' },
+    { key: 'password', label: 'Password', icon: 'lock' },
+  ];
+  const [mode, setMode] = useState<UnlockMode>(modes[0]!.key);
+  const [secret, setSecret] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const abort = useRef<AbortController | null>(null);
+
+  const done = () => { abort.current?.abort(); onUnlocked(); };
+  const unlockWith = async (body: Record<string, unknown>) => {
+    setBusy(true); setError(null);
+    try { await api('/auth/unlock', { body }); done(); }
+    catch (e: any) { setError(e?.message ?? 'Could not unlock'); setSecret(''); }
+    finally { setBusy(false); }
+  };
+  const submitSecret = () => { if (secret) void unlockWith({ secret }); };
+  // Scan the finger as soon as the fingerprint option is shown.
+  useEffect(() => {
+    if (mode !== 'finger') return;
+    const ctrl = new AbortController();
+    abort.current = ctrl;
+    (async () => {
+      setBusy(true); setError(null);
+      try {
+        const r = await fingerprint<{ loginToken: string; user: { id: string } }>('login', {}, ctrl.signal);
+        if (ctrl.signal.aborted) return;
+        if (r.user.id !== me?.user.id) { setError('That fingerprint is not yours. Try your card, PIN or password.'); setBusy(false); return; }
+        await unlockWith({ loginToken: r.loginToken });
+      } catch (e: any) {
+        if (!ctrl.signal.aborted) { setError(e?.message ?? 'Fingerprint not recognised. Try again, or use your card, PIN or password.'); setBusy(false); }
+      }
+    })();
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Till locked" className="fixed inset-0 z-[200] flex items-center justify-center bg-ink-950/85 backdrop-blur-sm" data-testid="till-lock">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl dark:bg-ink-900">
+        <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-brand-50 text-brand-600 dark:bg-brand-500/15"><Icon name="lock" className="h-7 w-7" /></div>
+        <h2 className="text-lg font-bold">Till locked</h2>
+        <p className="mt-1 text-sm text-ink-500">{name}: {fingerOk ? 'use your fingerprint, or your card, PIN or password' : 'scan your staff card, or use your PIN or password'}. The sale on screen is kept.</p>
+        {modes.length > 1 && (
+          <div role="radiogroup" aria-label="Unlock with" className="mt-4 grid gap-1 rounded-xl bg-ink-100 p-1 text-xs font-semibold dark:bg-ink-800" style={{ gridTemplateColumns: `repeat(${modes.length}, minmax(0, 1fr))` }}>
+            {modes.map((m) => (
+              <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} onClick={() => { setMode(m.key); setSecret(''); setError(null); }}
+                className={cx('flex flex-col items-center gap-1 rounded-lg px-1 py-2 transition', mode === m.key ? 'bg-brand-600 text-white shadow' : 'text-ink-500 hover:text-ink-700')}>
+                <Icon name={m.icon} className="h-4 w-4" /><span>{m.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {mode === 'finger' ? (
+          <div className="mt-4 rounded-xl border border-dashed border-ink-300 p-5 dark:border-ink-700">
+            <Icon name="finger" className="mx-auto h-10 w-10 text-brand-600" />
+            <p className="mt-2 text-sm text-ink-600 dark:text-ink-300">{busy ? 'Place your finger on the reader…' : 'Touch the reader to unlock.'}</p>
+            {!busy && <Button variant="secondary" size="sm" className="mt-2" onClick={() => setMode('finger')}>Scan again</Button>}
+          </div>
+        ) : (
+          <Input autoFocus type={mode === 'pin' ? 'tel' : 'password'} inputMode={mode === 'pin' ? 'numeric' : undefined}
+            className="mt-4 text-center text-lg tracking-widest" aria-label={mode === 'card' ? 'Scan your staff card' : mode === 'pin' ? 'PIN' : 'Password'}
+            placeholder={mode === 'card' ? 'Scan your staff card' : mode === 'pin' ? 'PIN' : 'Password'}
+            value={secret} onChange={(e) => setSecret(mode === 'pin' ? e.target.value.replace(/\D/g, '') : e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (mode === 'card') void unlockWith({ cardCode: secret.trim() }); else submitSecret(); } }} />
+        )}
+        {error && <div className="mt-2 text-sm text-red-600">{error}</div>}
+        {mode !== 'finger' && <Button className="mt-4 w-full" loading={busy} onClick={() => (mode === 'card' ? unlockWith({ cardCode: secret.trim() }) : submitSecret())}>Unlock</Button>}
+        <button type="button" className="mt-3 text-xs text-ink-500 underline" onClick={() => logout()}>Not {name}? Sign in as yourself</button>
+      </div>
+    </div>
+  );
+}
+
 function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: string; onClose: () => void }) {
   const toast = useToast();
-  const { has } = useAuth();
+  const { has, me } = useAuth();
+  const kra = (me!.tenant.checkoutRules ?? mergeCheckoutRules(undefined, me!.tenant.settings ?? {})).kra;
   const [to, setTo] = useState('');
   const [receiptHtml, setReceiptHtml] = useState<string | null>(null);
-  // eTIMS signs in the background; give it a few seconds so the printed receipt carries the KRA signature.
+  // eTIMS / the ETR signs in the background: the till waits up to the set seconds so the printed receipt carries
+  // the KRA stamp (signature and QR code), then prints. If KRA is slower, the rules say whether to print anyway.
   const [sale, setSale] = useState<any>(initial);
-  const [waited, setWaited] = useState(!initial.etims || initial.etims.status !== 'pending');
+  const [waited, setWaited] = useState(!initial.etims || !FISCAL_WAITING.includes(initial.etims.status) || kra.waitSeconds === 0);
+  const [elapsed, setElapsed] = useState(0);
+  const [timedOut, setTimedOut] = useState(false);
+  const signed = sale.etims?.status === 'signed';
+  // The way most of the sale was paid, for the success animation.
+  const paidWith = [...(initial.payments ?? [])].sort((a: any, b: any) => b.amountCents - a.amountCents)[0]?.method as string | undefined;
   useEffect(() => {
     if (waited) return;
-    let n = 0;
+    const started = Date.now();
+    let busy = false;
     const t = setInterval(async () => {
-      n += 1;
+      const secs = (Date.now() - started) / 1000;
+      setElapsed(secs);
+      if (busy) return;
+      busy = true;
+      const s = await api<{ data: any }>(`/sales/${initial._id}`).then((r) => r.data).catch(() => null);
+      busy = false;
+      if (s) setSale(s);
+      if (!FISCAL_WAITING.includes(s?.etims?.status)) { clearInterval(t); setWaited(true); return; }
+      if (secs >= kra.waitSeconds) { clearInterval(t); setTimedOut(true); setWaited(true); }
+    }, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial._id, waited]);
+  // After the wait, keep checking quietly so a late stamp can still be printed.
+  useEffect(() => {
+    if (!timedOut || signed) return;
+    const t = setInterval(async () => {
       const s = await api<{ data: any }>(`/sales/${initial._id}`).then((r) => r.data).catch(() => null);
       if (s) setSale(s);
-      if (s?.etims?.status !== 'pending' || n >= 6) {
-        clearInterval(t);
-        setWaited(true);
-      }
-    }, 700);
+      if (s?.etims?.status === 'signed') toast.success('KRA stamp received: press Print receipt for the stamped copy');
+      if (!FISCAL_WAITING.includes(s?.etims?.status)) clearInterval(t);
+    }, 5000);
     return () => clearInterval(t);
-  }, [initial._id, waited]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timedOut, signed]);
+  // Cash sale: the drawer opens at once, not after the receipt (which may wait a few seconds for KRA).
+  const cashSale = (initial.payments ?? []).some((p: any) => p.method === 'cash');
+  const drawerOpened = useRef(false);
+  useEffect(() => {
+    if (!cashSale || drawerOpened.current || getWorkstation().openDrawerOnCash === false) return;
+    drawerOpened.current = true;
+    openCashDrawer({ tillId, saleId: initial._id })
+      .then((ok) => { if (!ok) drawerOpened.current = false; })
+      .catch((e: any) => { drawerOpened.current = false; toast.error(`The cash drawer did not open (${e?.message ?? 'printer not reached'}). Open it with More → Open drawer.`); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const [printState, setPrintState] = useState<{ state: 'printing' | 'done' | 'browser' | 'failed'; message?: string } | null>(null);
   const print = async () => {
+    setPrintState({ state: 'printing' });
     try {
-      const how = await printReceipt(sale._id, { tillId });
-      if (how === 'printer') toast.success('Receipt printed');
+      // The drawer already opened with the sale: the receipt must not kick it again.
+      const how = await printReceipt(sale._id, { tillId, openDrawer: !drawerOpened.current && cashSale });
+      setPrintState({ state: how === 'printer' ? 'done' : 'browser' });
     } catch (e: any) {
+      setPrintState({ state: 'failed', message: `${e?.message ?? 'error'}: used the print window instead` });
       toast.error(`Printer not reached (${e?.message ?? 'error'}): used the print window instead`);
     }
   };
+  // Enter anywhere on this window starts the next sale (capture phase, so a focused button such as Print receipt
+  // does not take it). Only the receipt phone/email box keeps Enter, to send the receipt.
+  const sendReceipt = async () => { await api(`/sales/${sale._id}/send-receipt`, { body: to.includes('@') ? { email: to } : { sms: to } }).then(() => toast.success('Receipt queued')).catch(toast.error); };
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
-    if (waited && getWorkstation().autoPrint) print();
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || e.isComposing || e.repeat) return;
+      const el = e.target as HTMLElement | null;
+      if (el?.dataset?.receiptTo !== undefined) return;
+      if (el && /^(TEXTAREA|SELECT)$/.test(el.tagName)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeRef.current();
+    };
+    window.addEventListener('keydown', h, true);
+    return () => window.removeEventListener('keydown', h, true);
+  }, []);
+  // The finished animation stays a moment, then makes room.
+  useEffect(() => {
+    if (!printState || printState.state === 'printing') return;
+    const t = setTimeout(() => setPrintState(null), printState.state === 'failed' ? 8000 : 3500);
+    return () => clearTimeout(t);
+  }, [printState]);
+  useEffect(() => {
+    // Unsigned after the wait: print only when the rules allow a receipt without the KRA stamp.
+    if (waited && getWorkstation().autoPrint && (!timedOut || kra.printUnsigned)) print();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waited]);
   return (
     <Modal open onClose={onClose} title={`Sale ${sale.number} complete`} size="sm" footer={<Button size="lg" className="w-full" onClick={onClose} autoFocus>New sale</Button>}>
       <div className="text-center">
-        <div className="text-sm text-ink-500">Total</div>
-        <div className="text-3xl font-semibold">{money(sale.totalCents)}</div>
-        {sale.changeCents > 0 && <div className="mt-2 text-xl font-semibold text-emerald-700">Change: {money(sale.changeCents)}</div>}
+        <PaySuccess amountCents={sale.totalCents}
+          title={paidWith === 'mpesa' ? 'Paid with M-Pesa' : paidWith === 'cash' ? 'Paid in cash' : paidWith === 'card' ? 'Paid by card' : 'Paid'}
+          logo={paidWith === 'mpesa' ? <MpesaMark className="h-8" /> : undefined}>
+          {sale.changeCents > 0 && <div className="pay-pop mt-1 text-xl font-semibold text-emerald-700" style={{ animationDelay: '0.45s' }}>Change: {money(sale.changeCents)}</div>}
+        </PaySuccess>
         {sale.etims && (
           <div className="mt-2 text-xs">
-            {sale.etims.status === 'signed' ? <Badge tone="green">KRA eTIMS signed · CU {sale.etims.sdcId}/{sale.etims.rcptNo}</Badge>
-              : sale.etims.status === 'failed' ? <Badge tone="red">eTIMS rejected: see KRA eTIMS page</Badge>
-              : <Badge tone="amber">{waited ? 'eTIMS will sign when KRA is reachable; reprint later' : 'Signing with KRA eTIMS…'}</Badge>}
+            {sale.etims.status === 'signed'
+              ? (sale.etims.device === 'etr' ? <Badge tone="green">Signed by the KRA ETR · CU invoice {sale.etims.cuInvoiceNo}</Badge> : <Badge tone="green">KRA eTIMS signed · CU {sale.etims.sdcId}/{sale.etims.rcptNo}</Badge>)
+              : ['failed', 'rejected', 'requires_reconciliation'].includes(sale.etims.status) ? <Badge tone="red">{sale.etims.device === 'etr' ? 'ETR' : 'eTIMS'} {sale.etims.status === 'requires_reconciliation' ? 'needs checking' : 'rejected'}: not a fiscal receipt yet, see Fiscal devices</Badge>
+              : waited ? <Badge tone="amber">{kra.printUnsigned ? 'Printed without the KRA stamp: it is added when KRA / the ETR answers; reprint then' : 'Waiting for the KRA stamp: print once it arrives'}</Badge> : null}
+          </div>
+        )}
+        {!waited && (
+          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900 dark:bg-emerald-950/30" data-testid="kra-stamping">
+            <div className="flex items-center justify-center gap-3">
+              <span className="relative inline-flex h-12 w-12 items-center justify-center">
+                <svg viewBox="0 0 36 36" className="absolute inset-0 -rotate-90"><circle cx="18" cy="18" r="16" fill="none" strokeWidth="3" className="stroke-emerald-100 dark:stroke-emerald-900" /><circle cx="18" cy="18" r="16" fill="none" strokeWidth="3" strokeLinecap="round" className="stroke-emerald-600 transition-all" strokeDasharray={`${Math.min(100, (elapsed / Math.max(1, kra.waitSeconds)) * 100)} 100`} pathLength={100} /></svg>
+                <span className="text-[10px] font-extrabold text-emerald-700">KRA</span>
+              </span>
+              <div className="text-left">
+                <div className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">Adding the KRA stamp and QR code…</div>
+                <div className="text-xs text-emerald-700/80">{Math.max(0, Math.ceil(kra.waitSeconds - elapsed))} s left · the receipt prints as soon as it is signed</div>
+              </div>
+            </div>
+            <div className="mt-2 text-center"><button type="button" className="text-xs font-medium text-emerald-800 underline" onClick={() => { setTimedOut(true); setWaited(true); }}>Print now without the stamp</button></div>
           </div>
         )}
       </div>
       <div className="mt-4 space-y-2">
+        {printState && <PrintingVisual state={printState.state} message={printState.message} />}
         <div className="grid grid-cols-2 gap-2">
-          <Button variant="secondary" onClick={print}><Icon name="printer" className="h-4 w-4" />Print receipt</Button>
+          <Button variant="secondary" disabled={printState?.state === 'printing'} onClick={print}><Icon name="printer" className="h-4 w-4" />Print receipt</Button>
           <Button variant="secondary" aria-expanded={receiptHtml !== null} onClick={() => (receiptHtml !== null ? setReceiptHtml(null) : api<Response>(`/sales/${sale._id}/receipt?format=html`, { raw: true }).then((r) => r.text()).then(setReceiptHtml).catch(toast.error))}><Icon name="eye" className="h-4 w-4" />{receiptHtml !== null ? 'Hide receipt' : 'View receipt'}</Button>
         </div>
         {receiptHtml !== null && <iframe title="Receipt" srcDoc={receiptHtml} sandbox="allow-same-origin" className="h-[50vh] w-full rounded-md border border-ink-100 bg-[#e9ebee] dark:border-ink-800" />}
         {(has('sms') || has('email')) && (
           <div className="flex gap-2">
-            <Input placeholder="Phone or email for receipt" value={to} onChange={(e) => setTo(e.target.value)} />
+            <Input data-receipt-to="" placeholder="Phone or email for receipt" value={to} onChange={(e) => setTo(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && to.trim()) { e.preventDefault(); void sendReceipt(); } }} />
             <Button variant="secondary" onClick={async () => { await api(`/sales/${sale._id}/send-receipt`, { body: to.includes('@') ? { email: to } : { sms: to } }).then(() => toast.success('Receipt queued')).catch(toast.error); }}>Send</Button>
           </div>
         )}
@@ -1202,3 +1846,91 @@ function ReceiptModal({ sale: initial, tillId, onClose }: { sale: any; tillId: s
 }
 
 export { toCentsInput };
+
+/**
+ * Bank card terminal at the till: Afey POS sends the amount and a unique reference; the terminal reads the card
+ * and the PIN. The payment is added to the sale only once the terminal's status check verified the approval.
+ * An unfinished or unknown payment (e.g. after the till restarted) is picked up again here, and no new charge
+ * can start on that terminal until it is resolved.
+ */
+function TerminalPanel({ tillId, amount, remaining, usedIds, onApproved }: { tillId: string; amount: number; remaining: number; usedIds: string[]; onApproved: (x: TerminalTxn) => void }) {
+  const toast = useToast();
+  const terminals = useQuery({ queryKey: ['till-terminals', tillId], queryFn: () => api<{ data: { id: string; name: string; provider: string; mode: string; health: any; device: { model?: string } }[] }>(`/payment-terminals/for-till/${tillId}`).then((r) => r.data), staleTime: 30_000 });
+  const pending = useQuery({ queryKey: ['till-terminal-open', tillId], queryFn: () => api<{ data: TerminalTxn[] }>(`/payment-terminals/transactions/open-for-till/${tillId}`).then((r) => r.data), refetchInterval: 8000 });
+  const [terminalId, setTerminalId] = useState('');
+  const [txn, setTxn] = useState<TerminalTxn | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const added = useRef(new Set<string>());
+  useEffect(() => { if (!terminalId && terminals.data?.[0]) setTerminalId(terminals.data[0].id); }, [terminals.data, terminalId]);
+  // Live updates for this till (the server sends terminal progress to the till's room); polling is the fallback.
+  useEffect(() => { connectRealtime()?.emit('till:join', tillId); }, [tillId]);
+  useRealtime('terminal.updated', (x: TerminalTxn) => { if (txn && x.id === txn.id) setTxn(x); }, [txn?.id]);
+  // Resume what is unfinished on this till's terminals (the till may have been restarted mid-payment).
+  useEffect(() => {
+    if (txn || !pending.data) return;
+    const open = pending.data.find((x) => x.open);
+    if (open) setTxn(open);
+  }, [pending.data, txn]);
+  useEffect(() => {
+    if (!txn?.open) return;
+    const t = setInterval(() => api<{ data: TerminalTxn }>(`/payment-terminals/transactions/${txn.id}`, { query: { refresh: '1' } }).then((r) => setTxn(r.data)).catch(() => undefined), 1500);
+    return () => clearInterval(t);
+  }, [txn?.id, txn?.open]);
+  // Only a verified approval becomes a payment, and only once.
+  useEffect(() => {
+    if (!txn || txn.status !== 'approved' || !txn.verified || txn.saleId || usedIds.includes(txn.id) || added.current.has(txn.id)) return;
+    added.current.add(txn.id);
+    onApproved(txn);
+    pending.refetch();
+  }, [txn, usedIds, onApproved, pending]);
+
+  if (!terminals.data?.length) return null;
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setTxn((await api<{ data: TerminalTxn }>('/payment-terminals/transactions', { body: { terminalId, tillId, amountCents: amount, clientRequestId: newRequestId() } })).data);
+    } catch (e: any) {
+      // The terminal still has an unfinished payment: show it instead of starting another.
+      if (e instanceof ApiError && e.code === 'TERMINAL_HAS_OPEN_PAYMENT' && e.details?.transactionId) {
+        setTxn((await api<{ data: TerminalTxn }>(`/payment-terminals/transactions/${e.details.transactionId}`, { query: { refresh: '1' } })).data);
+      } else setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const act = (path: string, body: object = {}) => api<{ data: TerminalTxn }>(`/payment-terminals/transactions/${txn!.id}/${path}`, { body }).then((r) => setTxn(r.data)).catch(toast.error);
+  const recovered = (pending.data ?? []).filter((x) => x.status === 'approved' && x.verified && !x.saleId && !usedIds.includes(x.id) && x.amountCents <= remaining && x.id !== txn?.id);
+  const t = terminals.data.find((x) => x.id === terminalId);
+  const final = txn && !txn.open;
+  return (
+    <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 dark:border-emerald-900 dark:bg-emerald-950/20" data-testid="terminal-panel">
+      <div className="flex flex-wrap items-end gap-2">
+        {terminals.data.length > 1 && <Field label="Card terminal" className="flex-1"><Select value={terminalId} onChange={(e) => setTerminalId(e.target.value)} options={terminals.data.map((x) => ({ value: x.id, label: x.name }))} /></Field>}
+        <div className="flex-1 text-sm"><b>{t?.name}</b>{t?.mode === 'sandbox' && <Badge tone="blue">test only</Badge>}<div className="text-xs text-ink-500">The customer uses the card on the terminal; Afey POS never sees the PIN or the card number.</div></div>
+        {(!txn || final) && <Button loading={busy} disabled={!amount || amount > remaining} onClick={start}>{txn ? 'Charge again' : `Charge ${money(amount)} on the terminal`}</Button>}
+      </div>
+      {txn && <TxnStatus txn={txn} />}
+      {txn?.open && (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="secondary" onClick={() => api<{ data: TerminalTxn }>(`/payment-terminals/transactions/${txn.id}`, { query: { refresh: '1' } }).then((r) => setTxn(r.data)).catch(toast.error)}>Check now</Button>
+          <Button size="sm" variant="ghost" onClick={() => act('cancel')}>Cancel on terminal</Button>
+          {txn.sandbox && <>
+            <span className="self-center text-xs text-ink-500">Simulator:</span>
+            <Button size="sm" variant="ghost" onClick={() => act('simulate', { outcome: 'approved' })}>Approve</Button>
+            <Button size="sm" variant="ghost" onClick={() => act('simulate', { outcome: 'declined' })}>Decline</Button>
+          </>}
+        </div>
+      )}
+      {txn?.status === 'unknown' && <p className="text-xs text-amber-800">Do not charge the customer again: Afey POS keeps asking the terminal. A manager can resolve it under Card terminal payments.</p>}
+      {recovered.map((x) => (
+        <div key={x.id} className="flex items-center justify-between rounded-md bg-white p-2 text-sm dark:bg-ink-900">
+          <span>Approved earlier, not on a sale: <b>{money(x.amountCents)}</b> {x.cardScheme} {x.last4 ? `****${x.last4}` : ''}</span>
+          <Button size="sm" onClick={() => { added.current.add(x.id); onApproved(x); pending.refetch(); }}>Use this payment</Button>
+        </div>
+      ))}
+      <ErrorBox error={error} />
+    </div>
+  );
+}

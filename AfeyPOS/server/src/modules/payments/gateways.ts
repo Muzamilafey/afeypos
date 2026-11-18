@@ -11,7 +11,7 @@ import type { Request } from 'express';
 import { Router } from 'express';
 import { z } from 'zod';
 import { Types } from 'mongoose';
-import { PAYMENT_PROVIDER_INFO, paymentCurrency, type PaymentProviderKey } from '@afeypos/shared';
+import { formatMoney, PAYMENT_PROVIDER_INFO, paymentCurrency, type PaymentProviderKey } from '@afeypos/shared';
 import { env } from '../../config/env.js';
 import { IntegrationConfig, MpesaEvent, PaymentIntent, Tenant, Till, type IntegrationConfigDoc, type PaymentIntentDoc } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
@@ -27,6 +27,8 @@ import { createPaymentGateway, SimulatorGateway, type PaymentGateway, type Verif
 import { dialCode, toMsisdn } from '../../integrations/payments/util.js';
 import { openSecrets } from '../integrations/configs.js';
 import { finalizeIntent, presentIntent } from './intents.js';
+import { notify } from '../notifications/service.js';
+import { normalizePhone } from '../../lib/phone.js';
 
 export function paymentGatewayFor(cfg: Pick<IntegrationConfigDoc, '_id' | 'provider' | 'environment' | 'settings' | 'secretsEnc'>): PaymentGateway {
   if (cfg.provider === 'simulator' && env().NODE_ENV === 'production' && cfg.environment === 'production') throw badRequest('The payment simulator cannot be used in production');
@@ -116,6 +118,27 @@ async function gatewaysForBranch(branchId?: Types.ObjectId | null) {
 
 const router = Router();
 
+/**
+ * Payment link gateways (Pesapal and others without a direct phone prompt): the till sends the link to the
+ * customer's phone by SMS; they open it, choose M-Pesa (the prompt comes on their phone), Airtel Money or card.
+ */
+router.post('/payments/intents/:id/send-link', requirePermission('sales.create'), async (req, res) => {
+  const body = parse(z.object({ phone: z.string().trim().min(9).max(20) }), req.body);
+  const intent = await PaymentIntent.findById(idParam(req.params.id));
+  if (!intent || intent.status !== 'pending' || !intent.checkoutUrl) throw notFound('Payment link');
+  if (!req.capabilities!.modules.includes('sms')) throw unprocessable('Turn on the SMS module (Settings › Modules) and connect an SMS provider to send links', 'SMS_DISABLED');
+  const phone = normalizePhone(body.phone);
+  if (!phone) throw badRequest('Enter the customer’s phone number, e.g. 0712345678');
+  const r = await notify({
+    channel: 'sms', to: phone, templateKey: 'paymentLink', dedupeKey: `paylink:${intent._id}:${phone}`, ref: { type: 'PaymentIntent', id: intent._id },
+    data: { business: req.tenant!.name, amount: formatMoney(intent.amountCents, intent.currency ?? req.tenant!.settings?.currency ?? 'KES'), url: intent.checkoutUrl, reference: intent.reference ?? String(intent._id).slice(-8) },
+  });
+  if (!r.queued) throw unprocessable(`The SMS was not sent: ${r.reason}`, 'SMS_NOT_SENT');
+  await PaymentIntent.updateOne({ _id: intent._id }, { $set: { phone } });
+  await audit(req, { action: 'payment.link_sent', entity: 'PaymentIntent', entityId: intent._id, details: { phone: phone.replace(/\d(?=\d{3})/g, '*') } });
+  res.json({ data: { sent: true, phone } });
+});
+
 /** Gateways a cashier can use at this till (no secrets). */
 router.get('/payments/gateways', requirePermission('sales.create'), async (req, res) => {
   const q = parse(z.object({ tillId: objectId.optional() }), req.query);
@@ -162,6 +185,9 @@ export async function startGatewayCharge(opts: {
     if (!phone) throw badRequest('Enter a valid phone number, e.g. 0712345678');
     // Mobile money moves whole units only.
     if (opts.amountCents % 100 !== 0) throw badRequest('Mobile money amounts must be whole units');
+  } else if (opts.phone) {
+    // Payment link: the provider's checkout page starts with the customer's number filled in.
+    phone = toMsisdn(opts.phone, dialCode(currency, channel)) ?? undefined;
   }
   const email = opts.email || String(cfg.settings?.customerEmail || '') || `pos+${tenant.slug}@example.com`;
   const gateway = paymentGatewayFor(cfg);

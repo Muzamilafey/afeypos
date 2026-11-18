@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { calculateTax, formatMoney, lineAmount, PRICE_LISTS, roundQty, type PriceListKey } from '@afeypos/shared';
+import { calculateTax, formatMoney, lineAmount, mergeCheckoutRules, PRICE_LISTS, roundQty, type PriceListKey } from '@afeypos/shared';
 import { Branch, Customer, Product, Sale, SalesDocument, Tenant, Warehouse } from '../../models/index.js';
 import { idParam, objectId, pagination, parse, positiveCents } from '../../http/validate.js';
 import { assertBranchAccess, requireModule, requirePermission } from '../../http/auth.js';
@@ -66,7 +66,7 @@ router.post('/documents', requirePermission('quotations.manage'), async (req, re
     const product = await Product.findOne({ _id: l.productId, active: true });
     if (!product) throw notFound('Product');
     const unit = resolveUnit(product, l.unitCode);
-    const quote = await quotePrice({ product, unitCode: unit.code, qty: l.qty, priceList, customerId: customer?._id, branchId: branch._id });
+    const quote = await quotePrice({ product, unitCode: unit.code, qty: l.qty, priceList, customerId: customer?._id, branchId: branch._id, wholesaleByQty: mergeCheckoutRules(settings.checkoutRules, settings).pricing.wholesaleByQuantity });
     const unitPrice = l.unitPriceCents ?? quote.unitPriceCents;
     if (l.unitPriceCents !== undefined && l.unitPriceCents !== quote.unitPriceCents && !req.auth!.permissions.has('sales.price.override')) throw badRequest('You cannot change quoted prices');
     const gross = lineAmount(l.qty, unitPrice);

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { roundQty } from '@afeypos/shared';
+import { mergeCheckoutRules, roundQty } from '@afeypos/shared';
 import { Product, SerialItem, StockAdjustment, StockBatch, StockLevel, StockMovement, StockTransfer, Stocktake, Warehouse, Sale } from '../../models/index.js';
 import { idParam, objectId, pagination, parse } from '../../http/validate.js';
 import { assertWarehouseAccess, can, canSelfApprove, requireModule, requirePermission } from '../../http/auth.js';
@@ -193,8 +193,12 @@ router.post('/inventory/transfers', requirePermission('inventory.transfer'), req
   const t = await withTransaction(async () => {
     const number = await nextNumber('transfer', 'TRF');
     const [tr] = await StockTransfer.create([{ number, fromWarehouseId: body.fromWarehouseId, toWarehouseId: body.toWarehouseId, notes: body.notes, lines: body.lines, createdBy: req.auth!.userId }]);
-    if (body.dispatchNow) {
+    // With approval required, only a manager can create and dispatch in one go; anyone else makes a request.
+    const rules = mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
+    const canApprove = req.auth!.permissions.has('inventory.adjust.approve');
+    if (body.dispatchNow && (!rules.transfers.approvalRequired || canApprove)) {
       assertWarehouseAccess(req, tr.fromWarehouseId);
+      if (rules.transfers.approvalRequired) { tr.approvedBy = req.auth!.userId; tr.approvedAt = new Date(); }
       await runUnscoped(() => dispatchTransfer(req, tr));
     }
     return tr;
@@ -216,10 +220,25 @@ async function dispatchTransfer(req: any, tr: InstanceType<typeof StockTransfer>
   await audit(req, { action: 'inventory.transfer_dispatched', entity: 'StockTransfer', entityId: tr._id, details: { number: tr.number } });
 }
 
+/** A manager approves a requested transfer (when the checkout rules ask for it) before it is dispatched. */
+router.post('/inventory/transfers/:id/approve', requirePermission('inventory.adjust.approve'), requireModule('stockTransfers'), async (req, res) => {
+  const t = await StockTransfer.findOneAndUpdate({ _id: idParam(req.params.id), status: 'draft', approvedAt: { $exists: false } }, { $set: { approvedBy: req.auth!.userId, approvedAt: new Date() } }, { new: true });
+  if (!t) throw notFound('Transfer waiting for approval');
+  await audit(req, { action: 'inventory.transfer_approved', entity: 'StockTransfer', entityId: t._id, details: { number: t.number } });
+  res.json({ data: t });
+});
+
 router.post('/inventory/transfers/:id/dispatch', requirePermission('inventory.transfer'), requireModule('stockTransfers'), async (req, res) => {
   const tr = await withTransaction(async () => {
     const t = await StockTransfer.findOne({ _id: idParam(req.params.id), status: 'draft' });
     if (!t) throw notFound('Draft transfer');
+    const rules = mergeCheckoutRules(req.tenant!.settings?.checkoutRules, req.tenant!.settings ?? {});
+    if (rules.transfers.approvalRequired && !t.approvedAt) {
+      // A manager dispatching it approves it at the same time.
+      if (!req.auth!.permissions.has('inventory.adjust.approve')) throw new AppError(409, 'TRANSFER_NOT_APPROVED', `Transfer ${t.number} needs a manager's approval before it is dispatched`);
+      t.approvedBy = req.auth!.userId;
+      t.approvedAt = new Date();
+    }
     // Only someone at the sending warehouse dispatches; the stock steps then touch both warehouses.
     assertWarehouseAccess(req, t.fromWarehouseId);
     await runUnscoped(() => dispatchTransfer(req, t));

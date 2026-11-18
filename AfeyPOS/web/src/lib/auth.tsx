@@ -4,7 +4,7 @@ import { api, onExpired, setAccessToken, tryRestoreSession } from './api';
 import { configureFormat } from './format';
 
 export interface Me {
-  user: { id: string; name: string; email: string; roles: string[]; branchIds: string[]; kind: string; twoFactorEnabled?: boolean; hasPin?: boolean; emailVerified?: boolean };
+  user: { id: string; name: string; email: string; roles: string[]; branchIds: string[]; kind: string; twoFactorEnabled?: boolean; hasPin?: boolean; hasFingerprint?: boolean; emailVerified?: boolean };
   tenant: { id: string; name: string; slug: string; businessType: string; status: string; settings: any; checkoutRules?: CheckoutRules; enabledModules: ModuleKey[]; disabledModules: ModuleKey[] };
   deploymentMode: 'standalone' | 'hq' | 'branch';
   capabilities: Capabilities;

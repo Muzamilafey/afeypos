@@ -7,7 +7,8 @@ import crypto from 'node:crypto';
 import express, { Router, type Request, type RequestHandler } from 'express';
 import { Types } from 'mongoose';
 import { env } from '../../config/env.js';
-import { Branch, MpesaEvent, SyncTombstone, Tenant, Till, Warehouse } from '../../models/index.js';
+import { Branch, MpesaEvent, PaymentIntent, SyncTombstone, Tenant, Till, Warehouse } from '../../models/index.js';
+import { matchExpectedToReceived } from '../payments/mpesa.js';
 import { AppError, badRequest, forbidden, unauthorized } from '../../lib/errors.js';
 import { safeEqual, sha256 } from '../../lib/crypto.js';
 import { runAsPlatform } from '../../lib/context.js';
@@ -40,7 +41,7 @@ const syncAuth: RequestHandler = async (req, _res, next) => {
   if (!b.active) throw forbidden('This branch is deactivated');
   const [warehouses, tills] = await Promise.all([Warehouse.find({ branchId: b._id }, { _id: 1 }).lean(), Till.find({ branchId: b._id }, { _id: 1 }).lean()]);
   req.syncBranch = { branchId: String(b._id), code: b.code, warehouseIds: new Set(warehouses.map((w) => String(w._id))), tillIds: new Set(tills.map((t) => String(t._id))) };
-  await Branch.updateOne({ _id: b._id }, { $set: { 'sync.lastSeenAt': new Date() } });
+  await Branch.updateOne({ _id: b._id }, { $set: { 'sync.lastSeenAt': new Date() } }, { timestamps: false });
   next();
 };
 
@@ -77,15 +78,28 @@ hqSyncRoutes.post('/push', async (req, res) => {
       results.push({ id: String(doc._id), outcome: 'rejected_not_owner' });
       continue;
     }
+    if (body.collection === 'paymentintents' && doc.status !== 'succeeded') {
+      const here = await spec.model.collection.findOne({ _id: doc._id }, { projection: { status: 1 } });
+      if (here?.status === 'succeeded') {
+        // Confirmed here (e.g. the Till payment arrived at head office): keep it, and make it the newest so it syncs down.
+        await spec.model.collection.updateOne({ _id: doc._id }, { $set: { updatedAt: new Date() } });
+        results.push({ id: String(doc._id), outcome: 'kept_confirmed' });
+        continue;
+      }
+    }
     const r = await applyRecord(spec, doc, 'hq', b.code);
     results.push({ id: String(doc._id), outcome: r.outcome });
     if (r.outcome !== 'applied') continue;
     if (body.collection === 'stocktransfers') await afterTransferReplicated(r.previous, doc);
     if (body.collection === 'ledgerentries') parties.push({ type: doc.partyType, id: String(doc.partyId) });
     if (body.collection === 'customers') parties.push({ type: 'customer', id: String(doc._id) });
+    if (body.collection === 'paymentintents' && doc.awaiting === 'expected' && doc.status === 'pending') {
+      const intent = await PaymentIntent.findById(doc._id);
+      if (intent) await matchExpectedToReceived(intent).catch(() => false);
+    }
   }
   if (parties.length) await recomputeBalances(parties);
-  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPushAt': new Date() } });
+  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPushAt': new Date() } }, { timestamps: false });
   send(res, { results });
 });
 
@@ -115,8 +129,33 @@ hqSyncRoutes.get('/pull', async (req, res) => {
   const projection = collection === 'branches' ? { syncTokenHash: 0 } : undefined;
   const docs = await spec.model.collection.find(filter, { projection }).sort({ [f]: 1, _id: 1 }).limit(limit).toArray();
   const last = docs.at(-1);
-  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPullAt': new Date() } });
+  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.lastPullAt': new Date() } }, { timestamps: false });
   send(res, { docs, next: last ? { t: last[f], id: last._id } : null, more: docs.length === limit });
+});
+
+/**
+ * A branch cashier uses a Paybill/Till payment head office received with no branch (found by its code): it becomes
+ * that branch's, atomically, unless another branch took it first or it was already used.
+ */
+hqSyncRoutes.post('/mpesa-claim', express.json(), async (req: Request, res) => {
+  const branchId = new Types.ObjectId(req.syncBranch!.branchId);
+  const receipt = String(req.body?.receipt ?? '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{8,12}$/.test(receipt)) throw badRequest('M-Pesa codes are 8-12 letters and digits');
+  const claimed = await PaymentIntent.findOneAndUpdate(
+    { provider: 'mpesa', receiptNumber: receipt, status: 'succeeded', $or: [{ branchId: null }, { branchId }], $expr: { $lt: [{ $ifNull: ['$allocatedCents', 0] }, '$paidAmountCents'] } },
+    { $set: { branchId } },
+    { new: true },
+  );
+  if (claimed) {
+    send(res, { doc: await PaymentIntent.collection.findOne({ _id: claimed._id }) });
+    return;
+  }
+  const i = await PaymentIntent.findOne({ provider: 'mpesa', receiptNumber: receipt }).lean();
+  const reason = !i ? 'not_found'
+    : i.status !== 'succeeded' ? `M-Pesa ${receipt} is ${i.status}`
+      : (i.allocatedCents ?? 0) >= (i.paidAmountCents ?? 0) ? `M-Pesa ${receipt} was already used${i.allocatedTo?.number ? ` for ${i.allocatedTo.number}` : ''}`
+        : `M-Pesa ${receipt} was already used at another branch`;
+  send(res, { doc: null, reason });
 });
 
 /**
@@ -141,7 +180,7 @@ hqSyncRoutes.get('/tombstones', async (req, res) => {
 hqSyncRoutes.post('/report', express.json(), async (req: Request, res) => {
   const b = req.syncBranch!;
   const body = req.body ?? {};
-  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.pendingUp': Number(body.pendingUp) || 0, 'sync.lastError': body.lastError ? String(body.lastError).slice(0, 300) : '', 'sync.serverVersion': String(body.version ?? '').slice(0, 40) } });
+  await Branch.updateOne({ _id: b.branchId }, { $set: { 'sync.pendingUp': Number(body.pendingUp) || 0, 'sync.lastError': body.lastError ? String(body.lastError).slice(0, 300) : '', 'sync.serverVersion': String(body.version ?? '').slice(0, 40) } }, { timestamps: false });
   res.json({ ok: true });
 });
 

@@ -103,10 +103,13 @@ beforeAll(async () => {
   const till2 = await hq.client.post('/settings/tills', { branchId: br2.body.data.branch._id, warehouseId: br2.body.data.warehouse._id, name: 'THK till 1', code: 'THK1' });
   b2 = { id: br2.body.data.branch._id, warehouseId: br2.body.data.warehouse._id, tillId: till2.body.data._id };
 
-  const tok = await hq.client.post(`/settings/branches/${b1.id}/sync-token`, {});
+  // Issuing a branch token needs an administrator to confirm (here the owner, with username/email and password).
+  const approve = async () => ({ 'X-Approval': (await hq.client.post('/auth/override', { email: 'owner@chain.test', password: OWNER_PASSWORD, permission: 'settings.manage' })).body.overrideToken as string });
+  expect((await hq.client.post(`/settings/branches/${b1.id}/sync-token`, {})).status).toBe(403);
+  const tok = await hq.client.post(`/settings/branches/${b1.id}/sync-token`, {}, await approve());
   expect(tok.status).toBe(200);
   expect(tok.body.data.env).toMatchObject({ DEPLOYMENT_MODE: 'branch', BRANCH_CODE: 'MSA01', SYNC_ENABLED: 'true' });
-  const tok2 = await hq.client.post(`/settings/branches/${b2.id}/sync-token`, {});
+  const tok2 = await hq.client.post(`/settings/branches/${b2.id}/sync-token`, {}, await approve());
   [branch, branch2] = await Promise.all([startBranch(tok.body.data.env), startBranch(tok2.body.data.env)]);
 }, 90_000);
 
@@ -127,11 +130,55 @@ describe('branch server bootstrap', () => {
     expect(lookup.body.data.stock.qty).toBe(50);
   });
 
-  it('refuses to edit head-office data on the branch', async () => {
-    const r = await branch.post('/products', { name: 'Local item', sku: 'LOC1', prices: { retail: 100 } });
-    expect(r.status).toBe(409);
-    expect(r.body.error.code).toBe('MANAGED_AT_HQ');
-    expect((await branch.post('/settings/users', { name: 'X', email: 'x@y.z', roles: ['cashier'] })).body.error.code).toBe('MANAGED_AT_HQ');
+  it('staff at the branch cannot edit head-office data, but an owner or administrator can, and it reaches HQ', async () => {
+    await hq.client.post('/settings/users', { name: 'Mary Manager', email: 'mary@chain.test', password: 'MaryPass12345', roles: ['branch_manager'], extraPermissions: ['products.manage', 'users.manage'] });
+    await runSync();
+    const mgr = new Client(branch.api, 'branch');
+    await mgr.login('mary@chain.test', 'MaryPass12345');
+    const refused = await mgr.post('/products', { name: 'Local item', sku: 'LOC1', prices: { retail: 100 } });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('MANAGED_AT_HQ');
+
+    // The owner works without restriction on the shop's own server.
+    const made = await branch.post('/products', { name: 'Branch item', sku: 'BRN1', prices: { retail: 2500 } });
+    expect(made.status).toBe(201);
+    const betty = await branch.post('/settings/users', { name: 'Branch Betty', email: 'betty@chain.test', password: 'BettyPass12345', roles: ['cashier'] });
+    expect(betty.status).toBe(201);
+    // Staff added on a branch get its own employee numbers, so they never clash with head office's.
+    expect(betty.body.data.employeeNo).toMatch(/^EMP-MSA01-/);
+    // …and what they added arrives at head office.
+    await runSync();
+    const atHq = await hq.client.get('/products?q=BRN1');
+    expect(atHq.body.data.map((p: any) => p.sku)).toContain('BRN1');
+    expect((await hq.client.get('/settings/users')).body.data.map((u: any) => u.email)).toContain('betty@chain.test');
+  });
+});
+
+describe('branch server tills', () => {
+  it('syncing does not make the branch record look newly changed (it would never settle and never reach the branch)', async () => {
+    const { Branch } = await import('../src/models/index.js');
+    const { runInTenant } = await import('../src/lib/context.js');
+    const before = await runInTenant(hq.tenant.id, () => Branch.findById(b1.id).lean());
+    await runSync();
+    const after = await runInTenant(hq.tenant.id, () => Branch.findById(b1.id).lean());
+    expect(after!.sync?.lastSeenAt).toBeTruthy();
+    expect(new Date(after!.updatedAt as any).getTime()).toBe(new Date(before!.updatedAt as any).getTime());
+    const locs = await branch.get('/settings/locations');
+    expect(locs.body.data.branches.map((b: any) => b.code)).toContain('MSA01');
+    const status = await branch.get('/settings/sync/status');
+    expect(status.body.data.check).toMatchObject({ branchFound: true, storesWithoutBranch: [] });
+    expect(status.body.data.check.tills).toBeGreaterThan(0);
+  });
+
+  it('cannot be set up as a new business, and sells only from its own branch tills', async () => {
+    const reg = await branch.api.post('/api/v1/public/register').send({ businessName: 'Other', businessType: 'supermarket', ownerName: 'X Y', email: 'x@other.test', password: OWNER_PASSWORD });
+    expect(reg.status).toBe(409);
+    expect(reg.body.error.code).toBe('BRANCH_SERVER');
+    // Head office's own till (and another branch's) arrive by sync but cannot sell here.
+    const other = await branch.post('/shifts', { tillId: hq.locations.tills[0]._id, openingFloatCents: 0 });
+    expect(other.status).toBe(409);
+    expect(other.body.error.code).toBe('STOCK_OWNED_ELSEWHERE');
+    expect(other.body.error.message).toMatch(/This till belongs to .* but this server runs branch MSA01/);
   });
 });
 
@@ -169,6 +216,47 @@ describe('head-office changes reach the branch', () => {
     expect(p.prices.retail).toBe(7000);
     expect((await branch.get('/products?q=Bread')).body.data).toHaveLength(1);
   });
+});
+
+describe('opening stock entered at head office for a branch server', () => {
+  it('is sent to the branch, applied there once, and the stock comes back to HQ', async () => {
+    const r = await hq.client.post('/products', { name: 'Brookside Fresh Milk', sku: 'BRK500', prices: { retail: 6500 }, costCents: 5000, openingStock: [{ warehouseId: b1.warehouseId, qty: 24 }, { warehouseId: mainWh, qty: 10 }] });
+    expect(r.status).toBe(201);
+    expect(r.body.pendingStock).toBe(1);
+    const id = r.body.data._id;
+    expect((await hq.client.get(`/products/${id}`)).body.data.pendingStock).toMatchObject([{ qty: 24, status: 'pending' }]);
+    expect((await hq.client.get(`/inventory/levels?productId=${id}&warehouseId=${mainWh}`)).body.data[0].qty).toBe(10);
+
+    await runSync();
+    expect((await branch.get(`/inventory/levels?productId=${id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty).toBe(24);
+    await runSync();
+    await runSync();
+    // Applied once, even after several syncs; HQ sees the branch stock and nothing pending.
+    expect((await branch.get(`/inventory/levels?productId=${id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty).toBe(24);
+    expect((await hq.client.get(`/inventory/levels?productId=${id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty).toBe(24);
+    expect((await hq.client.get(`/products/${id}`)).body.data.pendingStock).toEqual([]);
+  }, 60_000);
+});
+
+describe('goods received at head office for a branch server', () => {
+  it('records the receipt and the supplier bill at HQ, and the branch adds the stock once', async () => {
+    const supplier = (await hq.client.post('/suppliers', { name: 'Bidco' })).body.data;
+    const flour = await createProduct(hq.client, { name: 'Flour 2kg', sku: 'FLOUR2', prices: { retail: 20000 }, costCents: 15000 });
+    const po = (await hq.client.post('/purchase-orders', { supplierId: supplier._id, warehouseId: b1.warehouseId, lines: [{ productId: flour._id, qty: 10, unitCostCents: 5000 }] })).body.data;
+    const before = 0;
+    const grn = await hq.client.post('/goods-receipts', { supplierId: supplier._id, warehouseId: b1.warehouseId, purchaseOrderId: po._id, supplierInvoiceNo: 'INV-9', lines: [{ productId: flour._id, qty: 10, unitCostCents: 5000 }] });
+    expect(grn.status).toBe(201);
+    expect(grn.body.pendingStock).toBe(1);
+    expect((await hq.client.get(`/purchase-orders/${po._id}`)).body.data.status).toBe('received');
+    expect((await hq.client.get(`/suppliers/${supplier._id}`)).body.data.balanceCents).toBe(50000);
+    await runSync();
+    await runSync();
+    const after = (await branch.get(`/inventory/levels?productId=${flour._id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty;
+    expect(after).toBe(before + 10);
+    const moves = (await branch.get(`/inventory/movements?productId=${flour._id}&warehouseId=${b1.warehouseId}`)).body.data;
+    expect(moves.find((m: any) => m.type === 'purchase_receipt')?.ref?.number).toBe(grn.body.data.number);
+    expect((await hq.client.get(`/inventory/levels?productId=${flour._id}&warehouseId=${b1.warehouseId}`)).body.data[0].qty).toBe(after);
+  }, 60_000);
 });
 
 describe('customers across branches', () => {
@@ -236,5 +324,57 @@ describe('head-office dashboard', () => {
     const row = s.body.data.branches.find((b: any) => b.code === 'MSA01');
     expect(row).toMatchObject({ hasServer: true, online: true });
     expect(row.sync.pendingUp).toBe(0);
+  });
+});
+
+describe('M-Pesa Buy Goods at a branch server', () => {
+  it('a payment to the Till that reaches head office before the till’s waiting record is still matched and reaches the till', async () => {
+    const { handleC2B } = await import('../src/modules/payments/mpesa.js');
+    const { Types } = await import('mongoose');
+    const cfg = await hq.client.post('/settings/integrations', { kind: 'mpesa', provider: 'mock', name: 'Shop till', settings: { shortCode: '174379', type: 'till', tillNumber: '3163960' }, secrets: { consumerKey: 'k', consumerSecret: 's', passkey: 'p' } });
+    expect(cfg.status).toBe(201);
+    await runSync();
+    const ex = await branch.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 100, tillId: b1.tillId });
+    expect(ex.status).toBe(201);
+    expect(ex.body.data.payTo).toEqual({ type: 'till', number: '3163960' });
+    // Safaricom confirms at head office first: nothing is waiting there yet, so it is recorded unmatched.
+    await handleC2B(new Types.ObjectId(hq.tenant.id), { TransID: 'TST1BUYGDS', TransAmount: '1.00', BusinessShortCode: '3163960', BillRefNumber: '', MSISDN: '254712345678', FirstName: 'Asha', TransTime: '20261027021600' }, '127.0.0.1');
+    // The waiting record goes up, head office pairs it with the payment, and the till gets it on the next round.
+    await runSync();
+    await runSync();
+    const i = await branch.get(`/payments/intents/${ex.body.data.id}`);
+    expect(i.body.data).toMatchObject({ status: 'succeeded', receiptNumber: 'TST1BUYGDS', paidAmountCents: 100 });
+    const price = (await branch.get(`/products/${milk._id}`)).body.data.prices.retail as number;
+    const sale = await branch.post('/sales', { clientRequestId: rid(), tillId: b1.tillId, lines: [{ productId: milk._id, qty: 1 }], payments: [{ method: 'mpesa', amountCents: 100, paymentIntentId: ex.body.data.id }, { method: 'cash', amountCents: price - 100 }] });
+    expect(sale.status).toBe(201);
+  });
+
+  it('with one M-Pesa for all branches, a Till payment no till waited for reaches every branch and is used by one only', async () => {
+    const { handleC2B } = await import('../src/modules/payments/mpesa.js');
+    const { Types } = await import('mongoose');
+    await handleC2B(new Types.ObjectId(hq.tenant.id), { TransID: 'TST2NOSALE', TransAmount: '1.00', BusinessShortCode: '3163960', BillRefNumber: '', MSISDN: '254722000111', FirstName: 'Ibrahim', TransTime: '20261027153000' }, '127.0.0.1');
+    await runSync(branch);
+    await runSync(branch2);
+    // Downloaded: both branch servers list it.
+    for (const c of [branch, branch2]) {
+      const list = await c.get('/payments/intents?status=succeeded&unallocated=true&provider=mpesa');
+      expect(list.body.data.map((i: any) => i.receiptNumber)).toContain('TST2NOSALE');
+    }
+    const copy = (await branch.get('/payments/intents?q=TST2NOSALE')).body.data[0];
+    const price = (await branch.get(`/products/${milk._id}`)).body.data.prices.retail as number;
+    const sell = (c: Client, tillId: string, intentId: string) => c.post('/sales', { clientRequestId: rid(), tillId, lines: [{ productId: milk._id, qty: 1 }], payments: [{ method: 'mpesa', amountCents: 100, paymentIntentId: intentId }, { method: 'cash', amountCents: price - 100 }] });
+    // Not claimed yet: the branch cannot spend its copy.
+    expect((await sell(branch, b1.tillId, copy.id)).status).toBe(422);
+    // The cashier enters the code: the branch claims it at head office and can use it.
+    const found = await branch.post('/payments/mpesa/lookup', { receipt: 'tst2nosale', clientRequestId: rid(), tillId: b1.tillId });
+    expect(found.body).toMatchObject({ found: true, data: { receiptNumber: 'TST2NOSALE', payerName: 'Ibrahim' } });
+    expect((await sell(branch, b1.tillId, found.body.data.id)).status).toBe(201);
+    // The other branch cannot take it.
+    const other = await branch2.post('/payments/mpesa/lookup', { receipt: 'TST2NOSALE', clientRequestId: rid(), tillId: b2.tillId });
+    expect(other.status).toBe(422);
+    expect(other.body.error.message).toMatch(/another branch|already used/);
+    await runSync(branch);
+    const atHq = (await hq.client.get('/payments/intents?q=TST2NOSALE')).body.data[0];
+    expect(atHq).toMatchObject({ allocatedCents: 100, allocatedTo: { number: expect.stringMatching(/^RCP-MSA01-/) } });
   });
 });

@@ -21,8 +21,9 @@ export async function httpJson<T = any>(url: string, init: RequestInit & { timeo
     return body as T;
   } catch (err: any) {
     if (err instanceof IntegrationError) throw err;
-    if (err?.name === 'AbortError') throw new IntegrationError(`Timeout calling ${new URL(url).host}`);
-    throw new IntegrationError(`Network error calling ${new URL(url).host}: ${err?.message}`);
+    // The original error stays as the cause, so callers can tell "never reached" from "sent, no answer".
+    if (err?.name === 'AbortError') throw Object.assign(new IntegrationError(`Timeout calling ${new URL(url).host}`), { cause: err });
+    throw Object.assign(new IntegrationError(`Network error calling ${new URL(url).host}: ${err?.message}`), { cause: err });
   } finally {
     clearTimeout(t);
   }

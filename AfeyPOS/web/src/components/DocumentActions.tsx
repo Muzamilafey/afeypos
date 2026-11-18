@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
+import { printHtml } from '../lib/report';
 import { Button, ErrorBox, Field, Input, Modal, useToast } from './ui';
 import { Icon } from './icons';
 
@@ -22,9 +23,22 @@ export async function openPdf(kind: DocKind, id: string) {
   }
 }
 
-export function PdfButton({ kind, id, label = 'PDF', size = 'sm' }: { kind: DocKind; id: string; label?: string; size?: 'sm' | 'md' }) {
+/** Prints the document (same layout as its PDF) through the browser's print dialog. */
+export async function printDoc(kind: DocKind, id: string) {
+  const res = await api<Response>(`/print/${kind}/${id}`, { raw: true });
+  if (!res.ok) throw new ApiError(res.status, 'PRINT', (await res.json().catch(() => null))?.error?.message ?? 'Could not prepare the printout');
+  printHtml(await res.text());
+}
+
+/** "PDF" (opens it, to view, save or share) and "Print". */
+export function PdfButton({ kind, id, label = 'PDF', size = 'sm', print = true }: { kind: DocKind; id: string; label?: string; size?: 'sm' | 'md'; print?: boolean }) {
   const toast = useToast();
-  return <Button size={size} variant="secondary" onClick={() => openPdf(kind, id).catch(toast.error)}><Icon name="file" className="h-4 w-4" />{label}</Button>;
+  return (
+    <span className="inline-flex gap-1" onClick={(e) => e.stopPropagation()}>
+      <Button size={size} variant="secondary" onClick={() => openPdf(kind, id).catch(toast.error)}><Icon name="file" className="h-4 w-4" />{label}</Button>
+      {print && <Button size={size} variant="secondary" aria-label={`Print ${label === 'PDF' ? 'document' : label.replace(/ PDF$/, '').toLowerCase()}`} onClick={() => printDoc(kind, id).catch(toast.error)}><Icon name="printer" className="h-4 w-4" />Print</Button>}
+    </span>
+  );
 }
 
 /** "Email" with a small form: recipient (defaults to the supplier or customer), copies and a message. The PDF is attached. */
