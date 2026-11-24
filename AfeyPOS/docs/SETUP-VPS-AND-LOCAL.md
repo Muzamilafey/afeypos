@@ -343,7 +343,8 @@ More: [TROUBLESHOOTING.md](TROUBLESHOOTING.md), [VPS.md](VPS.md), [SYNC.md](SYNC
 
 ---
 
-**updating a local server**
+**updating a local server**:
+
 _**irm https://raw.githubusercontent.com/Muzamilafey/afeypos/HEAD/AfeyPOS/installer/windows/install-online.ps1 | iex**_
 
 ## Part 6 — A quick checklist
