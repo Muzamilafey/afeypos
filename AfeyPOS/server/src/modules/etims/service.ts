@@ -116,7 +116,7 @@ async function buildLines(lines: LineIn[]) {
     const discount = Math.abs((l.discountCents ?? 0) + (l.cartDiscountCents ?? 0));
     const supply = total + discount;
     items.push({
-      itemSeq: i + 1, itemCd: p ? await itemCodeFor(p, pkg, qtyUnit) : `KE2NTU${String(i + 1).padStart(7, '0')}`, itemClsCd: p?.etims?.itemClsCd || '99000000',
+      itemSeq: i + 1, itemCd: p ? await itemCodeFor(p, pkg, qtyUnit) : `KE2NTU${String(i + 1).padStart(7, '0')}`, plu: p?.plu ?? null, itemClsCd: p?.etims?.itemClsCd || '99000000',
       itemNm: (l.name ?? p?.name ?? 'Item').slice(0, 200), bcd: p?.barcodes?.[0]?.code ?? null, pkgUnitCd: pkg, pkg: qty, qtyUnitCd: qtyUnit, qty,
       prc: r2(qty ? supply / qty : supply), splyAmt: r2(supply), dcRt: supply ? Math.round((discount / supply) * 10000) / 100 : 0, dcAmt: r2(discount),
       taxTyCd: taxType(l.taxRateBp, p?.etims?.taxTyCd), taxblAmt: r2(total), taxAmt: r2(Math.abs(l.taxCents ?? 0)), totAmt: r2(total),

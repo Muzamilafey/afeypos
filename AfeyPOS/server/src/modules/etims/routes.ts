@@ -22,13 +22,13 @@ router.post('/settings/integrations/:id/etims/initialize', requirePermission('in
   const cfg = await IntegrationConfig.findOne({ _id: idParam(req.params.id), kind: 'etims' });
   if (!cfg) throw notFound('eTIMS configuration');
   const info = await etimsGateway(cfg).initialize();
-  cfg.settings = { ...(cfg.settings ?? {}), sdcId: info.sdcId, mrcNo: info.mrcNo, registeredName: info.taxprNm, branchName: info.bhfNm, initializedAt: new Date().toISOString() };
+  cfg.settings = { ...(cfg.settings ?? {}), ...(info.sdcId ? { sdcId: info.sdcId } : {}), ...(info.cuSerial ? { cuSerial: info.cuSerial } : {}), mrcNo: info.mrcNo, registeredName: info.taxprNm, branchName: info.bhfNm, initializedAt: new Date().toISOString() };
   cfg.markModified('settings');
   if (info.cmcKey) cfg.secretsEnc = sealSecrets(cfg._id, { ...openSecrets(cfg), cmcKey: info.cmcKey });
-  cfg.lastTest = { at: new Date(), ok: true, message: `Initialised: SCU ${info.sdcId ?? '?'}` } as any;
+  cfg.lastTest = { at: new Date(), ok: true, message: info.cuSerial ? `Connected Tremol CU ${info.cuSerial}` : `Initialised: SCU ${info.sdcId ?? '?'}` } as any;
   await cfg.save();
-  await audit(req, { action: 'etims.initialized', entity: 'IntegrationConfig', entityId: cfg._id, details: { sdcId: info.sdcId, mrcNo: info.mrcNo } });
-  res.json({ data: { sdcId: info.sdcId, mrcNo: info.mrcNo, taxpayer: info.taxprNm, branch: info.bhfNm } });
+  await audit(req, { action: 'etims.initialized', entity: 'IntegrationConfig', entityId: cfg._id, details: { sdcId: info.sdcId, cuSerial: info.cuSerial, mrcNo: info.mrcNo } });
+  res.json({ data: { sdcId: info.sdcId, cuSerial: info.cuSerial, mrcNo: info.mrcNo, taxpayer: info.taxprNm, branch: info.bhfNm } });
 });
 
 /**

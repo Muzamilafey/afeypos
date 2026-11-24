@@ -45,8 +45,9 @@ export function fiscalCapabilities(cfg: { provider: string; settings?: any }): F
     case 'etr_http': return { ...NONE, ...sells, initialize: true, transactionStatus: Boolean(cfg.settings?.statusPath), localOnly: true };
     // The invoice file is written once; the answer file is the status.
     case 'etr_folder': return { ...NONE, ...sells, initialize: true, transactionStatus: true, safeResend: true, localOnly: true };
-    // The ZFP Lab Server drives the control unit; its last-receipt number is queried before any resend.
-    case 'etr_tremol': return { ...NONE, ...sells, initialize: true, transactionStatus: true, localOnly: true };
+    // The supplied SDK has no invoice lookup and the last-receipt counter cannot identify an Afey invoice.
+    // It also documents refunds against the original device receipt number, which Afey does not have.
+    case 'etr_tremol': return { ...NONE, submitInvoice: true, initialize: true, localOnly: true };
     case 'etr_simulator': return { ...NONE, ...sells, initialize: true, transactionStatus: true, safeResend: true };
     case 'mock': return { ...NONE, ...sells, initialize: true, itemRegistration: true, transactionStatus: true, lastFiscalReceipt: true, safeResend: true };
   }
@@ -59,10 +60,11 @@ export function etimsGateway(cfg: Cfg): EtimsGateway {
     // A Tremol control unit (e.g. G03) reached through the Tremol ZFP Lab Server on this computer.
     const tremol: TremolConfig = {
       url: s.url, operatorNum: s.operatorNum, operatorPass: openSecrets(cfg).operatorPass ?? s.operatorPass, cuSerial: s.cuSerial,
-      timeoutSeconds: Number(s.timeoutSeconds) || undefined, openReceiptArgs: s.openReceiptArgs, sellLineArgs: s.sellLineArgs, closeReceiptArgs: s.closeReceiptArgs,
+      timeoutSeconds: Number(s.timeoutSeconds) || undefined,
+      vatClassByTaxCode: Object.fromEntries(['A', 'B', 'C', 'D', 'E'].flatMap((code) => s[`vatClass${code}`] ? [[code, String(s[`vatClass${code}`])]] : [])) as TremolConfig['vatClassByTaxCode'],
       fieldInvoice: s.fieldInvoice, fieldSerial: s.fieldSerial, fieldQr: s.fieldQr, fieldDate: s.fieldDate,
     };
-    return new TremolGateway(tremol, { name: s.registeredName, pin: s.tin });
+    return new TremolGateway(tremol);
   }
   if (cfg.provider === 'etr') {
     // An ETR device on this computer, through the program that comes with it.
@@ -116,13 +118,14 @@ class ConfiguredAdapter implements FiscalAdapter {
     if (this.kind === 'etr_http' && !s.statusPath) problems.push('No status address for the ETR program: an invoice whose answer is lost goes to reconciliation instead of being checked automatically');
     if (this.kind === 'etr_folder' && (!s.inbox || !s.outbox)) problems.push('Inbox and outbox folders are required');
     if (this.kind === 'etr_tremol' && s.url && !/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost|\[::1\])/.test(String(s.url))) problems.push('The Tremol ZFP Lab Server address must be on this computer or the shop network (e.g. http://127.0.0.1:4444)');
+    if (this.kind === 'etr_tremol') for (const code of ['A', 'B', 'C', 'D', 'E']) if (s[`vatClass${code}`] && !/^[1-5]$/.test(String(s[`vatClass${code}`]))) problems.push(`Tremol VAT class for KRA tax code ${code} must be 1 to 5`);
     return problems;
   }
 
   async getDeviceInfo(): Promise<DeviceInfo> {
     const s = this.cfg.settings ?? {};
     return {
-      kind: this.kind, label: KIND_LABEL[this.kind], serial: s.dvcSrlNo ?? s.cuSerial ?? undefined, sdcId: s.sdcId, mrcNo: s.mrcNo, taxpayer: s.registeredName, branch: s.branchName,
+      kind: this.kind, label: KIND_LABEL[this.kind], serial: s.dvcSrlNo ?? s.cuSerial ?? s.sdcId ?? undefined, sdcId: s.sdcId, mrcNo: s.mrcNo, taxpayer: s.registeredName, branch: s.branchName,
       endpoint: this.kind === 'etr_folder' ? `${s.inbox} → ${s.outbox}` : this.kind === 'etr_http' ? s.url : this.kind === 'etr_tremol' ? (s.url || 'http://127.0.0.1:4444/') : this.kind === 'vscu' ? s.baseUrl : this.kind === 'oscu' ? (s.baseUrl || (this.cfg.environment === 'production' ? 'KRA eTIMS (production)' : 'KRA eTIMS (sandbox)')) : 'simulator',
     };
   }
@@ -163,6 +166,10 @@ class ConfiguredAdapter implements FiscalAdapter {
 
   /** Asked for by a person: also checks that KRA's address answers at all (a plain web request, no fiscal call). */
   async testConnection(): Promise<DeviceStatus> {
+    if (this.kind === 'etr_tremol') {
+      try { return { state: 'online', message: await (this.gw as TremolGateway).testConnection() }; }
+      catch (err: any) { return { state: 'offline', message: String(err?.message ?? err) }; }
+    }
     if (this.kind !== 'oscu') return this.getStatus();
     if (!openSecrets(this.cfg).cmcKey) return { state: 'offline', message: 'Not initialised with KRA yet' };
     const base = (this.gw as EtimsClient).baseUrl;

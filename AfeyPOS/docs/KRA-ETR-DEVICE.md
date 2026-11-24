@@ -26,7 +26,7 @@ Afey POS can reach that program in one of two ways. Ask the ETR supplier which o
 |---|---|---|
 | **Its program listens on this computer** (web address) | Afey POS sends each invoice to the program's address, e.g. `http://127.0.0.1:4444/invoice`, and reads the answer. | The program's address and port (and a key, if it asks for one) |
 | **Folder exchange** | Afey POS saves each invoice as a file in the program's **inbox** folder; the program signs it and saves its answer in the **outbox** folder. | The two folders, e.g. `C:\ETR\in` and `C:\ETR\out` |
-| **Tremol control unit (ZFP Lab Server)** | For Tremol devices such as the **G03** (sold in Kenya by Total Solutions). Afey POS drives the control unit through Tremol's **ZFP Lab Server** running on this computer: it opens a receipt, adds each line and closes it, then reads the control-unit invoice number, signature and QR. | The ZFP Lab Server address (default `http://127.0.0.1:4444`), the operator number/password, and the CU serial number |
+| **Tremol control unit (ZFP Lab Server)** | Afey POS sends the documented ZFP Direct API receipt commands to the local server. It marks the POS sale signed only if the reply includes the KRA CU invoice fields. | The local ZFP Lab Server address, operator number/password, product PLUs, and VAT class mapping |
 
 How the ETR is plugged in (USB, serial cable or network) does not matter to Afey POS: the program handles it.
 
@@ -115,23 +115,28 @@ by default.
    | Field | What to enter |
    |---|---|
    | Program address | the ZFP Lab Server address, usually `http://127.0.0.1:4444` |
-   | CU serial number | the G03's serial, e.g. `KRAMW011202207061496` |
-   | Tremol operator / cashier number | usually `1` |
-   | Tremol operator password | usually `0000` (stored as a secret) |
+   | CU serial number | filled from the unit by **Initialise device**, or read from its label |
+   | Tremol operator / cashier number | use the number configured on the unit (SDK demo: `1`) |
+   | Tremol operator password | use the password configured on the unit (SDK demo: `0`; stored as a secret) |
+   | Tremol VAT class for KRA tax codes A–E | set the device class number (1–5) for each tax type used by products |
 
-3. **Save**, then press **Test**: Afey POS asks the ZFP Lab Server for the device version — you should see
-   *"Tremol ZFP Lab Server answers at…"*. If not, start the ZFP Lab Server and check the port.
-4. For each sale Afey POS runs the device's own command sequence — **open the receipt, add every line with its VAT
-   class, close the receipt** — then reads the control-unit invoice number, signature and QR from the device and
-   prints them, exactly like any other ETR.
+3. **Save**, then press **Initialise device**. Afey POS asks the ZFP Lab Server for `ReadVersion`,
+   `ReadSerialAndFiscalNums`, and `ReadStatus`; it saves the returned CU serial. **Test** repeats those read-only
+   checks. If they fail, start the ZFP Lab Server and check the port and USB/COM connection.
+4. Set the product PLUs in Afey POS to the same 1–5 digit numbers already programmed on the device. Set each used
+   KRA tax code to the matching device VAT class. Afey POS reads those PLUs and `ReadVATrates` before opening a
+   receipt, then checks the local receipt total before payment.
+5. For a sale, Afey POS follows the SDK's Direct API sequence: `OpenReceipt`, `SellPLUFromFD_DB` for each PLU,
+   then `CashPayCloseReceipt` for cash or `Payment` and `CloseReceipt` for other configured payment labels.
 
-> **Confirm one real receipt before going live.** The exact command arguments the G03 expects can differ by firmware
-> version. Afey POS uses Tremol's documented order, and if the device rejects a command it is reported as a failed
-> fiscalisation (never a fake signature) — nothing is ever marked signed unless the device returned a real
-> control-unit number. Make one test sale, then check that invoice on the **KRA portal** to confirm it was recorded.
-> If your firmware uses a different argument order, the ETR supplier can give you the exact `OpenReceipt` /
-> `SellPLUwithSpecifiedVAT` / `CloseReceipt` signatures from the device's ZFP manual, and they can be set on the
-> device (advanced command templates) without changing Afey POS.
+**SDK limitation:** the supplied `ZFP_SDK_BA` package documents standard fiscal receipts, PLUs, VAT groups and
+payment slots. It does not document a KRA CU invoice number, KRA signature, QR response, invoice status lookup, or
+credit note link. Afey POS does not manufacture those values. If the installed Kenya G03 ZFP service adds KRA
+signature fields to the close response, set their field names in the form. Otherwise, the local fiscal receipt may
+close but Afey POS will show **Requires reconciliation** and will not mark the KRA sale signed. Ask Total Solutions
+for the Kenya G03 ZFP API/response manual and confirm one receipt on the KRA portal before using this connection
+for production KRA eTIMS reporting. Use the supplier's KRA-enabled middleware if it is the component that adds
+those KRA fields.
 
 ---
 
@@ -141,7 +146,8 @@ by default.
   sale is completed and signed when the device answers again (Afey POS keeps trying).
 - **A receipt printed before the signature** shows *"KRA ETR: awaiting signature"*. Reprint it from **Sales history**
   once it is signed.
-- **Returns** are signed as credit notes, naming the original sale's CU invoice number.
+- **Tremol refunds/credit notes** are not sent through this SDK because its documented refund command requires the
+  original Tremol receipt number, which Afey POS cannot infer from the KRA invoice sequence.
 - **Several devices** (e.g. one per counter): the cashier picks the device on the payment screen, or each till uses
   its own (see *Used by*).
 - **What failed and why:** the **KRA eTIMS** page lists sales waiting or refused, with **Retry**.

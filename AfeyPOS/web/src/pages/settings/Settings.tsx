@@ -326,7 +326,10 @@ function EtrFinder({ edit, setEdit }: { edit: any; setEdit: (e: any) => void }) 
     }
   };
   const use = (c: EtrCandidate) => {
-    if (c.kind === 'http') setEdit({ ...edit, settings: { ...edit.settings, connection: 'http', url: c.url } });
+    if (c.kind === 'http') {
+      const tremol = /tremol|zfplab|zfp/i.test(c.name);
+      setEdit({ ...edit, settings: { ...edit.settings, connection: tremol ? 'tremol' : 'http', url: c.url } });
+    }
     if (c.kind === 'folder') setEdit({ ...edit, settings: { ...edit.settings, connection: 'folder', inbox: c.inbox, outbox: c.outbox } });
   };
   const usable = found?.candidates.filter((c) => c.kind === 'http' || c.kind === 'folder') ?? [];
@@ -466,6 +469,7 @@ const PROVIDER_FIELDS: Record<string, { settings: [string, string][]; secrets: [
       ['url', 'Program address on this computer, e.g. http://127.0.0.1:4444'], ['invoicePath', 'Path invoices are sent to (default /invoice)'], ['statusPath', 'Status address from the maker\'s documentation, e.g. /invoice/{invoiceNumber} (optional; without it a lost answer goes to reconciliation)'],
       ['inbox', 'Inbox folder the program reads, e.g. C:\\ETR\\in'], ['outbox', 'Outbox folder it answers in, e.g. C:\\ETR\\out'],
       ['operatorNum', 'Tremol operator / cashier number (default 1)'],
+      ['vatClassA', 'Tremol VAT class for KRA exempt tax A (1 to 5)'], ['vatClassB', 'Tremol VAT class for KRA 16% tax B (1 to 5)'], ['vatClassC', 'Tremol VAT class for KRA zero rate C (1 to 5)'], ['vatClassD', 'Tremol VAT class for KRA non-VAT D (1 to 5)'], ['vatClassE', 'Tremol VAT class for KRA 8% tax E (1 to 5)'],
       ['timeoutSeconds', 'Seconds to wait for the device (default 30)'],
       ['fieldInvoice', 'Answer field with the CU invoice number (only if not found)'], ['fieldSerial', 'Answer field with the CU serial (optional)'], ['fieldQr', 'Answer field with the QR link (optional)']],
     secrets: [['authHeader', 'Key header, if the program asks for one (e.g. X-Api-Key: abc)'], ['operatorPass', 'Tremol operator password (default 0000)']],
@@ -494,7 +498,7 @@ const OTHER_PROVIDERS: Record<string, string> = {
   daraja: 'Safaricom Daraja: STK push, Paybill / Buy Goods confirmations, B2C payouts.',
   oscu: 'Online signing with KRA servers. Needs internet at the till.',
   vscu: 'KRA software running on your shop network. Keeps signing when the internet is down.',
-  etr: 'A KRA ETR device (TIMS) plugged into the Afey POS computer, through the program that came with it. Signs every receipt with its CU invoice number.',
+  etr: 'A KRA ETR device (TIMS) connected through the maker’s program. For Tremol, the ZFP Lab Server must return KRA CU invoice details for Afey POS to mark a receipt signed.',
   talksasa: 'Kenyan SMS provider with sender IDs.',
   africastalking: "Africa's Talking SMS across Africa.",
   smtp: 'Any email account or service with SMTP (Gmail, Zoho, Mailgun, your host).',
@@ -728,7 +732,7 @@ export function IntegrationsPage() {
                   <Button size="sm" onClick={() => { setTestTo(''); setTesting(r); }}><Icon name="check" className="h-3.5 w-3.5" />Test</Button>
                   <Button size="sm" variant="secondary" onClick={() => { setError(null); setEdit({ ...r, settings: r.kind === 'etims' ? { ...r.settings, tin: r.settings?.tin || me?.tenant.settings?.taxPin || '', bhfId: r.settings?.bhfId || '00' } : r.settings, secrets: {} }); }}>Configure</Button>
                   {r.kind === 'mpesa' && <Button size="sm" variant="secondary" onClick={() => setC2b(r)}>Register C2B URLs</Button>}
-                  {r.kind === 'etims' && <Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/settings/integrations/${r.id}/etims/initialize`, { body: {} }).then((x) => { toast.success(`eTIMS device initialised: SCU ${x.data.sdcId}`); q.refetch(); }).catch(toast.error)}>Initialise device</Button>}
+                  {r.kind === 'etims' && <Button size="sm" variant="secondary" onClick={() => api<{ data: any }>(`/settings/integrations/${r.id}/etims/initialize`, { body: {} }).then((x) => { toast.success(x.data.cuSerial ? `Tremol connected: CU ${x.data.cuSerial}` : `eTIMS device initialised: SCU ${x.data.sdcId ?? 'ready'}`); q.refetch(); }).catch(toast.error)}>Initialise device</Button>}
                   {r.enabled
                     ? <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: `Turn off ${r.name}?`, message: 'It stops being used. Nothing is deleted and you can turn it on again.', confirmLabel: 'Turn off' })) api(`/settings/integrations/${r.id}`, { method: 'DELETE' }).then(() => { q.refetch(); toast.success('Turned off'); }).catch(toast.error); }}>Turn off</Button>
                     : <Button size="sm" variant="secondary" onClick={() => api(`/settings/integrations/${r.id}`, { method: 'PATCH', body: { enabled: true } }).then(() => { q.refetch(); toast.success('Turned on'); }).catch(toast.error)}>Turn on</Button>}
@@ -867,6 +871,7 @@ export function IntegrationsPage() {
                   || (['invoicePath', 'statusPath'].includes(k) && (edit.settings?.connection ?? 'http') !== 'http')
                   || (['inbox', 'outbox'].includes(k) && edit.settings?.connection !== 'folder')
                   || (k === 'operatorNum' && edit.settings?.connection !== 'tremol')
+                  || (k.startsWith('vatClass') && edit.settings?.connection !== 'tremol')
                   || (['url', 'invoicePath', 'statusPath', 'inbox', 'outbox', 'operatorNum', 'timeoutSeconds', 'fieldInvoice', 'fieldSerial', 'fieldQr'].includes(k) && edit.settings?.connection === 'simulator')
                 ) ? null : k === 'connection' && edit.provider === 'etr' ? (
                   <Field key={k} label={l}><Select value={edit.settings?.connection ?? 'http'} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, connection: e.target.value } })} options={[
@@ -878,6 +883,7 @@ export function IntegrationsPage() {
                   <Field key={k} label={l}><Input value={edit.settings?.[k] ?? ''} onChange={(e) => setEdit({ ...edit, settings: { ...edit.settings, [k]: k === 'port' ? Number(e.target.value) : e.target.value } })} /></Field>
                 ))}
               </div>
+              {edit.provider === 'etr' && edit.settings?.connection === 'tremol' && <p className="rounded-md bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Products need a matching 1–5 digit PLU programmed on the fiscal unit. Map each used KRA tax code to the unit’s VAT class. For non-cash tenders, its payment slot label must include the matching method (card, bank, mobile/M-Pesa, credit/account, or other). Afey checks the device status, PLUs, VAT rates, and receipt total before closing. The bundled ZFP SDK does not define KRA signatures; use a Kenya KRA-enabled program that returns the CU invoice number and QR fields.</p>}
               {edit.kind === 'mpesa' && edit.provider === 'daraja' && <Checkbox label="Double-check every callback with an STK status query" checked={Boolean(edit.settings?.verifyCallbacksWithQuery)} onChange={(v) => setEdit({ ...edit, settings: { ...edit.settings, verifyCallbacksWithQuery: v } })} />}
             </fieldset>
             {((edit.kind === 'payment' && info?.fields.some((f) => f.secret)) || (PROVIDER_FIELDS[edit.provider]?.secrets ?? []).length > 0) && (

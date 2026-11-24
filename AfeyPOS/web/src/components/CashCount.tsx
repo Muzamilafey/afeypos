@@ -6,24 +6,34 @@ import { cx } from './ui';
 
 export type CashCounts = Record<string, number>;
 
-/** Banknote colours close to the real notes (Kenya), so a cashier finds the row at a glance. */
-const KES_NOTE: Record<number, string> = { 100000: '#8a5a2b', 50000: '#b3372f', 20000: '#3a5ea8', 10000: '#6d3f8e', 5000: '#2f8a4e' };
-const NOTE_PALETTE = ['#8a5a2b', '#b3372f', '#3a5ea8', '#6d3f8e', '#2f8a4e', '#1f7a7a', '#7a6a1f'];
+/** Crops of the 2024 KES note fronts in the CBK guide (source link in public/images/currency/README.md). */
+const KES_NOTE_POSITION: Record<number, string> = {
+  100000: '48.7% 90.1%', 50000: '50% 74.8%', 20000: '51.8% 59.8%', 10000: '53.3% 45.1%', 5000: '54.7% 30.7%',
+};
+/** Fronts of the 20, 10, 5 and 1 shilling coins in the CBK coin guide; 50 cents uses the neutral fallback. */
+const KES_COIN_POSITION: Record<number, string> = { 2000: '90.8% 70.5%', 1000: '62.7% 70.5%', 500: '34.5% 70.5%', 100: '7% 70.5%' };
 const face = (d: Denomination) => (d.valueCents >= 100 ? (d.valueCents / 100).toLocaleString() : `${d.valueCents}¢`);
 
-function NoteChip({ d, index, currency }: { d: Denomination; index: number; currency: string }) {
-  const c = (currency === 'KES' ? KES_NOTE[d.valueCents] : undefined) ?? NOTE_PALETTE[index % NOTE_PALETTE.length];
+function NoteChip({ d, currency }: { d: Denomination; currency: string }) {
+  const kesPosition = currency === 'KES' ? KES_NOTE_POSITION[d.valueCents] : undefined;
+  if (kesPosition) return (
+    <span aria-hidden="true" title={`${face(d)} shilling note`} className="inline-flex h-9 w-[4.75rem] shrink-0 overflow-hidden rounded-[5px] bg-[#e4e8e6] shadow-sm ring-1 ring-black/10"
+      style={{ backgroundImage: 'url(/images/currency/cbk-kes-2024-notes.jpg)', backgroundSize: '360% auto', backgroundPosition: kesPosition }} />
+  );
   return (
-    <span aria-hidden="true" className="relative inline-flex h-9 w-[4.75rem] shrink-0 items-center justify-end overflow-hidden rounded-[5px] pr-1.5 text-white shadow-sm ring-1 ring-black/10"
-      style={{ background: `linear-gradient(135deg, ${c} 0%, ${c} 55%, rgba(255,255,255,0.25) 56%, ${c} 75%)` }}>
-      <span className="absolute left-1 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-white/50 bg-white/15" />
+    <span aria-hidden="true" className="relative inline-flex h-9 w-[4.75rem] shrink-0 items-center justify-end overflow-hidden rounded-[5px] bg-gradient-to-br from-slate-500 to-slate-800 pr-1.5 text-white shadow-sm ring-1 ring-black/10">
       <span className="text-sm font-black tabular-nums drop-shadow">{face(d)}</span>
     </span>
   );
 }
 
-function CoinChip({ d }: { d: Denomination }) {
-  // Bigger values in gold; the smallest coins in silver.
+function CoinChip({ d, currency }: { d: Denomination; currency: string }) {
+  const kesPosition = currency === 'KES' ? KES_COIN_POSITION[d.valueCents] : undefined;
+  if (kesPosition) return (
+    <span aria-hidden="true" title={`${face(d)} shilling coin`} className="inline-flex h-9 w-9 shrink-0 rounded-full bg-[#d1d4d2] shadow-sm ring-2 ring-white"
+      style={{ backgroundImage: 'url(/images/currency/cbk-kes-coins.jpg)', backgroundSize: '650% auto', backgroundPosition: kesPosition }} />
+  );
+  // A neutral coin chip keeps unsupported images identifiable by value.
   const gold = d.valueCents >= 500;
   return (
     <span aria-hidden="true" className={cx('inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-black shadow-sm ring-2', gold ? 'bg-gradient-to-br from-[#f2d36b] to-[#b8901f] text-[#3b2f0b] ring-[#e7c95a]' : 'bg-gradient-to-br from-[#eef0f3] to-[#a9b0b8] text-[#2b3036] ring-[#cfd4da]')}>
@@ -46,12 +56,12 @@ export function CashCount({ counts, onChange, autoFocus, label = 'Cash in the dr
   const sub = (kind: 'note' | 'coin') => denominationTotalCents(counts, list.filter((d) => d.kind === kind));
   const pieces = (kind: 'note' | 'coin') => list.filter((d) => d.kind === kind).reduce((a, d) => a + (counts[d.key] ?? 0), 0);
   const set = (d: Denomination, v: number) => onChange({ ...counts, [d.key]: Math.max(0, Math.min(100000, Math.floor(v) || 0)) });
-  const tile = (i: number, noteIndex: number) => {
+  const tile = (i: number) => {
     const d = list[i]!;
     const n = counts[d.key] ?? 0;
     return (
       <div key={d.key} className={cx('flex items-center gap-2 rounded-lg border px-2.5 py-2 transition', n > 0 ? 'border-emerald-300 bg-emerald-50/70 dark:border-emerald-800 dark:bg-emerald-950/30' : 'border-ink-100 bg-white dark:border-ink-800 dark:bg-ink-900')}>
-        {d.kind === 'note' ? <NoteChip d={d} index={noteIndex} currency={currency} /> : <CoinChip d={d} />}
+        {d.kind === 'note' ? <NoteChip d={d} currency={currency} /> : <CoinChip d={d} currency={currency} />}
         <div className="flex items-center">
           <button type="button" tabIndex={-1} aria-label={`One ${money(d.valueCents)} ${d.kind} less`} disabled={!n} onClick={() => set(d, n - 1)}
             className="flex h-9 w-8 items-center justify-center rounded-l-md border border-r-0 border-ink-200 text-lg font-bold text-ink-500 hover:bg-ink-50 disabled:opacity-40 dark:border-ink-700 dark:hover:bg-ink-800">−</button>
@@ -80,11 +90,11 @@ export function CashCount({ counts, onChange, autoFocus, label = 'Cash in the dr
     <fieldset className="space-y-4" aria-label={label}>
       <section>
         <div className="mb-1.5 flex items-baseline justify-between px-0.5 text-[11px] font-bold uppercase tracking-wide text-ink-500"><span>Notes</span><span className="normal-case tracking-normal">{pieces('note')} notes · <b className="text-ink-700 dark:text-ink-200">{money(sub('note'))}</b></span></div>
-        <div className={cx('grid gap-1.5', columns === 2 && 'xl:grid-cols-2')}>{notes.map((x, k) => tile(x.i, k))}</div>
+        <div className={cx('grid gap-1.5', columns === 2 && 'xl:grid-cols-2')}>{notes.map((x) => tile(x.i))}</div>
       </section>
       <section>
         <div className="mb-1.5 flex items-baseline justify-between px-0.5 text-[11px] font-bold uppercase tracking-wide text-ink-500"><span>Coins</span><span className="normal-case tracking-normal">{pieces('coin')} coins · <b className="text-ink-700 dark:text-ink-200">{money(sub('coin'))}</b></span></div>
-        <div className={cx('grid gap-1.5', columns === 2 && 'xl:grid-cols-2')}>{coins.map((x, k) => tile(x.i, k))}</div>
+        <div className={cx('grid gap-1.5', columns === 2 && 'xl:grid-cols-2')}>{coins.map((x) => tile(x.i))}</div>
       </section>
       <div className="overflow-hidden rounded-xl bg-gradient-to-r from-[#1f5a40] to-[#2f7d57] text-white shadow-sm">
         <div className="flex items-center justify-between px-4 py-3" data-testid="cash-count-total">

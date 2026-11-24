@@ -374,6 +374,7 @@ function assertEtrSettings(st: Record<string, unknown>) {
   if (how !== 'simulator' && env().DEPLOYMENT_MODE === 'hq') throw badRequest('ETR device: it is plugged into the shop computer, so set it up on that computer (the branch server), not on the online head office');
   if (how === 'http' && !/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost)/.test(String(st.url ?? ''))) throw badRequest('ETR device: enter the address of its program on this computer, e.g. http://127.0.0.1:4444');
   if (how === 'tremol' && st.url && !/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost)/.test(String(st.url))) throw badRequest('Tremol: the ZFP Lab Server address must be on this computer or the shop network, e.g. http://127.0.0.1:4444');
+  if (how === 'tremol') for (const code of ['A', 'B', 'C', 'D', 'E']) if (st[`vatClass${code}`] != null && st[`vatClass${code}`] !== '' && !/^[1-5]$/.test(String(st[`vatClass${code}`]))) throw badRequest(`Tremol VAT class for KRA tax code ${code} must be 1 to 5`);
   if (how === 'folder' && (!st.inbox || !st.outbox)) throw badRequest('ETR device: enter the inbox and outbox folders of its program');
 }
 

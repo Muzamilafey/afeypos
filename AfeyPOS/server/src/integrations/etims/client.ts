@@ -52,6 +52,8 @@ export interface EtimsItem {
 export interface EtimsSaleLine {
   itemSeq: number;
   itemCd: string;
+  /** Local fiscal-unit article number when an ETR uses a preprogrammed PLU catalogue. */
+  plu?: string | null;
   itemClsCd: string;
   itemNm: string;
   bcd?: string | null;
@@ -108,7 +110,7 @@ export interface EtimsSignature {
 }
 
 export interface EtimsGateway {
-  initialize(): Promise<{ sdcId?: string; mrcNo?: string; cmcKey?: string; bhfNm?: string; taxprNm?: string }>;
+  initialize(): Promise<{ sdcId?: string; cuSerial?: string; mrcNo?: string; cmcKey?: string; bhfNm?: string; taxprNm?: string }>;
   testConnection(): Promise<string>;
   saveItem(item: EtimsItem): Promise<void>;
   saveSale(sale: EtimsSale): Promise<EtimsSignature>;
@@ -192,7 +194,10 @@ export class EtimsClient implements EtimsGateway {
   }
 
   async saveSale(sale: EtimsSale) {
-    const r = await this.post<EtimsSignature>('/saveTrnsSalesOsdc', sale as unknown as Record<string, unknown>);
+    // PLU is local metadata for Tremol's device database, not a field in KRA's sale API.
+    const { itemList, ...header } = sale;
+    const kraSale = { ...header, itemList: itemList.map(({ plu: _plu, ...item }) => item) };
+    const r = await this.post<EtimsSignature>('/saveTrnsSalesOsdc', kraSale as unknown as Record<string, unknown>);
     if (!r.data?.rcptSign) {
       // "Already recorded" without the signature: a person must look it up, Afey POS will not guess it.
       if (ALREADY.has(String(r.resultCd))) throw new FiscalDuplicateError(`eTIMS ${r.resultCd}: ${r.resultMsg ?? 'invoice already recorded'} (invoice ${sale.invcNo})`, r);
