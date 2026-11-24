@@ -10,8 +10,10 @@ export type CashCounts = Record<string, number>;
 const KES_NOTE_POSITION: Record<number, string> = {
   100000: '48.7% 90.1%', 50000: '50% 74.8%', 20000: '51.8% 59.8%', 10000: '53.3% 45.1%', 5000: '54.7% 30.7%',
 };
-/** Fronts of the 20, 10, 5 and 1 shilling coins in the CBK coin guide; 50 cents uses the neutral fallback. */
-const KES_COIN_POSITION: Record<number, string> = { 2000: '90.8% 70.5%', 1000: '62.7% 70.5%', 500: '34.5% 70.5%', 100: '7% 70.5%' };
+/** Individual coin-face crops from the CBK coin guide; 50 cents uses the neutral fallback. */
+const KES_COIN_IMAGE: Record<number, string> = {
+  2000: 'coin-20-shillings.png', 1000: 'coin-10-shillings.png', 500: 'coin-5-shillings.png', 100: 'coin-1-shilling.png',
+};
 const face = (d: Denomination) => (d.valueCents >= 100 ? (d.valueCents / 100).toLocaleString() : `${d.valueCents}¢`);
 
 function NoteChip({ d, currency }: { d: Denomination; currency: string }) {
@@ -28,10 +30,10 @@ function NoteChip({ d, currency }: { d: Denomination; currency: string }) {
 }
 
 function CoinChip({ d, currency }: { d: Denomination; currency: string }) {
-  const kesPosition = currency === 'KES' ? KES_COIN_POSITION[d.valueCents] : undefined;
-  if (kesPosition) return (
+  const kesImage = currency === 'KES' ? KES_COIN_IMAGE[d.valueCents] : undefined;
+  if (kesImage) return (
     <span aria-hidden="true" title={`${face(d)} shilling coin`} className="inline-flex h-9 w-9 shrink-0 rounded-full bg-[#d1d4d2] shadow-sm ring-2 ring-white"
-      style={{ backgroundImage: 'url(/images/currency/cbk-kes-coins.jpg)', backgroundSize: '650% auto', backgroundPosition: kesPosition }} />
+      style={{ backgroundImage: `url(/images/currency/${kesImage})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
   );
   // A neutral coin chip keeps unsupported images identifiable by value.
   const gold = d.valueCents >= 500;
