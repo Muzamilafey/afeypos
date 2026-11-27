@@ -18,6 +18,11 @@ export interface MpesaAccount { id: string; name: string; environment: string; i
 
 /** A payment the till matched by amount only (Buy Goods): the cashier confirms it is this customer's before it counts. */
 export const needsConfirm = (i: any) => Boolean(i && (i.provider ?? 'mpesa') === 'mpesa' && i.status === 'succeeded' && i.source === 'c2b' && i.awaiting === 'expected' && (i.requiresConfirmation || !i.accountReference));
+const qrDataUri = (value: unknown) => {
+  if (!value) return null;
+  const image = String(value);
+  return image.startsWith('data:') ? image : `data:image/png;base64,${image}`;
+};
 
 export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, intent, setIntent, usedIds, onUse, confirmedIds = [], onConfirm }: {
   amount: number | null;
@@ -38,6 +43,7 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   const account = accounts.find((a) => a.id === accountId) ?? accounts[0];
   // Prompts and payments to the Paybill/Till are set up separately: offer only what this account does.
   const c2bOn = account?.c2b !== false;
+  const qrEnabled = account?.qr === true;
   const configId = accounts.length > 1 ? account?.id : undefined;
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
@@ -47,7 +53,8 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   const [qrCode, setQrCode] = useState<string | null>(null);
   const mine = intent && (intent.provider ?? 'mpesa') === 'mpesa' ? intent : null;
   // The background watch runs quietly beside the normal choices; only a payment the cashier started takes over.
-  const watching = useRef<{ amount: number; id: string } | null>(null);
+  const watching = useRef<{ amount: number; id: string; configId?: string; qr: boolean } | null>(null);
+  const watchGeneration = useRef(0);
   // Payments the cashier said are not this customer's: the next wait skips them.
   const skipped = useRef<string[]>([]);
   const askConfirm = needsConfirm(mine) && !confirmedIds.includes(mine.id);
@@ -59,8 +66,10 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
     const manual = !watching.current?.id || watching.current.id !== mine.id;
     watching.current = null;
     setIntent(null);
-    if (manual && !watchTill) {
-      setIntent((await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, skipReceipts: skipped.current } })).data);
+    if (manual && !watchTill && !qrEnabled) {
+      const data = (await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, qr: qrEnabled, skipReceipts: skipped.current } })).data;
+      setIntent(data);
+      setQrCode(qrDataUri(data.qrCode));
     }
   });
   // Enter = Continue, wherever the focus is.
@@ -100,13 +109,13 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
     setQrCode(null);
     setIntent((await api<{ data: any }>('/payments/mpesa/stk', { body: { clientRequestId: newRequestId(), amountCents: amount, phone, tillId, configId } })).data);
   });
-  const expect = (qr = false) => call(async () => {
+  const expect = (qr = qrEnabled) => call(async () => {
     await stopWatch();
     setFound(null);
     setQrCode(null);
     const data = (await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, qr, skipReceipts: skipped.current.length ? skipped.current : undefined } })).data;
     setIntent(data);
-    if (data.qrCode) setQrCode(String(data.qrCode).startsWith('data:') ? String(data.qrCode) : `data:image/png;base64,${data.qrCode}`);
+    setQrCode(qrDataUri(data.qrCode));
   });
   const lookup = () => call(async () => {
     setFound(null);
@@ -124,15 +133,16 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   };
   const cancel = async () => {
     await api(`/payments/intents/${mine.id}/cancel`, { body: {} }).catch(() => undefined);
-    watching.current = { amount: amount ?? 0, id: '' };
+    watching.current = { amount: amount ?? 0, id: '', configId, qr: qrEnabled };
     setQrCode(null);
     setIntent(null);
   };
   /** Stops the background watch before the cashier takes another route (a prompt, or a code). */
   const stopWatch = async () => {
+    watchGeneration.current += 1;
     const w = watching.current;
     // Keep the amount so the watch does not start itself again behind the route the cashier chose.
-    watching.current = { amount: amount ?? 0, id: '' };
+    watching.current = { amount: amount ?? 0, id: '', configId, qr: qrEnabled };
     const id = w?.id || (mine?.status === 'pending' ? mine.id : '');
     if (id) {
       await api(`/payments/intents/${id}/cancel`, { body: {} }).catch(() => undefined);
@@ -140,44 +150,65 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
     }
   };
 
+  const selectAccount = async (nextId: string) => {
+    watchGeneration.current += 1;
+    const activeId = watching.current?.id;
+    watching.current = null;
+    if (activeId) await api(`/payments/intents/${activeId}/cancel`, { body: {} }).catch(() => undefined);
+    setIntent(null);
+    setQrCode(null);
+    setError(null);
+    setAccountId(nextId);
+  };
+
   /**
    * Watching the till: as soon as M-Pesa is chosen the server starts waiting for a payment of this amount,
    * so the customer can simply pay the Till and the sale finishes by itself. Changing the amount starts again.
    */
   useEffect(() => {
-    if (!watchTill || !c2bOn || pending || mine?.status === 'succeeded' || !amount || amount % 100 !== 0) return;
-    if (watching.current?.amount === amount) return;
+    const shouldAutoWait = watchTill || qrEnabled;
+    if (!shouldAutoWait || !account || !c2bOn || pending || mine?.status === 'succeeded' || !amount || amount % 100 !== 0) return;
+    if (watching.current?.amount === amount && watching.current.configId === configId && watching.current.qr === qrEnabled) return;
     const started = watching.current;
-    watching.current = { amount, id: '' };
+    const generation = ++watchGeneration.current;
+    watching.current = { amount, id: '', configId, qr: qrEnabled };
     void (async () => {
       // Drop the previous wait (the cart changed), then wait for the new amount.
       if (started?.id) await api(`/payments/intents/${started.id}/cancel`, { body: {} }).catch(() => undefined);
       try {
-        const r = await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, skipReceipts: skipped.current.length ? skipped.current : undefined } });
-        watching.current = { amount, id: r.data.id };
+        const r = await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, qr: qrEnabled, skipReceipts: skipped.current.length ? skipped.current : undefined } });
+        if (generation !== watchGeneration.current) {
+          await api(`/payments/intents/${r.data.id}/cancel`, { body: {} }).catch(() => undefined);
+          return;
+        }
+        watching.current = { amount, id: r.data.id, configId, qr: qrEnabled };
         setIntent(r.data);
+        setQrCode(qrDataUri(r.data.qrCode));
       } catch {
         // No M-Pesa for this till, or it is offline: the cashier can still prompt or type the code.
-        watching.current = null;
+        if (generation === watchGeneration.current) watching.current = null;
       }
     })();
-  }, [watchTill, c2bOn, amount, tillId, configId, pending, mine?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [watchTill, c2bOn, qrEnabled, account?.id, accounts.length, amount, tillId, configId, pending, mine?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const field = 'h-12 text-base';
 
   useEffect(() => { setQrCode(null); }, [amount, account?.id]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-ink-200 bg-white dark:border-ink-700 dark:bg-ink-900">
+    <div className="mpesa-panel-container overflow-hidden rounded-xl border border-ink-200 bg-white dark:border-ink-700 dark:bg-ink-900">
       <div className="space-y-4 p-4">
-        {accounts.length > 1 && !pendingAny && (
+        {!found && !askConfirm && mine?.status !== 'succeeded' && <>
+        {accounts.length > 1 && (!pendingAny || autoWatch) && (
           <Field label="M-Pesa account" hint="Which Paybill or Till the money goes to">
-            <Select value={account?.id ?? ''} onChange={(e) => { setAccountId(e.target.value); setQrCode(null); setError(null); }}
+            <Select value={account?.id ?? ''} onChange={(e) => { void selectAccount(e.target.value); }}
               options={accounts.map((a) => ({ value: a.id, label: `${a.name} - ${a.payTo.type === 'till' ? 'Till' : 'Paybill'} ${a.payTo.number}${a.environment === 'sandbox' ? ' (test)' : ''}` }))} />
           </Field>
         )}
 
-        <section className="space-y-3 rounded-lg border border-ink-200 p-3 dark:border-ink-700" aria-label="Send M-Pesa prompt">
+        <div className="mpesa-options-grid">
+        <div className="mpesa-options-primary">
+        <section className="mpesa-prompt space-y-3 rounded-lg border border-ink-200 p-3 dark:border-ink-700" aria-label="Send M-Pesa prompt">
           <div>
             <h3 className="font-semibold text-ink-900 dark:text-white">Send prompt</h3>
             <p className="text-xs text-ink-500">Ask the customer to approve the payment on their phone.</p>
@@ -195,63 +226,65 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
             <p className="text-xs text-ink-500">Phone prompts are not configured for {account.name}. You can still use Paybill/Till or search by M-Pesa code.</p>
           )}
           {!pendingStk && (
-            <div className="flex gap-2">
-              <Input className={field} placeholder="Customer phone, e.g. 0712 345 678" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" aria-label="Customer phone"
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <Input className={cx(field, 'min-w-0 w-full')} placeholder="Customer phone, e.g. 0712 345 678" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" aria-label="Customer phone"
                 onKeyDown={(e) => { if (e.key === 'Enter' && phone && amount && whole && account?.stk) startStk(); }} />
-              <Button className="h-12 shrink-0 px-5" onClick={startStk} loading={busy} disabled={!account?.stk || !phone || !amount || !whole}><Icon name="phone" className="h-4 w-4" />Send prompt</Button>
+              <Button className="h-12 px-3 sm:px-4" onClick={startStk} loading={busy} disabled={!account?.stk || !phone || !amount || !whole}><Icon name="phone" className="h-4 w-4" />Send prompt</Button>
             </div>
           )}
         </section>
 
-        <section className="space-y-3 rounded-lg border border-ink-200 p-3 dark:border-ink-700" aria-label="Customer pays Paybill or Till">
+        <section className="mpesa-paybill space-y-3 rounded-lg border border-ink-200 p-3 dark:border-ink-700" aria-label="Customer pays Paybill or Till">
           <div>
             <h3 className="font-semibold text-ink-900 dark:text-white">Customer pays Paybill/Till</h3>
             <p className="text-xs text-ink-500">Show the payment details or a dynamic QR code. The sale updates when M-Pesa confirms payment.</p>
           </div>
           {pendingExpected ? (
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]" data-testid="mpesa-pay-to">
-              <div className="space-y-2">
-                <div className="grid gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-950 dark:bg-emerald-900/30 dark:text-emerald-100 sm:grid-cols-3">
-                  <div><div className="text-xs uppercase opacity-70">{mine.payToType === 'till' ? 'Buy Goods till' : 'Paybill'}</div><div className="text-xl font-semibold tabular-nums">{mine.shortCode}</div></div>
-                  {mine.accountReference ? <div><div className="text-xs uppercase opacity-70">{mine.payToType === 'till' ? 'Reference' : 'Account'}</div><div className="text-xl font-semibold tracking-wider">{mine.accountReference}</div></div> : null}
-                  <div><div className="text-xs uppercase opacity-70">Amount</div><div className="text-xl font-semibold tabular-nums">{money(mine.amountCents)}</div></div>
-                </div>
-                <MpesaWaiting compact title="Waiting for payment" />
-                {!qrCode && account?.qr && <Button className="w-full" variant="secondary" onClick={() => expect(true)} loading={busy}><Icon name="barcode" className="h-4 w-4" />Show dynamic QR code</Button>}
-                <div className="flex justify-center"><Button size="sm" variant="ghost" onClick={cancel}>Cancel Paybill/Till wait</Button></div>
+            <div className="space-y-3" data-testid="mpesa-pay-to">
+              <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg bg-emerald-50 p-3 text-emerald-950 dark:bg-emerald-900/30 dark:text-emerald-100">
+                <div className="min-w-0 rounded-md bg-white/60 p-2 dark:bg-black/10"><div className="text-[11px] uppercase leading-tight opacity-70">{mine.payToType === 'till' ? 'Buy Goods till' : 'Paybill'}</div><div className="break-words text-lg font-semibold tabular-nums">{mine.shortCode}</div></div>
+                {mine.accountReference ? <div className="min-w-0 rounded-md bg-white/60 p-2 dark:bg-black/10"><div className="text-[11px] uppercase leading-tight opacity-70">{mine.payToType === 'till' ? 'Reference' : 'Account'}</div><div className="break-words text-lg font-semibold tracking-wide">{mine.accountReference}</div></div> : null}
+                <div className="min-w-0 rounded-md bg-white/60 p-2 dark:bg-black/10"><div className="text-[11px] uppercase leading-tight opacity-70">Amount</div><div className="break-words text-lg font-semibold tabular-nums">{money(mine.amountCents)}</div></div>
               </div>
-              {qrCode && <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-ink-200 p-3 text-center dark:border-ink-700">
-                <img src={qrCode} alt="Dynamic M-Pesa payment QR code" className="h-44 w-44 object-contain" />
-                <span className="max-w-48 text-xs text-ink-600 dark:text-ink-300">Scan with the M-Pesa app or My Safaricom app</span>
-              </div>}
+              <div className="mpesa-payment-status">
+                <div className="space-y-2">
+                  <MpesaWaiting compact title="Waiting for payment" />
+                  <div className="flex justify-center"><Button size="sm" variant="ghost" onClick={cancel}>Cancel Paybill/Till wait</Button></div>
+                </div>
+                {qrCode && <div className="flex flex-col items-center justify-center gap-1 rounded-lg border border-ink-200 p-2 text-center dark:border-ink-700">
+                  <img src={qrCode} alt="Dynamic M-Pesa payment QR code" className="h-36 w-36 max-w-full object-contain" />
+                  <span className="text-[11px] leading-tight text-ink-600 dark:text-ink-300">Scan with M-Pesa or My Safaricom</span>
+                </div>}
+              </div>
+              {!qrCode && account?.qr && <Button className="w-full" variant="secondary" onClick={() => expect(true)} loading={busy}><Icon name="barcode" className="h-4 w-4" />Generate QR for this payment</Button>}
             </div>
           ) : (
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Button className="h-12" variant="secondary" onClick={() => expect()} loading={busy} disabled={!c2bOn || !amount || !whole}><Icon name="store" className="h-4 w-4" />Show payment details{amount ? ` for ${money(amount)}` : ''}</Button>
-              {account?.qr && <Button className="h-12" onClick={() => expect(true)} loading={busy} disabled={!c2bOn || !amount || !whole}><Icon name="barcode" className="h-4 w-4" />Generate QR and wait</Button>}
-            </div>
+            <Button className="h-12 w-full" variant="secondary" onClick={() => expect()} loading={busy} disabled={!c2bOn || !amount || !whole}><Icon name="store" className="h-4 w-4" />Show payment details{qrEnabled ? ' and QR' : ''}{amount ? ` for ${money(amount)}` : ''}</Button>
           )}
           {!c2bOn && <p className="text-xs text-ink-500">Paybill/Till payments are not configured for this account.</p>}
           {pendingAny && !pendingExpected && <p className="text-xs text-ink-500">Starting Paybill/Till details here will replace the active M-Pesa request.</p>}
         </section>
 
-        <section className="space-y-3 rounded-lg border border-ink-200 p-3 dark:border-ink-700" aria-label="Search M-Pesa code">
+        <section className="mpesa-code-search space-y-3 rounded-lg border border-ink-200 p-3 dark:border-ink-700" aria-label="Search M-Pesa code">
           <div>
             <h3 className="font-semibold text-ink-900 dark:text-white">Search M-Pesa code</h3>
             <p className="text-xs text-ink-500">Enter the receipt code from the customer's M-Pesa message to find the payment.</p>
           </div>
-          <div className="flex gap-2">
-            <Input className={cx(field, 'font-mono uppercase tracking-widest')} placeholder="e.g. SJK3AB12CD" value={code} maxLength={12} aria-label="M-Pesa code"
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <Input className={cx(field, 'min-w-0 w-full font-mono uppercase tracking-widest')} placeholder="e.g. SJK3AB12CD" value={code} maxLength={12} aria-label="M-Pesa code"
               onChange={(e) => { setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); setFound(null); }}
               onKeyDown={(e) => { if (e.key === 'Enter' && code.length >= 8) lookup(); }} />
-            <Button className="h-12 shrink-0 px-5" onClick={lookup} loading={busy} disabled={code.length < 8}><Icon name="search" className="h-4 w-4" />Find payment</Button>
+            <Button className="h-12 px-3 sm:px-4" onClick={lookup} loading={busy} disabled={code.length < 8}><Icon name="search" className="h-4 w-4" />Find payment</Button>
           </div>
           {pendingVerify && <div><MpesaWaiting compact title={<>Checking <span className="font-mono">{mine.accountReference}</span></>} /><div className="flex justify-center"><Button size="sm" variant="ghost" onClick={cancel}>Cancel code search</Button></div></div>}
           {pendingAny && !pendingVerify && <p className="text-xs text-ink-500">Searching by code will replace the active M-Pesa request.</p>}
         </section>
+        </div>
+        </div>
+        </>}
 
         {found && (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100" data-testid="mpesa-found">
+          <div className="mx-auto w-full max-w-2xl rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-100" data-testid="mpesa-found">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-xs font-semibold uppercase tracking-wide opacity-70">Payment found</div>
@@ -269,7 +302,7 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
         )}
 
         {askConfirm && (
-          <div className="space-y-3" data-testid="mpesa-confirm">
+          <div className="mx-auto w-full max-w-2xl space-y-3" data-testid="mpesa-confirm">
             <PaySuccess title="M-Pesa payment found" amountCents={mine.paidAmountCents ?? mine.amountCents} logo={<MpesaMark className="h-8" />}>
               {mpesaPayer(mine) ? <b>{mpesaPayer(mine)}</b> : 'M-Pesa customer'}{mine.receiptNumber ? <> · <span className="font-mono">{mine.receiptNumber}</span></> : null}
               {mine.transactionDate || mine.completedAt ? <div className="text-xs">Paid {dateTime(mine.transactionDate ?? mine.completedAt)}</div> : null}
@@ -283,7 +316,7 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
         )}
         {mine && mine.status === 'succeeded' && !askConfirm && <MpesaPaid intent={mine} />}
         {mine && ['failed', 'cancelled', 'expired'].includes(mine.status) && <ErrorBox error={`M-Pesa ${mine.status}: ${mine.resultDesc ?? ''}. Nothing was taken; try again or use another method.`} />}
-        {amount !== null && !whole && <p className="text-xs text-amber-600">M-Pesa accepts whole shillings only.</p>}
+        {!found && !askConfirm && mine?.status !== 'succeeded' && amount !== null && !whole && <p className="text-xs text-amber-600">M-Pesa accepts whole shillings only.</p>}
         <ErrorBox error={error} />
       </div>
     </div>

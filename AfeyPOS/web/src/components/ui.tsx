@@ -189,7 +189,7 @@ export function Loading() {
  */
 export function Modal({ open, onClose, title, subtitle, icon, children, footer, size = 'md', variant = 'drawer', dismissable = true }: {
   open: boolean; onClose: () => void; title: string; subtitle?: ReactNode; icon?: string; children: ReactNode; footer?: ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl'; variant?: 'center' | 'drawer';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl'; variant?: 'center' | 'drawer';
   /** false = a click outside and the Escape key do not close it (only the Close / action buttons do), so money is not lost by a stray click. */
   dismissable?: boolean;
 }) {
@@ -218,7 +218,7 @@ export function Modal({ open, onClose, title, subtitle, icon, children, footer, 
   }, [open, dismissable]);
   if (!open) return null;
   const drawer = variant === 'drawer';
-  const w = drawer ? (size === 'xl' ? 'sm:w-[70vw] sm:min-w-[560px]' : 'sm:w-1/2 sm:min-w-[460px]') : { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl' }[size];
+  const w = drawer ? (size === '2xl' ? 'modal-drawer-wide' : size === 'xl' ? 'sm:w-[70vw] sm:min-w-[560px]' : 'sm:w-1/2 sm:min-w-[460px]') : { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-3xl', xl: 'max-w-5xl', '2xl': 'max-w-[95vw]' }[size];
   return (
     <div className={cx('modal-backdrop fixed inset-0 z-50 flex bg-[#14171c]/55 backdrop-blur-[2px]', drawer ? 'items-end justify-end sm:items-stretch' : 'items-end justify-center sm:items-center sm:p-4')} onMouseDown={(e) => { if (dismissable && e.target === e.currentTarget) onClose(); }}>
       <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={id}

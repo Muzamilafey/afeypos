@@ -1356,10 +1356,10 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   });
 
   return (
-    <Modal open onClose={onClose} title={`Payment · ${money(total)}`} size="lg" dismissable={false}
+    <Modal open onClose={onClose} title={`Payment · ${money(total)}`} size="2xl" dismissable={false}
       footer={<><Button variant="secondary" onClick={onClose}>Back</Button><Button size="lg" loading={busy} disabled={!canComplete} onClick={() => complete()}>Complete sale</Button></>}>
-      <div className="grid gap-4 md:grid-cols-[1fr_220px]">
-        <div>
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="min-w-0">
           <div className="mb-3 flex flex-wrap gap-2">
             {methods.map((m) => <Button key={m.key} variant={method === m.key ? 'primary' : 'secondary'} onClick={() => setMethod(m.key)}>{m.label}</Button>)}
           </div>
@@ -1414,7 +1414,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
           {mpesaDone && remaining <= 0 && <div className="mt-3"><MpesaPaid intent={mpesaDone} /></div>}
           <div className="mt-3"><ErrorBox error={error} /></div>
         </div>
-        <div className="rounded-lg bg-ink-50 p-3 text-sm dark:bg-ink-800/50">
+        <div className="min-w-0 rounded-lg bg-ink-50 p-3 text-sm dark:bg-ink-800/50">
           {askPhone && !cart.customer && (
             <div className="mb-3">
               <Field label={custRules.required ? 'Customer phone (needed)' : 'Customer phone (for points)'} hint={custRules.awardLoyalty ? 'Loyalty points go to this number' : undefined}>

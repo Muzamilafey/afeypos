@@ -26,6 +26,24 @@
   .th { @apply border-b border-[#e7e9ec] bg-[#fafbfc] px-3 py-2 text-left text-[11px] font-bold uppercase tracking-wide text-ink-500 dark:border-ink-800 dark:bg-transparent dark:text-ink-400; }
   .td { @apply border-b border-[#f0f1f3] px-3 py-2 text-[13px] dark:border-ink-800; }
   .num { @apply text-right tabular-nums; }
+  .mpesa-panel-container { container-type: inline-size; }
+  .mpesa-options-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .mpesa-options-primary { display: contents; }
+  .mpesa-payment-status { display: grid; gap: 0.75rem; align-items: center; }
+  @container (min-width: 720px) {
+    .mpesa-options-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+    .mpesa-prompt { grid-column: 1; grid-row: 1; }
+    .mpesa-code-search { grid-column: 1; grid-row: 2; }
+    .mpesa-paybill { grid-column: 2; grid-row: 1 / span 2; }
+  }
+  @container (min-width: 900px) {
+    .mpesa-payment-status { grid-template-columns: minmax(0, 1fr) 160px; }
+  }
+}
+
+/* The expanded checkout drawer overrides Modal's default w-full utility on desktop only. */
+@media (min-width: 640px) {
+  .modal-drawer-wide { width: min(82vw, calc(100vw - 1rem)); min-width: min(680px, calc(100vw - 1rem)); }
 }
 
 @media print {
