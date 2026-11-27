@@ -5,7 +5,7 @@ import { Button, cx, ErrorBox, Field, Input, Select } from './ui';
 import { Icon } from './icons';
 import { MpesaMark, MpesaWaiting, PaySuccess } from './PayVisuals';
 
-type Mode = 'stk' | 'paybill' | 'code';
+type Mode = 'stk' | 'paybill' | 'qr' | 'code';
 
 /**
  * M-Pesa at the till: a prompt on the customer's phone (STK), the customer paying the Paybill/Till
@@ -15,6 +15,7 @@ type Mode = 'stk' | 'paybill' | 'code';
 const MODES: { key: Mode; label: string; hint: string; icon: string }[] = [
   { key: 'stk', label: 'Send prompt', hint: 'The customer gets a PIN prompt on their phone', icon: 'phone' },
   { key: 'paybill', label: 'Customer pays Paybill/Till', hint: 'The customer pays from their phone; the sale continues when it arrives', icon: 'store' },
+  { key: 'qr', label: 'Scan M-Pesa QR', hint: 'Scan the amount-specific QR using M-Pesa or My Safaricom', icon: 'barcode' },
   { key: 'code', label: 'Enter M-Pesa code', hint: 'The customer already paid: type the code from their M-Pesa SMS', icon: 'search' },
 ];
 
@@ -22,10 +23,10 @@ const MODES: { key: Mode; label: string; hint: string; icon: string }[] = [
  * Payments that reached the Paybill/Till without a sale are not listed at the till (anyone could pick a
  * stranger's payment): the cashier finds one only by its M-Pesa code, checks the name and amount, then uses it.
  */
-export interface MpesaAccount { id: string; name: string; environment: string; isDefault: boolean; payTo: { type: 'paybill' | 'till'; number: string }; stk: boolean; c2b?: boolean }
+export interface MpesaAccount { id: string; name: string; environment: string; isDefault: boolean; payTo: { type: 'paybill' | 'till'; number: string }; stk: boolean; c2b?: boolean; qr?: boolean }
 
 /** A payment the till matched by amount only (Buy Goods): the cashier confirms it is this customer's before it counts. */
-export const needsConfirm = (i: any) => Boolean(i && (i.provider ?? 'mpesa') === 'mpesa' && i.status === 'succeeded' && i.source === 'c2b' && i.awaiting === 'expected' && !i.accountReference);
+export const needsConfirm = (i: any) => Boolean(i && (i.provider ?? 'mpesa') === 'mpesa' && i.status === 'succeeded' && i.source === 'c2b' && i.awaiting === 'expected' && (i.requiresConfirmation || !i.accountReference));
 
 export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, intent, setIntent, usedIds, onUse, confirmedIds = [], onConfirm }: {
   amount: number | null;
@@ -47,7 +48,7 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   const account = accounts.find((a) => a.id === accountId) ?? accounts[0];
   // Prompts and payments to the Paybill/Till are set up separately: offer only what this account does.
   const c2bOn = account?.c2b !== false;
-  const modes = MODES.filter((m) => (m.key === 'stk' ? account?.stk !== false : m.key === 'paybill' ? c2bOn : true));
+  const modes = MODES.filter((m) => (m.key === 'stk' ? account?.stk !== false : m.key === 'paybill' ? c2bOn : m.key === 'qr' ? c2bOn && account?.qr === true : true));
   const mode: Mode = modes.some((m) => m.key === chosenMode) ? chosenMode : modes[0]!.key;
   const configId = accounts.length > 1 ? account?.id : undefined;
   const [phone, setPhone] = useState('');
@@ -55,6 +56,7 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   const [found, setFound] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [qrCode, setQrCode] = useState<string | null>(null);
   const mine = intent && (intent.provider ?? 'mpesa') === 'mpesa' ? intent : null;
   // The background watch runs quietly beside the normal choices; only a payment the cashier started takes over.
   const watching = useRef<{ amount: number; id: string } | null>(null);
@@ -102,11 +104,15 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   };
   const startStk = () => call(async () => {
     await stopWatch();
+    setQrCode(null);
     setIntent((await api<{ data: any }>('/payments/mpesa/stk', { body: { clientRequestId: newRequestId(), amountCents: amount, phone, tillId, configId } })).data);
   });
-  const expect = () => call(async () => {
+  const expect = (qr = false) => call(async () => {
     await stopWatch();
-    setIntent((await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, skipReceipts: skipped.current.length ? skipped.current : undefined } })).data);
+    setQrCode(null);
+    const data = (await api<{ data: any }>('/payments/mpesa/expect', { body: { clientRequestId: newRequestId(), amountCents: amount, tillId, configId, qr, skipReceipts: skipped.current.length ? skipped.current : undefined } })).data;
+    setIntent(data);
+    if (data.qrCode) setQrCode(String(data.qrCode).startsWith('data:') ? String(data.qrCode) : `data:image/png;base64,${data.qrCode}`);
   });
   const lookup = () => call(async () => {
     setFound(null);
@@ -124,6 +130,7 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
   };
   const cancel = async () => {
     await api(`/payments/intents/${mine.id}/cancel`, { body: {} }).catch(() => undefined);
+    setQrCode(null);
     setIntent(null);
   };
   /** Stops the background watch before the cashier takes another route (a prompt, or a code). */
@@ -162,12 +169,14 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
 
   const field = 'h-12 text-base';
 
+  useEffect(() => { setQrCode(null); }, [amount, account?.id]);
+
   return (
     <div className="overflow-hidden rounded-xl border border-ink-200 bg-white dark:border-ink-700 dark:bg-ink-900">
       {!pending && (
-        <div className={cx('grid border-b border-ink-200 bg-ink-50 dark:border-ink-700 dark:bg-ink-800/60', modes.length === 3 ? 'grid-cols-3' : 'grid-cols-2')} role="radiogroup" aria-label="How the customer pays with M-Pesa">
+        <div className={cx('grid border-b border-ink-200 bg-ink-50 dark:border-ink-700 dark:bg-ink-800/60', modes.length === 4 ? 'grid-cols-4' : modes.length === 3 ? 'grid-cols-3' : 'grid-cols-2')} role="radiogroup" aria-label="How the customer pays with M-Pesa">
           {modes.map((m) => (
-            <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} onClick={() => { setMode(m.key); setError(null); setFound(null); }}
+            <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} onClick={() => { setMode(m.key); setError(null); setFound(null); if (m.key !== 'qr') setQrCode(null); }}
               className={cx('flex flex-col items-center gap-1 border-b-2 px-2 py-2.5 text-center text-[13px] font-semibold leading-tight transition-colors',
                 mode === m.key ? 'border-emerald-600 bg-white text-emerald-700 dark:bg-ink-900 dark:text-emerald-300' : 'border-transparent text-ink-500 hover:bg-white/60 hover:text-ink-800 dark:text-ink-400 dark:hover:bg-ink-900/50')}>
               <Icon name={m.icon} className="h-5 w-5" />{m.label}
@@ -201,20 +210,20 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
           </div>
         )}
         {pending && mine.awaiting === 'expected' && (
-          <div className="space-y-2" data-testid="mpesa-pay-to">
-            <div className="grid gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-950 dark:bg-emerald-900/30 dark:text-emerald-100 sm:grid-cols-3">
-              {mine.accountReference ? (
-                <>
-                  <div><div className="text-xs uppercase opacity-70">Paybill</div><div className="text-xl font-semibold tabular-nums">{mine.shortCode}</div></div>
-                  <div><div className="text-xs uppercase opacity-70">Account</div><div className="text-xl font-semibold tracking-wider">{mine.accountReference}</div></div>
-                </>
-              ) : (
-                <div className="sm:col-span-2"><div className="text-xs uppercase opacity-70">Buy Goods till</div><div className="text-xl font-semibold tabular-nums">{mine.shortCode}</div></div>
-              )}
-              <div><div className="text-xs uppercase opacity-70">Amount</div><div className="text-xl font-semibold tabular-nums">{money(mine.amountCents)}</div></div>
+          <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto]" data-testid="mpesa-pay-to">
+            <div className="space-y-2">
+              <div className="grid gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-950 dark:bg-emerald-900/30 dark:text-emerald-100 sm:grid-cols-3">
+                <div><div className="text-xs uppercase opacity-70">{mine.payToType === 'till' ? 'Buy Goods till' : 'Paybill'}</div><div className="text-xl font-semibold tabular-nums">{mine.shortCode}</div></div>
+                {mine.accountReference ? <div><div className="text-xs uppercase opacity-70">{mine.payToType === 'till' ? 'Reference' : 'Account'}</div><div className="text-xl font-semibold tracking-wider">{mine.accountReference}</div></div> : null}
+                <div><div className="text-xs uppercase opacity-70">Amount</div><div className="text-xl font-semibold tabular-nums">{money(mine.amountCents)}</div></div>
+              </div>
+              <MpesaWaiting compact title="Waiting for payment" />
+              <div className="flex justify-center"><Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button></div>
             </div>
-            <MpesaWaiting compact title="Waiting for payment" />
-            <div className="flex justify-center"><Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button></div>
+            {qrCode && <div className="flex flex-col items-center gap-2 rounded-lg border border-ink-200 p-3 text-center dark:border-ink-700">
+              <img src={qrCode} alt="Dynamic M-Pesa payment QR code" className="h-44 w-44 object-contain" />
+              <span className="max-w-48 text-xs text-ink-600 dark:text-ink-300">Scan with the M-Pesa app or My Safaricom app</span>
+            </div>}
           </div>
         )}
         {pending && mine.awaiting === 'verify' && (
@@ -235,7 +244,10 @@ export function MpesaPanel({ amount, tillId, accounts = [], watchTill = false, i
           </div>
         )}
         {!pending && mode === 'paybill' && (
-          <Button className="h-12 w-full" onClick={expect} loading={busy} disabled={!amount || !whole}><Icon name="store" className="h-4 w-4" />Show payment details{amount ? ` for ${money(amount)}` : ''}</Button>
+          <Button className="h-12 w-full" onClick={() => expect()} loading={busy} disabled={!amount || !whole}><Icon name="store" className="h-4 w-4" />Show payment details{amount ? ` for ${money(amount)}` : ''}</Button>
+        )}
+        {!pending && mode === 'qr' && (
+          <Button className="h-12 w-full" onClick={() => expect(true)} loading={busy} disabled={!amount || !whole}><Icon name="barcode" className="h-4 w-4" />Generate QR and wait{amount ? ` for ${money(amount)}` : ''}</Button>
         )}
         {!pending && mode === 'code' && (
           <div className="flex gap-2">

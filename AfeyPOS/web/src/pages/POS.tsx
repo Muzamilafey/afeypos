@@ -39,6 +39,12 @@ interface Cart { id: string; label: string; lines: Line[]; customer: { _id: stri
 interface Payment { method: string; amountCents: number; tenderedCents?: number; reference?: string; paymentIntentId?: string; terminalTransactionId?: string; label?: string }
 
 const newCart = (n: number, priceList: PriceListKey): Cart => ({ id: newRequestId(), label: `Sale ${n}`, lines: [], customer: null, priceList, cartDiscountCents: 0, couponCode: '', ageVerified: false });
+const nextCartNumber = (carts: Cart[]) => {
+  const used = new Set(carts.map((c) => Number(/^Sale (\d+)$/.exec(c.label)?.[1])).filter(Number.isInteger));
+  let n = 1;
+  while (used.has(n)) n++;
+  return n;
+};
 
 export function POSPage() {
   const { me } = useAuth();
@@ -488,7 +494,7 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
 
   const suspend = () => {
     if (!cart.lines.length || !rules.items.holdAllowed) return;
-    setCarts((cs) => [...cs, newCart(cs.length + 1, caps.checkout.defaultPriceList)]);
+    setCarts((cs) => [...cs, newCart(nextCartNumber(cs), caps.checkout.defaultPriceList)]);
     setActive(carts.length);
     toast.info(`${cart.label} suspended`);
   };
@@ -815,15 +821,28 @@ function Checkout({ till, shift, onShiftClosed }: { till: { _id: string; name: s
       )}
       {panel?.kind === 'resume' && (
         <Modal open onClose={() => setPanel(null)} title="Held sales" icon="play" subtitle="Pick a sale to continue it. The current sale stays on hold." size="sm">
-          <ul className="divide-y divide-ink-100 dark:divide-ink-800">
-            {held.map(({ c, i }) => (
-              <li key={c.id} className="flex items-center gap-3 py-2.5">
-                <div className="min-w-0 flex-1"><div className="font-semibold">{c.label}</div><div className="text-xs text-ink-500">{c.lines.length} line(s){c.customer ? ` · ${c.customer.name}` : ''}</div></div>
-                <Button size="sm" onClick={() => { setActive(i); setPanel(null); searchRef.current?.focus(); }}>Resume</Button>
-                <Button size="sm" variant="ghost" aria-label={`Discard ${c.label}`} onClick={() => clearCart(i)}><Icon name="trash" className="h-4 w-4" /></Button>
-              </li>
-            ))}
-          </ul>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm" aria-label="Held sales list">
+              <thead>
+                <tr><th className="th">Sale ID</th><th className="th text-right">Lines</th><th className="th">Customer</th><th className="th text-right">Actions</th></tr>
+              </thead>
+              <tbody>
+                {held.map(({ c, i }) => (
+                  <tr key={c.id}>
+                    <td className="td whitespace-nowrap font-semibold">{c.label}</td>
+                    <td className="td text-right tabular-nums">{c.lines.length}</td>
+                    <td className="td max-w-40 truncate">{c.customer?.name ?? 'Walk-in'}</td>
+                    <td className="td whitespace-nowrap text-right">
+                      <div className="inline-flex items-center gap-1">
+                        <Button size="sm" onClick={() => { setActive(i); setPanel(null); searchRef.current?.focus(); }}>Resume</Button>
+                        <Button size="sm" variant="ghost" aria-label={`Discard ${c.label}`} onClick={() => clearCart(i)}><Icon name="trash" className="h-4 w-4" /></Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Modal>
       )}
       {panel?.kind === 'browse' && (

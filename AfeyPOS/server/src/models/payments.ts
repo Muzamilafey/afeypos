@@ -16,6 +16,9 @@ const paymentIntentSchema = new Schema(
     phone: String,
     payerName: String,
     accountReference: String,
+    payToType: { type: String, enum: ['paybill', 'till'] },
+    /** Till QR receipts are matched to a unique reference where available, then still confirmed by the cashier. */
+    requiresConfirmation: Boolean,
     shortCode: String,
     branchId: ObjectId,
     tillId: ObjectId,

@@ -10,6 +10,7 @@ import { audit } from '../../lib/audit.js';
 import { enqueue } from '../../jobs/queue.js';
 import { etimsDevicesForTill } from './service.js';
 import { openSecrets, sealSecrets } from '../integrations/configs.js';
+import type { EtimsGateway } from '../../integrations/etims/client.js';
 import { etimsGateway, queueItemRegistration } from './service.js';
 import { fiscalRoutes } from './fiscalRoutes.js';
 import { FISCAL_NEEDS_ATTENTION, FISCAL_OPEN } from '../../integrations/fiscal/adapter.js';
@@ -21,11 +22,23 @@ router.use(fiscalRoutes);
 router.post('/settings/integrations/:id/etims/initialize', requirePermission('integrations.manage'), async (req, res) => {
   const cfg = await IntegrationConfig.findOne({ _id: idParam(req.params.id), kind: 'etims' });
   if (!cfg) throw notFound('eTIMS configuration');
-  const info = await etimsGateway(cfg).initialize();
-  cfg.settings = { ...(cfg.settings ?? {}), ...(info.sdcId ? { sdcId: info.sdcId } : {}), ...(info.cuSerial ? { cuSerial: info.cuSerial } : {}), mrcNo: info.mrcNo, registeredName: info.taxprNm, branchName: info.bhfNm, initializedAt: new Date().toISOString() };
+  let info: Awaited<ReturnType<EtimsGateway['initialize']>>;
+  try {
+    info = await etimsGateway(cfg).initialize();
+  } catch (err: any) {
+    // Keep the cause visible on the integration card as well as in the immediate response.
+    try {
+      cfg.lastTest = { at: new Date(), ok: false, message: err?.message ?? 'Could not initialise the eTIMS device' } as any;
+      await cfg.save();
+    } catch {
+      // Preserve the initialization error if its diagnostic status could not be saved.
+    }
+    throw err;
+  }
+  cfg.settings = { ...(cfg.settings ?? {}), ...(info.sdcId ? { sdcId: info.sdcId } : {}), ...(info.cuSerial ? { cuSerial: info.cuSerial } : {}), ...(info.vscuApiVersion ? { vscuApiVersion: info.vscuApiVersion } : {}), mrcNo: info.mrcNo, registeredName: info.taxprNm, branchName: info.bhfNm, initializedAt: new Date().toISOString() };
   cfg.markModified('settings');
   if (info.cmcKey) cfg.secretsEnc = sealSecrets(cfg._id, { ...openSecrets(cfg), cmcKey: info.cmcKey });
-  cfg.lastTest = { at: new Date(), ok: true, message: info.cuSerial ? `Connected Tremol CU ${info.cuSerial}` : `Initialised: SCU ${info.sdcId ?? '?'}` } as any;
+  cfg.lastTest = { at: new Date(), ok: true, message: info.cuSerial ? `Connected Tremol CU ${info.cuSerial}` : cfg.provider === 'vscu' ? `VSCU initialised${info.sdcId ? `: SCU ${info.sdcId}` : ''}` : `Initialised: SCU ${info.sdcId ?? '?'}` } as any;
   await cfg.save();
   await audit(req, { action: 'etims.initialized', entity: 'IntegrationConfig', entityId: cfg._id, details: { sdcId: info.sdcId, cuSerial: info.cuSerial, mrcNo: info.mrcNo } });
   res.json({ data: { sdcId: info.sdcId, cuSerial: info.cuSerial, mrcNo: info.mrcNo, taxpayer: info.taxprNm, branch: info.bhfNm } });
@@ -48,7 +61,7 @@ router.get('/etims/devices', requirePermission('sales.create'), async (req, res)
   res.json({
     data: devices.map((c, i) => ({
       id: c._id, name: c.name, mode: c.provider === 'vscu' ? 'vscu' : c.provider === 'etr' ? 'etr' : 'oscu', environment: c.environment, isDefault: i === 0,
-      tin: c.settings?.tin ?? '', bhfId: c.settings?.bhfId ?? '00', serial: c.settings?.dvcSrlNo ?? c.settings?.cuSerial ?? '', initialised: Boolean(c.settings?.sdcId),
+      tin: c.settings?.tin ?? '', bhfId: c.settings?.bhfId ?? '00', serial: c.settings?.dvcSrlNo ?? c.settings?.cuSerial ?? '', initialised: Boolean(c.settings?.initializedAt || c.settings?.sdcId),
     })),
   });
 });

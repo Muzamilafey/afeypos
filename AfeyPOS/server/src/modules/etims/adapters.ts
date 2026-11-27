@@ -77,7 +77,7 @@ export function etimsGateway(cfg: Cfg): EtimsGateway {
   }
   return new EtimsClient({
     mode: cfg.provider === 'vscu' ? 'vscu' : 'oscu', environment: cfg.environment as 'sandbox' | 'production',
-    tin: String(s.tin ?? ''), bhfId: String(s.bhfId ?? '00'), dvcSrlNo: s.dvcSrlNo, baseUrl: s.baseUrl, cmcKey: openSecrets(cfg).cmcKey,
+    tin: String(s.tin ?? ''), bhfId: String(s.bhfId ?? '00'), dvcSrlNo: s.dvcSrlNo, baseUrl: s.baseUrl, cmcKey: openSecrets(cfg).cmcKey, vscuApiVersion: s.vscuApiVersion,
   });
 }
 
@@ -111,7 +111,8 @@ class ConfiguredAdapter implements FiscalAdapter {
     if (!/^\d{2}$/.test(String(s.bhfId ?? ''))) problems.push('KRA branch id must be two digits ("00" for head office)');
     if ((this.kind === 'mock' || this.kind === 'etr_simulator') && this.cfg.environment === 'production') problems.push('A simulator cannot be used in production');
     if (this.kind === 'oscu' || this.kind === 'vscu') {
-      if (!openSecrets(this.cfg).cmcKey) problems.push('Not initialised with KRA yet (press Initialise)');
+      const initialized = this.kind === 'vscu' ? Boolean(s.initializedAt) : Boolean(openSecrets(this.cfg).cmcKey);
+      if (!initialized) problems.push('Not initialised with KRA yet (press Initialise)');
       if (this.kind === 'vscu' && !s.baseUrl) problems.push('VSCU address is missing');
     }
     if (this.kind === 'etr_http' && !s.url) problems.push('Address of the ETR program is missing');
@@ -154,7 +155,7 @@ class ConfiguredAdapter implements FiscalAdapter {
         return r.ok ? { state: 'online', message: `Tremol ZFP Lab Server ${r.message}` } : { state: 'offline', message: `Tremol ZFP Lab Server not reached (${r.message})` };
       }
       case 'vscu': {
-        if (!openSecrets(this.cfg).cmcKey) return { state: 'offline', message: 'Not initialised' };
+        if (!s.initializedAt) return { state: 'offline', message: 'Not initialised' };
         const r = await reachable(String(s.baseUrl ?? ''));
         return r.ok ? { state: 'online', message: `VSCU ${r.message}` } : { state: 'offline', message: `VSCU not reached (${r.message})` };
       }
@@ -168,6 +169,10 @@ class ConfiguredAdapter implements FiscalAdapter {
   async testConnection(): Promise<DeviceStatus> {
     if (this.kind === 'etr_tremol') {
       try { return { state: 'online', message: await (this.gw as TremolGateway).testConnection() }; }
+      catch (err: any) { return { state: 'offline', message: String(err?.message ?? err) }; }
+    }
+    if (this.kind === 'vscu') {
+      try { return { state: 'online', message: await this.gw.testConnection() }; }
       catch (err: any) { return { state: 'offline', message: String(err?.message ?? err) }; }
     }
     if (this.kind !== 'oscu') return this.getStatus();

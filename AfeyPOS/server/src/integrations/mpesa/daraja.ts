@@ -41,6 +41,22 @@ export interface B2CRequest {
   timeoutUrl: string;
 }
 
+export interface DynamicQRCodeRequest {
+  merchantName: string;
+  reference: string;
+  amount: number;
+  transactionCode: 'BG' | 'PB';
+  cpi: string;
+}
+
+export interface DynamicQRCodeResponse {
+  ResponseCode?: string;
+  ResponseDescription?: string;
+  QRCode?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
 export interface AsyncAccepted {
   ConversationID?: string;
   OriginatorConversationID?: string;
@@ -112,6 +128,8 @@ export interface MpesaGateway {
   transactionStatus(req: TransactionStatusRequest): Promise<AsyncAccepted>;
   /** Sends money to a phone (salaries, refunds); the result arrives at resultUrl. */
   b2c(req: B2CRequest): Promise<AsyncAccepted>;
+  /** Creates a Safaricom dynamic QR containing this payment's amount and account reference. */
+  dynamicQRCode(req: DynamicQRCodeRequest): Promise<string>;
   testCredentials(): Promise<void>;
 }
 
@@ -245,6 +263,28 @@ export class DarajaClient implements MpesaGateway {
     });
   }
 
+  async dynamicQRCode(req: DynamicQRCodeRequest): Promise<string> {
+    if (!Number.isInteger(req.amount) || req.amount < 1) throw new IntegrationError('M-Pesa QR amounts must be whole shillings of at least 1', undefined, undefined, false);
+    const merchantName = req.merchantName.trim().slice(0, 22);
+    const reference = req.reference.trim().replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
+    const cpi = req.cpi.trim();
+    if (!merchantName || !reference || !cpi) throw new IntegrationError('Merchant name, QR reference and M-Pesa business number are required for a dynamic QR', undefined, undefined, false);
+    const r = await this.post<DynamicQRCodeResponse>('/mpesa/qrcode/v1/generate', {
+      MerchantName: merchantName,
+      RefNo: reference,
+      Amount: String(req.amount),
+      TrxCode: req.transactionCode,
+      CPI: cpi,
+      Size: '300',
+    });
+    const code = String(r.QRCode ?? '').trim();
+    const responseCode = String(r.ResponseCode ?? '');
+    if (r.errorCode || (responseCode && !['00', '0', '00000000'].includes(responseCode)) || !code) {
+      throw new IntegrationError(r.errorMessage ?? r.ResponseDescription ?? `Safaricom did not return a dynamic QR code${responseCode ? ` (${responseCode})` : ''}`, undefined, r, false);
+    }
+    return code;
+  }
+
   async testCredentials() {
     await this.token();
   }
@@ -284,6 +324,9 @@ export class MockMpesaGateway implements MpesaGateway {
   async b2c(req: B2CRequest): Promise<AsyncAccepted> {
     MockMpesaGateway.payouts.push(req);
     return { ResponseCode: '0', ConversationID: `AG_MOCK_B2C_${MockMpesaGateway.payouts.length}`, OriginatorConversationID: req.originatorConversationId, ResponseDescription: 'Accept the service request successfully.' };
+  }
+  async dynamicQRCode(): Promise<string> {
+    throw new IntegrationError('Dynamic QR payments require a live Daraja M-Pesa account', undefined, undefined, false);
   }
   async testCredentials() {}
 }

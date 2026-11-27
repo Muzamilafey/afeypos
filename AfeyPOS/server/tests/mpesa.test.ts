@@ -47,6 +47,25 @@ describe('Daraja helpers', () => {
     const parsed = parseStkCallback(buildStkCallback('ws_1', 'm1', 0, 150, '254712345678', 'RCP123'));
     expect(parsed).toMatchObject({ checkoutRequestId: 'ws_1', resultCode: 0, amount: 150, receiptNumber: 'RCP123' });
   });
+
+  it('requests a Safaricom dynamic QR with the right till, amount and reference', async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: any, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return String(url).includes('oauth')
+        ? new Response(JSON.stringify({ access_token: 'qr-token', expires_in: '3599' }))
+        : new Response(JSON.stringify({ ResponseCode: '00', QRCode: 'cXJjb2RlLWJhc2U2NA==' }));
+    });
+    try {
+      const client = new DarajaClient({ environment: 'sandbox', consumerKey: 'qr-key', consumerSecret: 'qr-secret', passkey: 'unused', shortCode: '1261162', type: 'till', tillNumber: '1731901' });
+      await expect(client.dynamicQRCode({ merchantName: 'Afey Supermarket', reference: 'TILL00000042', amount: 180, transactionCode: 'BG', cpi: '1731901' })).resolves.toBe('cXJjb2RlLWJhc2U2NA==');
+      expect(calls[1]!.url).toBe('https://sandbox.safaricom.co.ke/mpesa/qrcode/v1/generate');
+      expect(JSON.parse(String(calls[1]!.init?.body))).toEqual({ MerchantName: 'Afey Supermarket', RefNo: 'TILL00000042', Amount: '180', TrxCode: 'BG', CPI: '1731901', Size: '300' });
+      expect((calls[1]!.init?.headers as Record<string, string>).Authorization).toBe('Bearer qr-token');
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
 });
 
 describe('STK push lifecycle', () => {
@@ -143,6 +162,37 @@ describe('C2B', () => {
     expect((await t.client.get('/payments/intents?source=c2b&unallocated=true')).body.data).toHaveLength(0);
     const rec = await t.client.get('/payments/mpesa/reconciliation');
     expect(rec.status).toBe(200);
+  });
+
+  it('creates a dynamic QR for the current Buy Goods amount and waits for its confirmed receipt', async () => {
+    const cfg = await t.client.post('/settings/integrations', {
+      kind: 'mpesa', provider: 'daraja', name: 'QR till', environment: 'sandbox',
+      settings: { shortCode: '1261162', type: 'till', tillNumber: '1731901' },
+      secrets: { consumerKey: 'qr-route-key', consumerSecret: 'qr-route-secret', passkey: 'unused' },
+    });
+    expect(cfg.status).toBe(201);
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: any, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return String(url).includes('oauth')
+        ? new Response(JSON.stringify({ access_token: 'qr-route-token', expires_in: '3599' }))
+        : new Response(JSON.stringify({ ResponseCode: '00', QRCode: 'dGlsbC1xci1pbWFnZQ==' }));
+    });
+    try {
+      const accounts = (await t.client.get(`/payments/mpesa/accounts?tillId=${till}`)).body.data;
+      expect(accounts.find((a: any) => a.id === cfg.body.data.id).qr).toBe(true);
+      const waiting = await t.client.post('/payments/mpesa/expect', { clientRequestId: rid(), amountCents: 18000, tillId: till, configId: cfg.body.data.id, qr: true });
+      expect(waiting.status).toBe(201);
+      expect(waiting.body.data).toMatchObject({ amountCents: 18000, shortCode: '1731901', payToType: 'till', requiresConfirmation: true, qrCode: 'dGlsbC1xci1pbWFnZQ==' });
+      expect(waiting.body.data.accountReference).toMatch(/^T1\d{4}$/);
+      const qrRequest = JSON.parse(String(calls.at(-1)!.init?.body));
+      expect(qrRequest).toMatchObject({ Amount: '180', TrxCode: 'BG', CPI: '1731901', RefNo: waiting.body.data.accountReference });
+
+      await ctx.api.post(`${callbackBase}/c2b/confirmation`).set('Host', BASE).send({ TransID: 'QRBG000001', TransAmount: '180.00', BusinessShortCode: '1731901', BillRefNumber: waiting.body.data.accountReference, MSISDN: '254722000111', FirstName: 'Asha', TransTime: '20261127110000' });
+      expect((await t.client.get(`/payments/intents/${waiting.body.data.id}`)).body.data).toMatchObject({ status: 'succeeded', requiresConfirmation: true, receiptNumber: 'QRBG000001' });
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });
 

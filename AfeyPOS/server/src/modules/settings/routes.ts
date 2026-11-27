@@ -492,10 +492,11 @@ router.post('/settings/integrations/:id/test', requirePermission('integrations.m
       message = cfg.settings?.connection === 'simulator' ? 'ETR simulator ready' : cfg.settings?.connection === 'folder' ? `Folders ready: ${cfg.settings?.inbox} → ${cfg.settings?.outbox}` : `ETR program answers at ${cfg.settings?.url}`;
     } else if (cfg.kind === 'etims') {
       const reachability = await etimsGateway(cfg).testConnection();
-      if (!openSecrets(cfg).cmcKey && cfg.provider !== 'mock') {
+      const initialized = cfg.provider === 'vscu' ? Boolean(cfg.settings?.initializedAt) : Boolean(openSecrets(cfg).cmcKey);
+      if (!initialized && cfg.provider !== 'mock') {
         throw new Error(`${reachability} Device is not initialised yet; initialise it before signing invoices.`);
       } else {
-        message = `${reachability} ${cfg.provider === 'mock' ? '' : `Initialised: SCU ${cfg.settings?.sdcId ?? '?'}, MRC ${cfg.settings?.mrcNo ?? '?'}.`}`.trim();
+        message = `${reachability} ${cfg.provider === 'mock' ? '' : cfg.provider === 'vscu' ? `Initialised VSCU${cfg.settings?.sdcId ? `: SCU ${cfg.settings.sdcId}` : ''}.` : `Initialised: SCU ${cfg.settings?.sdcId ?? '?'}, MRC ${cfg.settings?.mrcNo ?? '?'}.`}`.trim();
       }
     } else if (cfg.kind === 'email') {
       await createEmailProvider(cfg.provider, cfg.settings ?? {}, openSecrets(cfg)).verify();

@@ -4,6 +4,7 @@ import { AppError } from '../lib/errors.js';
 import { TenantContextError } from '../lib/context.js';
 import { logger } from '../lib/logger.js';
 import { audit } from '../lib/audit.js';
+import { IntegrationError } from '../integrations/http.js';
 
 // One audit entry per user, rule and path per minute is enough to see attempts without flooding the log.
 const lastDenied = new Map<string, number>();
@@ -22,6 +23,17 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   if (err instanceof AppError) {
     if (err.status === 403 && err.code !== 'MODULE_DISABLED') recordDenied(req, err);
     res.status(err.status).json({ error: { code: err.code, message: err.message, details: err.details, requestId: req.id } });
+    return;
+  }
+  // Provider/device errors are expected outcomes, not server bugs. Returning them as a generic 500
+  // hides useful setup errors (for example, an invalid KRA serial or an unreachable VSCU).
+  if (err instanceof IntegrationError) {
+    const unavailable = err.retryable;
+    res.status(unavailable ? 502 : 422).json({ error: {
+      code: unavailable ? 'INTEGRATION_UNAVAILABLE' : 'INTEGRATION_REJECTED',
+      message: err.message,
+      requestId: req.id,
+    } });
     return;
   }
   if (err?.type === 'entity.parse.failed') {

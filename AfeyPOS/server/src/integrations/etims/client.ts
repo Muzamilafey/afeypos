@@ -1,9 +1,9 @@
 /**
  * KRA eTIMS client for OSCU (Online Sales Control Unit: KRA's online API) and VSCU (Virtual Sales Control
- * Unit: KRA's signing software installed on the shop network, which exposes the same API locally).
+ * Unit: KRA's signing software installed on the shop network).
  *
- * Every request carries the headers tin, bhfId and cmcKey (the communication key returned by device
- * initialisation). Amounts are decimal shillings; dates are East Africa Time.
+ * OSCU calls carry tin, bhfId and cmcKey headers. VSCU calls include the PIN and branch in the JSON body;
+ * the local VSCU service keeps its own communication keys. Amounts are decimal shillings; dates use East Africa Time.
  */
 import { httpJson, IntegrationError } from '../http.js';
 import { classifyTransportError, FiscalDisconnectedError, FiscalDuplicateError, FiscalUncertainError } from '../fiscal/adapter.js';
@@ -19,6 +19,8 @@ export interface EtimsConfig {
   dvcSrlNo?: string;
   /** Communication key from initialisation. */
   cmcKey?: string;
+  /** VSCU API generation discovered during initialization; absent means try the installation guide first. */
+  vscuApiVersion?: 'legacy' | 'v2';
   /** VSCU address (e.g. http://192.168.1.5:8088) or an override for OSCU. */
   baseUrl?: string;
 }
@@ -110,7 +112,7 @@ export interface EtimsSignature {
 }
 
 export interface EtimsGateway {
-  initialize(): Promise<{ sdcId?: string; cuSerial?: string; mrcNo?: string; cmcKey?: string; bhfNm?: string; taxprNm?: string }>;
+  initialize(): Promise<{ sdcId?: string; cuSerial?: string; mrcNo?: string; cmcKey?: string; bhfNm?: string; taxprNm?: string; vscuApiVersion?: 'legacy' | 'v2' }>;
   testConnection(): Promise<string>;
   saveItem(item: EtimsItem): Promise<void>;
   saveSale(sale: EtimsSale): Promise<EtimsSignature>;
@@ -122,11 +124,11 @@ export interface EtimsGateway {
 }
 
 const OK = '000';
-/** "Already registered" style answers that mean the record is already at KRA. */
-const ALREADY = new Set(['891', '921', '994']);
 
 export class EtimsClient implements EtimsGateway {
-  constructor(private cfg: EtimsConfig) {}
+  private vscuApiVersion: 'legacy' | 'v2' | undefined;
+
+  constructor(private cfg: EtimsConfig) { this.vscuApiVersion = cfg.vscuApiVersion; }
 
   get baseUrl() {
     if (this.cfg.baseUrl) {
@@ -142,13 +144,27 @@ export class EtimsClient implements EtimsGateway {
     return this.cfg.environment === 'production' ? 'https://etims-api.kra.go.ke/etims-api' : 'https://etims-api-sbx.kra.go.ke/etims-api';
   }
 
-  private async post<T>(path: string, body: Record<string, unknown>, needKey = true): Promise<EtimsResponse<T>> {
-    if (needKey && !this.cfg.cmcKey) throw new IntegrationError('Initialise the eTIMS device first (no communication key yet)', undefined, undefined, false);
-    let r: EtimsResponse<T>;
+  private vscuPath(path: string) {
+    const v2Paths: Record<string, string> = {
+      '/selectInitOsdcInfo': '/initializer/selectInitInfo',
+      '/saveItem': '/items/saveItems',
+      '/saveTrnsSalesOsdc': '/trnsSales/saveSales',
+    };
+    return this.vscuApiVersion === 'v2' ? (v2Paths[path] ?? path) : path;
+  }
+
+  private async request<T>(path: string, body: Record<string, unknown>, needKey: boolean): Promise<EtimsResponse<T>> {
+    const v2 = this.cfg.mode === 'vscu' && this.vscuApiVersion === 'v2';
+    if (needKey && this.cfg.mode === 'oscu' && !this.cfg.cmcKey) {
+      throw new IntegrationError('Initialise the eTIMS device first (no communication key yet)', undefined, undefined, false);
+    }
     try {
-      r = await httpJson<EtimsResponse<T>>(`${this.baseUrl}${path}`, {
+      return await httpJson<EtimsResponse<T>>(`${this.baseUrl}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', tin: this.cfg.tin, bhfId: this.cfg.bhfId, ...(needKey ? { cmcKey: this.cfg.cmcKey! } : {}) },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(!v2 ? { tin: this.cfg.tin, bhfId: this.cfg.bhfId, ...(needKey && this.cfg.cmcKey ? { cmcKey: this.cfg.cmcKey } : {}) } : {}),
+        },
         body: JSON.stringify({ tin: this.cfg.tin, bhfId: this.cfg.bhfId, ...body }),
         timeoutMs: 20_000,
       });
@@ -156,11 +172,37 @@ export class EtimsClient implements EtimsGateway {
       // "Could not connect" (nothing sent) and "no answer after sending" are different fiscal states.
       throw classifyTransportError(err, this.cfg.mode === 'vscu' ? 'VSCU' : 'KRA eTIMS');
     }
-    if (r?.resultCd !== OK && !ALREADY.has(String(r?.resultCd))) {
-      // KRA validation errors will not succeed on retry; connectivity errors (thrown above) will.
+  }
+
+  private async post<T>(path: string, body: Record<string, unknown>, options: { needKey?: boolean; allowCodes?: string[] } = {}): Promise<EtimsResponse<T>> {
+    const needKey = options.needKey !== false;
+    let r: EtimsResponse<T>;
+    if (this.cfg.mode === 'vscu' && this.vscuApiVersion !== 'v2') {
+      try {
+        r = await this.request<T>(path, body, needKey);
+        this.vscuApiVersion = 'legacy';
+      } catch (err: any) {
+        const v2Path = this.vscuPathForV2(path);
+        if (err?.status !== 404 || !v2Path) throw err;
+        this.vscuApiVersion = 'v2';
+        r = await this.request<T>(v2Path, body, needKey);
+      }
+    } else {
+      r = await this.request<T>(this.vscuPath(path), body, needKey);
+    }
+    const allowed = new Set([OK, ...(options.allowCodes ?? [])]);
+    if (!allowed.has(String(r?.resultCd))) {
       throw new IntegrationError(`eTIMS ${r?.resultCd ?? '?'}: ${r?.resultMsg ?? 'rejected'}`, undefined, r, false);
     }
     return r;
+  }
+
+  private vscuPathForV2(path: string) {
+    return ({
+      '/selectInitOsdcInfo': '/initializer/selectInitInfo',
+      '/saveItem': '/items/saveItems',
+      '/saveTrnsSalesOsdc': '/trnsSales/saveSales',
+    } as Record<string, string>)[path];
   }
 
   /** Checks only that the configured HTTP service responds; this does not initialise or fiscalize a device. */
@@ -184,9 +226,27 @@ export class EtimsClient implements EtimsGateway {
 
   async initialize() {
     if (!this.cfg.dvcSrlNo) throw new IntegrationError('Enter the device serial number issued by KRA', undefined, undefined, false);
-    const r = await this.post<{ info?: Record<string, string> }>('/selectInitOsdcInfo', { dvcSrlNo: this.cfg.dvcSrlNo }, false);
+    const r = await this.post<{ info?: Record<string, string> }>('/selectInitOsdcInfo', { dvcSrlNo: this.cfg.dvcSrlNo }, { needKey: false });
     const info = r.data?.info ?? {};
-    return { sdcId: info.sdcId, mrcNo: info.mrcNo, cmcKey: info.cmcKey, bhfNm: info.bhfNm, taxprNm: info.taxprNm };
+    const returnedTin = String(info.tin ?? '').toUpperCase();
+    const returnedBranch = String(info.bhfId ?? '').padStart(2, '0');
+    if (!r.data?.info || (returnedTin && returnedTin !== this.cfg.tin.toUpperCase()) || (returnedBranch && returnedBranch !== this.cfg.bhfId)) {
+      throw new IntegrationError(
+        'VSCU did not return initialization details for this KRA PIN and branch. Check that the local VSCU service is running, and that the PIN, branch ID, environment and KRA-issued device serial number match its registration.',
+        undefined,
+        r,
+        false,
+      );
+    }
+    if (this.cfg.mode === 'oscu' && (!info.sdcId || !info.mrcNo || !info.cmcKey)) {
+      throw new IntegrationError(
+        'KRA eTIMS did not return the SCU ID, MRC number and communication key. Check the KRA PIN, branch ID and KRA-issued device serial number, then try again.',
+        undefined,
+        r,
+        false,
+      );
+    }
+    return { sdcId: info.sdcId, mrcNo: info.mrcNo, cmcKey: info.cmcKey, bhfNm: info.bhfNm, taxprNm: info.taxprNm, ...(this.cfg.mode === 'vscu' ? { vscuApiVersion: this.vscuApiVersion ?? 'legacy' } : {}) };
   }
 
   async saveItem(item: EtimsItem) {
@@ -197,13 +257,19 @@ export class EtimsClient implements EtimsGateway {
     // PLU is local metadata for Tremol's device database, not a field in KRA's sale API.
     const { itemList, ...header } = sale;
     const kraSale = { ...header, itemList: itemList.map(({ plu: _plu, ...item }) => item) };
-    const r = await this.post<EtimsSignature>('/saveTrnsSalesOsdc', kraSale as unknown as Record<string, unknown>);
-    if (!r.data?.rcptSign) {
+    // 994 means overlapping data in KRA's API; surface it as a reconciliation case rather than blindly resending.
+    const r = await this.post<Record<string, any>>('/saveTrnsSalesOsdc', kraSale as unknown as Record<string, unknown>, { allowCodes: ['994'] });
+    const sig = r.data ? {
+      ...r.data,
+      curRcptNo: r.data.curRcptNo ?? r.data.rcptNo,
+      sdcDateTime: r.data.sdcDateTime ?? r.data.VSCURcptPbctDate,
+    } as EtimsSignature : undefined;
+    if (!sig?.rcptSign) {
       // "Already recorded" without the signature: a person must look it up, Afey POS will not guess it.
-      if (ALREADY.has(String(r.resultCd))) throw new FiscalDuplicateError(`eTIMS ${r.resultCd}: ${r.resultMsg ?? 'invoice already recorded'} (invoice ${sale.invcNo})`, r);
+      if (String(r.resultCd) === '994') throw new FiscalDuplicateError(`eTIMS ${r.resultCd}: ${r.resultMsg ?? 'invoice data overlaps an existing record'} (invoice ${sale.invcNo})`, r);
       throw new FiscalUncertainError('eTIMS answered without a receipt signature', r);
     }
-    return r.data;
+    return sig;
   }
 }
 

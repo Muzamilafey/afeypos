@@ -398,8 +398,8 @@ router.get('/payments/mpesa/accounts', requirePermission('sales.create'), async 
   for (const c of configs) groups.set(payNumber(c), [...(groups.get(payNumber(c)) ?? []), c]);
   res.json({
     data: [...groups.values()].map((g, i) => {
-      const main = g.find((c) => canDo(c, 'c2b')) ?? g[0]!;
-      return { id: main._id, name: main.name, environment: main.environment, isDefault: i === 0, payTo: payTo(main), stk: g.some((c) => canDo(c, 'stk')), c2b: g.some((c) => canDo(c, 'c2b')) };
+      const main = g.find((c) => c.provider !== 'mock' && canDo(c, 'c2b')) ?? g.find((c) => canDo(c, 'c2b')) ?? g[0]!;
+      return { id: main._id, name: main.name, environment: main.environment, isDefault: i === 0, payTo: payTo(main), stk: g.some((c) => canDo(c, 'stk')), c2b: g.some((c) => canDo(c, 'c2b')), qr: g.some((c) => c.provider !== 'mock' && canDo(c, 'c2b')) };
     }),
   });
 });
@@ -409,7 +409,7 @@ router.get('/payments/mpesa/accounts', requirePermission('sales.create'), async 
  * to type, so the payment matches this sale exactly. Buy Goods: matched by amount (see handleC2B).
  */
 router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (req, res) => {
-  const body = parse(z.object({ clientRequestId: z.string().min(8).max(100), amountCents: positiveCents.refine((v) => v >= 100 && v % 100 === 0, 'M-Pesa amounts must be whole shillings'), tillId: objectId, configId: objectId.optional(), skipReceipts: z.array(z.string().trim().toUpperCase().max(20)).max(20).optional() }), req.body);
+  const body = parse(z.object({ clientRequestId: z.string().min(8).max(100), amountCents: positiveCents.refine((v) => v >= 100 && v % 100 === 0, 'M-Pesa amounts must be whole shillings'), tillId: objectId, configId: objectId.optional(), skipReceipts: z.array(z.string().trim().toUpperCase().max(20)).max(20).optional(), qr: z.boolean().optional() }), req.body);
   const existing = await PaymentIntent.findOne({ clientRequestId: body.clientRequestId }).lean();
   if (existing) {
     res.json({ data: presentIntent(existing), replay: true });
@@ -418,16 +418,29 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   const till = await Till.findById(body.tillId).lean();
   if (!till) throw notFound('Till');
   const cfg = await tillConfig(till, body.configId, 'c2b');
+  if (body.qr && cfg.provider === 'mock') throw badRequest('Dynamic QR payments require a live Daraja M-Pesa account');
   const to = payTo(cfg);
   // Short and easy to type on a phone: till code + 4 digits, unique among waiting payments.
   let account = '';
+  const referencePrefix = String(till.code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
   for (let n = 0; n < 20 && !account; n++) {
-    const candidate = `${till.code}${Math.floor(1000 + Math.random() * 9000)}`.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+    const candidate = `${referencePrefix}${Math.floor(1000 + Math.random() * 9000)}`;
     if (!(await PaymentIntent.exists({ awaiting: 'expected', status: 'pending', accountReference: candidate }))) account = candidate;
   }
+  if (!account) throw badRequest('Could not create a unique M-Pesa account reference. Please try again.');
+  const qrCode = body.qr ? await gatewayFor(cfg, 'c2b').dynamicQRCode({
+    merchantName: String(req.tenant!.name || req.tenant!.slug || 'Afey POS'),
+    reference: account,
+    amount: body.amountCents / 100,
+    transactionCode: to.type === 'till' ? 'BG' : 'PB',
+    cpi: to.number,
+  }) : undefined;
   const [intent] = await PaymentIntent.create([{
     source: 'c2b', awaiting: 'expected', status: 'pending', clientRequestId: body.clientRequestId, amountCents: body.amountCents,
-    accountReference: to.type === 'paybill' ? account : undefined, shortCode: to.number, branchId: till.branchId, tillId: till._id, configId: cfg._id, initiatedBy: req.auth!.userId,
+    accountReference: to.type === 'paybill' || body.qr ? account : undefined,
+    ...(body.qr && to.type === 'till' ? { requiresConfirmation: true } : {}),
+    payToType: to.type,
+    shortCode: to.number, branchId: till.branchId, tillId: till._id, configId: cfg._id, initiatedBy: req.auth!.userId,
     ...(body.skipReceipts?.length ? { skipReceipts: body.skipReceipts } : {}),
   }]);
   // Waiting payments that never arrive expire like prompts do.
@@ -437,7 +450,7 @@ router.post('/payments/mpesa/expect', requirePermission('sales.create'), async (
   // amount in the last few minutes (and only one) completes this wait at once.
   const paidEarlier = await matchExpectedToReceived(intent).catch((err) => { logger.warn({ err }, 'matching an earlier M-Pesa payment failed'); return false; });
   const fresh = paidEarlier ? (await PaymentIntent.findById(intent._id).lean())! : intent;
-  res.status(201).json({ data: { ...presentIntent(fresh), payTo: to } });
+  res.status(201).json({ data: { ...presentIntent(fresh), payTo: to, ...(qrCode ? { qrCode } : {}) } });
 });
 
 /**
