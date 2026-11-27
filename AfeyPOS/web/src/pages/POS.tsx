@@ -1356,7 +1356,7 @@ function PaymentModal({ cart, total, till, shift, initialMethod, initialVoucher,
   });
 
   return (
-    <Modal open onClose={onClose} title={`Payment · ${money(total)}`} size="2xl" dismissable={false}
+    <Modal open onClose={onClose} title={`Payment · ${money(total)}`} size={method === 'mpesa' ? '2xl' : 'lg'} dismissable={false}
       footer={<><Button variant="secondary" onClick={onClose}>Back</Button><Button size="lg" loading={busy} disabled={!canComplete} onClick={() => complete()}>Complete sale</Button></>}>
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
         <div className="min-w-0">
