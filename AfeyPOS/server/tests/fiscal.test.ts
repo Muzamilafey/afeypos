@@ -83,10 +83,10 @@ describe('never fiscalized twice', () => {
     const before = MockEtimsGateway.sales.length;
     const sale = await sell(mockId);
     await runJobs();
-    // The receipt is honest while it waits.
+    // Unsigned invoices do not add eTIMS status text to the customer receipt.
     const e1 = await etimsOf(sale._id);
     expect(e1.status).toBe('awaiting_confirmation');
-    expect((await t.client.get(`/sales/${sale._id}/receipt?format=text`)).text).toContain('NOT YET A FISCAL RECEIPT');
+    expect((await t.client.get(`/sales/${sale._id}/receipt?format=text`)).text).not.toMatch(/awaiting signature|NOT YET A FISCAL RECEIPT|Reprint this receipt for the signed copy/);
     await runJobs();
     const e2 = await etimsOf(sale._id);
     expect(e2).toMatchObject({ status: 'signed', via: 'status_query', invcNo: e1.invcNo });
